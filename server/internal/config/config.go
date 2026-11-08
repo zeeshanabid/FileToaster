@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 
+	"filetoaster/internal/auth"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,7 +36,12 @@ type Config struct {
 	TMPDir string `yaml:"tmp_dir"`
 	// SessionSecret signs the session cookie. Required.
 	SessionSecret string `yaml:"session_secret"`
-	// AdminPasswordHash is an optional pre-hashed Argon2id admin password.
+	// AdminUser is the admin username accepted at login. Empty falls back to
+	// auth.DefaultUser ("admin").
+	AdminUser string `yaml:"admin_user"`
+	// AdminPasswordHash is an Argon2id hash of the admin password. An empty
+	// value means the default admin password (auth.DefaultPassword) is used.
+	// FILETOASTER_ADMIN_PASSWORD (env) always takes precedence over this field.
 	AdminPasswordHash string `yaml:"admin_password_hash"`
 
 	// Debug enables debug-level logging when true. Defaults to info logging.
@@ -103,8 +110,9 @@ func ResolveConfigPath(explicit string) (string, bool, error) {
 }
 
 // WriteDefaultConfig writes a default config to path with a generated session
-// secret and a default served root at <home>/filetoaster-data (created if
-// needed). It returns the path written.
+// secret, a default served root at <home>/filetoaster-data (created if needed),
+// and the default admin credentials (admin / hashed "admin"). It returns the
+// path written.
 func WriteDefaultConfig(path string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -119,12 +127,16 @@ func WriteDefaultConfig(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("generate session secret: %w", err)
 	}
+	adminHash, err := auth.HashPassword(auth.DefaultPassword)
+	if err != nil {
+		return "", fmt.Errorf("hash default admin password: %w", err)
+	}
 	content := fmt.Sprintf(`# FileToaster configuration (auto-created on first run).
 # The server reads this file once at startup. Edit as needed and restart.
 addr: ":8080"
 # Directories the server serves. Add or change these to your data folders.
 allowed_paths:
-  - %s
+   - %s
 max_parallel_tasks: 4
 # Set to true to enable debug logging (defaults to info).
 debug: false
@@ -132,8 +144,12 @@ tmp_dir: %s
 # Session secret signs the login cookie. A random value was generated here;
 # you can also override it via the FILETOASTER_SESSION_SECRET env var.
 session_secret: %s
-admin_password_hash: ""
-`, dataDir, tmpDir, secret)
+# Admin credentials. The admin password below is the hashed default ("admin");
+# override it at runtime with the FILETOASTER_ADMIN_PASSWORD env var (preferred)
+# or by replacing admin_password_hash here and restarting the server.
+admin_user: admin
+admin_password_hash: %s
+`, dataDir, tmpDir, secret, adminHash)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("create config dir %q: %w", filepath.Dir(path), err)
@@ -157,6 +173,35 @@ func generateSecret() (string, error) {
 // It returns a human-readable error if the file is missing, malformed, or
 // semantically invalid.
 func Load(path string) (*Config, error) {
+	cfg, err := parseConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	cfg.applyEnvOverrides()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration in %q: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// LoadForEdit parses and validates the config at path without applying env
+// overrides. Callers that persist the config back to disk (e.g. rotating the
+// admin password) use it so the file's own values are kept instead of leaking
+// env-set values onto disk.
+func LoadForEdit(path string) (*Config, error) {
+	cfg, err := parseConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration in %q: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// parseConfig reads and YAML-decodes the config at path with documented defaults
+// filled in. It does not apply env overrides or validate.
+func parseConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config file %q is not readable: %w", path, err)
@@ -175,12 +220,22 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.SourcePath = path
-	cfg.applyEnvOverrides()
-
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration in %q: %w", path, err)
-	}
 	return cfg, nil
+}
+
+// ChangeAdminPassword persists newHash as the admin password hash in the config
+// file at path, leaving every other setting untouched. The caller is expected to
+// have already hashed newPassword (see auth.HashPassword). If the
+// FILETOASTER_ADMIN_PASSWORD env var is set at runtime, the resolver ignores this
+// persisted hash in favour of the env var — so the change has no login effect
+// until the env var is cleared.
+func ChangeAdminPassword(path, newHash string) error {
+	cfg, err := LoadForEdit(path)
+	if err != nil {
+		return err
+	}
+	cfg.AdminPasswordHash = newHash
+	return cfg.Save(path)
 }
 
 // applyEnvOverrides lets environment variables override file settings.

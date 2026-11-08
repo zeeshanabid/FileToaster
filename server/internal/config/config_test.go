@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"filetoaster/internal/auth"
 )
 
 // writeConfig writes raw YAML to a temp file and returns its path.
@@ -377,5 +379,91 @@ func writeYAML(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write yaml: %v", err)
+	}
+}
+
+// TestChangeAdminPasswordOverwritesHashAndPreservesRest verifies that rotating
+// the admin password updates only the admin_password_hash field and leaves every
+// other setting intact.
+func TestChangeAdminPasswordOverwritesHashAndPreservesRest(t *testing.T) {
+	root := t.TempDir()
+	tmp := t.TempDir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeYAML(t, path, "addr: \"127.0.0.1:0\"\n"+
+		"allowed_paths:\n  - "+root+"\n"+
+		"max_parallel_tasks: 2\n"+
+		"gomaxprocs: 0\n"+
+		"tmp_dir: "+tmp+"\n"+
+		"session_secret: supersecret\n"+
+		"admin_password_hash: $argon2id$v=19$old\n")
+
+	newHash, err := auth.HashPassword("brand-new")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := ChangeAdminPassword(path, newHash); err != nil {
+		t.Fatalf("ChangeAdminPassword: %v", err)
+	}
+
+	reloaded, err := LoadForEdit(path)
+	if err != nil {
+		t.Fatalf("LoadForEdit after change: %v", err)
+	}
+	if !auth.VerifyPassword(reloaded.AdminPasswordHash, "brand-new") {
+		t.Fatal("persisted hash must verify the new password")
+	}
+	if auth.VerifyPassword(reloaded.AdminPasswordHash, "old") {
+		t.Fatal("the previous hash must no longer be stored")
+	}
+	// Every other field must survive the rewrite.
+	if reloaded.Addr != "127.0.0.1:0" {
+		t.Errorf("addr = %q, want 127.0.0.1:0", reloaded.Addr)
+	}
+	if reloaded.AllowedPaths[0] != root {
+		t.Errorf("allowed_paths changed = %q, want %q", reloaded.AllowedPaths[0], root)
+	}
+	if reloaded.SessionSecret != "supersecret" {
+		t.Errorf("session_secret = %q, want supersecret", reloaded.SessionSecret)
+	}
+	if reloaded.MaxParallelTasks != 2 {
+		t.Errorf("max_parallel_tasks = %d, want 2", reloaded.MaxParallelTasks)
+	}
+}
+
+// TestChangeAdminPasswordUsesFileValuesNotEnv ensures the change does not leak
+// env-set values back onto disk: even with FILETOASTER_SESSION_SECRET set, the
+// persisted secret must be the file's own value.
+func TestChangeAdminPasswordUsesFileValuesNotEnv(t *testing.T) {
+	t.Setenv("FILETOASTER_SESSION_SECRET", "env-secret")
+	t.Setenv("FILETOASTER_ADDR", "10.0.0.1:9999")
+
+	root := t.TempDir()
+	tmp := t.TempDir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeYAML(t, path, "addr: \"127.0.0.1:0\"\n"+
+		"allowed_paths:\n  - "+root+"\n"+
+		"max_parallel_tasks: 2\n"+
+		"tmp_dir: "+tmp+"\n"+
+		"session_secret: file-secret\n")
+
+	newHash, _ := auth.HashPassword("new")
+	if err := ChangeAdminPassword(path, newHash); err != nil {
+		t.Fatalf("ChangeAdminPassword: %v", err)
+	}
+
+	// LoadForEdit ignores env overrides, so the file's own values must remain.
+	reloaded, err := LoadForEdit(path)
+	if err != nil {
+		t.Fatalf("LoadForEdit: %v", err)
+	}
+	if reloaded.SessionSecret != "file-secret" {
+		t.Errorf("session_secret leaked env value: got %q, want file-secret", reloaded.SessionSecret)
+	}
+	if reloaded.Addr != "127.0.0.1:0" {
+		t.Errorf("addr leaked env value: got %q, want 127.0.0.1:0", reloaded.Addr)
+	}
+	// The hash was still applied.
+	if !auth.VerifyPassword(reloaded.AdminPasswordHash, "new") {
+		t.Fatal("hash should have been persisted")
 	}
 }

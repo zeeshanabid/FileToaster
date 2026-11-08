@@ -1,7 +1,9 @@
 # FileToaster configuration example.
 # Copy to config.yaml (or a path given via --config-file / FILETOASTER_CONFIG)
-# and adjust. All settings except admin_password_hash and session_secret can
-# also be overridden with environment variables (see AGENTS.md).
+# and adjust. All settings except admin_password_hash, admin_user, and
+# session_secret can also be overridden with environment variables (see
+# AGENTS.md). admin_password_hash is derived at runtime from
+# FILETOASTER_ADMIN_PASSWORD when that env var is set.
 
 # Bind address for the HTTP server, e.g. ":8080" or "127.0.0.1:8080".
 addr: ":8080"
@@ -29,6 +31,10 @@ tmp_dir: /tmp/filetoaster-uploads
 # the FILETOASTER_SESSION_SECRET environment variable.
 session_secret: "change-me-in-production"
 
-# Optional pre-hashed Argon2id admin password. Leave empty to bootstrap the
-# admin password via FILETOASTER_ADMIN_PASSWORD on the first run.
+# Admin username accepted at login.
+admin_user: admin
+
+# Argon2id hash of the admin password. Override at runtime with the
+# FILETOASTER_ADMIN_PASSWORD environment variable, which takes precedence over
+# this value and over the default admin password.
 admin_password_hash: ""
