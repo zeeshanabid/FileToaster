@@ -28,6 +28,21 @@ go.work.sum
 # env file
 .env
 
+# Built frontend assets (embedded into the Go binary at build time)
+client/frontend-build/
+
+# Staged frontend assets referenced by server/embed.go
+server/frontend-build/
+
+# Compiled server binary
+server/bin/
+
+# Frontend node dependencies (regenerate with `npm ci` from package-lock.json)
+client/node_modules/
+
+# SvelteKit generated workspace/dev output (regenerate with `npm run build`)
+client/.svelte-kit/
+
 # Editor/IDE
 # .idea/
 # .vscode/

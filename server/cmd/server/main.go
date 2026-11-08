@@ -1,7 +1,7 @@
 // Command server is FileToaster's single embedded binary entrypoint. It resolves
 // (and, if absent, creates) the config file, loads and validates it, applies
-// GOMAXPROCS and the debug log level, then reports what was loaded. The full
-// HTTP server is wired up in later milestones.
+// GOMAXPROCS and the debug log level, then serves the embedded SvelteKit UI on
+// the configured address until interrupted.
 package main
 
 import (
@@ -70,7 +70,8 @@ func run() error {
 		"session_secret", maskSecret(cfg.SessionSecret),
 		"admin_password_hash_set", cfg.AdminPasswordHash != "",
 	)
-	return nil
+
+	return startServer(cfg, logger)
 }
 
 // newLogger returns an slog text handler writing to stderr at the given level.
