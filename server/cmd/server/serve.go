@@ -22,6 +22,9 @@ import (
 //   - POST /api/auth/login, POST /api/auth/logout, POST /api/auth/change-password:
 //     public auth endpoints reachable without a cookie.
 //   - GET  /api/auth/status : requires a valid session cookie (self-guarded).
+//   - POST /api/fs/roots, POST /api/fs : authenticated directory-listing
+//     endpoints (wrapped in auth.Middleware); the listing path is read from the
+//     JSON request body.
 //   - everything else : the embedded SvelteKit SPA, served publicly so the login
 //     screen can load before any cookie exists. auth.Middleware is available to
 //     protect future data endpoints; the SPA shell itself must stay public.
@@ -31,6 +34,20 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	mux.HandleFunc("POST /api/auth/logout", guard.ServeLogout)
 	mux.HandleFunc("POST /api/auth/change-password", guard.ServeChangePassword)
 	mux.HandleFunc("GET /api/auth/status", guard.ServeStatus)
+
+	// Directory listing endpoints. They require a valid session cookie (the SPA
+	// shell and the auth routes stay public so the login screen can load before
+	// any cookie exists); the fs package confines every request to the configured
+	// allowed roots. The listing path is read from the JSON request body (POST),
+	// not the URL, so it is not subject to URL length limits.
+	fsCfg := newFSConfig(cfg)
+	mux.Handle("POST /api/fs/roots", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveRoots(w, r, fsCfg)
+	})))
+	mux.Handle("POST /api/fs", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveFsList(w, r, fsCfg)
+	})))
+
 	files := http.FileServer(http.FS(filetoaster.Assets))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		files.ServeHTTP(w, r)
