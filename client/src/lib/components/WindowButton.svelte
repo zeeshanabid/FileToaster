@@ -8,11 +8,11 @@
 	class="window-button"
 	class:active={active}
 	class:minimized={win.minimized}
-	title={win.minimized ? `${win.title} (minimized)` : win.title}
+	title={win.minimized ? `${win.name} (minimized)` : win.name}
 	onclick={() => (win.minimized ? toggleMinimize(win.id) : focusWindow(win.id))}
 >
 	<span class="indicator" aria-hidden="true"></span>
-	<span class="name">{win.title}</span>
+	<span class="name">{win.name}</span>
 </button>
 
 <style>

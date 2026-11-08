@@ -1,10 +1,13 @@
 import { writable, type Writable } from 'svelte/store';
-import type { Root } from '$lib/roots';
 
 export interface AppWindow {
 	id: string;
-	title: string;
+	// name is the display label in the title bar (the folder's name).
+	name: string;
+	// rootPath is the allowed root this window belongs to.
 	rootPath: string;
+	// path is the directory currently opened; it changes as the user navigates.
+	path: string;
 	x: number;
 	y: number;
 	width: number;
@@ -13,8 +16,9 @@ export interface AppWindow {
 	minimized: boolean;
 }
 
-// Simple window manager backed by a writable store. Kept side-effect free so
-// it can be wired to real data later without rewriting the UI.
+// Window manager backed by a writable store. Clicking a folder icon always
+// opens a brand-new window (even for a folder that already has a window open),
+// per the file-manager model.
 export const windows: Writable<AppWindow[]> = writable([]);
 
 let nextZ = 10;
@@ -26,23 +30,19 @@ function bringToFront(id: string) {
 	);
 }
 
-export function openWindow(root: Root) {
+export function openWindow(root: { name: string; path: string }) {
 	windows.update((list) => {
-		const existing = list.find((w) => w.rootPath === root.path);
-		if (existing) {
-			bringToFront(existing.id);
-			return list;
-		}
 		nextZ += 1;
 		const offset = (list.length % 6) * 28;
 		const opened: AppWindow = {
-			id: `${root.id}-${Date.now()}`,
-			title: root.name,
+			id: `${root.path}-${Date.now()}`,
+			name: root.name,
 			rootPath: root.path,
+			path: root.path,
 			x: 90 + offset,
 			y: 70 + offset,
-			width: 560,
-			height: 360,
+			width: 780,
+			height: 480,
 			zIndex: nextZ,
 			minimized: false
 		};
@@ -56,6 +56,12 @@ export function focusWindow(id: string) {
 
 export function closeWindow(id: string) {
 	windows.update((list) => list.filter((w) => w.id !== id));
+}
+
+export function updateWindow(id: string, patch: Partial<AppWindow>) {
+	windows.update((list) =>
+		list.map((w) => (w.id === id ? { ...w, ...patch } : w))
+	);
 }
 
 export function toggleMinimize(id: string) {
