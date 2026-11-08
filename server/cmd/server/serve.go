@@ -11,17 +11,34 @@ import (
 	"syscall"
 	"time"
 
+	"filetoaster/internal/auth"
 	"filetoaster/internal/config"
 )
 
 // startServer serves the embedded frontend on cfg.Addr and blocks until the
-// process receives SIGINT or SIGTERM, then shuts down gracefully. It performs
-// no file operations or task logic — it only serves the static SvelteKit UI.
-func startServer(cfg *config.Config, logger *slog.Logger) error {
-	handler := http.FileServer(http.FS(filetoaster.Assets))
+// process receives SIGINT or SIGTERM, then shuts down gracefully.
+//
+// Routing:
+//   - POST /api/auth/login, POST /api/auth/logout, POST /api/auth/change-password:
+//     public auth endpoints reachable without a cookie.
+//   - GET  /api/auth/status : requires a valid session cookie (self-guarded).
+//   - everything else : the embedded SvelteKit SPA, served publicly so the login
+//     screen can load before any cookie exists. auth.Middleware is available to
+//     protect future data endpoints; the SPA shell itself must stay public.
+func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/auth/login", guard.ServeLogin)
+	mux.HandleFunc("POST /api/auth/logout", guard.ServeLogout)
+	mux.HandleFunc("POST /api/auth/change-password", guard.ServeChangePassword)
+	mux.HandleFunc("GET /api/auth/status", guard.ServeStatus)
+	files := http.FileServer(http.FS(filetoaster.Assets))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		files.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: handler,
+		Handler: mux,
 	}
 
 	go func() {
