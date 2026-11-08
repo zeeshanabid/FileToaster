@@ -21,13 +21,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// AllowedPath is a single directory the server may serve. It is rendered on the
+// frontend as one folder icon: Name is the label shown on the icon, and Path is
+// the directory opened when the icon is clicked.
+//
+// Exactly one source must identify the directory:
+//   - Path: an absolute path to an existing directory.
+//   - Env:  the name of an environment variable whose value is a single
+//     absolute directory path.
+//
+// At least one of Path or Env must be set. If both are set, Path takes
+// precedence. Name is mandatory.
+type AllowedPath struct {
+	// Name is the label shown on the folder icon. Mandatory.
+	Name string `yaml:"name"`
+	// Path is an absolute directory path. Optional; ignored when Env is set and
+	// takes precedence over Env when both are provided.
+	Path string `yaml:"path"`
+	// Env is an environment variable whose value is resolved to an absolute
+	// directory path. Optional; used only when Path is empty.
+	Env string `yaml:"env"`
+}
+
 // Config holds all runtime settings.
 type Config struct {
 	// Addr is the TCP address the HTTP server binds to.
 	Addr string `yaml:"addr"`
 	// AllowedPaths are the directories the server may serve. Every file
-	// operation must stay within one of these roots.
-	AllowedPaths []string `yaml:"allowed_paths"`
+	// operation must stay within one of these roots. Each entry carries a
+	// display Name and the directory itself, supplied as an absolute Path or
+	// resolved from an Env variable. See AllowedPath for the rules.
+	AllowedPaths []AllowedPath `yaml:"allowed_paths"`
 	// MaxParallelTasks bounds the task worker pool. Overflow waits in a queue.
 	MaxParallelTasks int `yaml:"max_parallel_tasks"`
 	// GOMAXPROCS pins runtime.GOMAXPROCS. 0 means use the Go runtime default.
@@ -134,9 +158,11 @@ func WriteDefaultConfig(path string) (string, error) {
 	content := fmt.Sprintf(`# FileToaster configuration (auto-created on first run).
 # The server reads this file once at startup. Edit as needed and restart.
 addr: ":8080"
-# Directories the server serves. Add or change these to your data folders.
+# Directories the server serves. Each entry has a display name and either an
+# absolute path or an env var name (resolved to a single absolute directory).
 allowed_paths:
-   - %s
+    - name: Files
+      path: %s
 max_parallel_tasks: 4
 # Set to true to enable debug logging (defaults to info).
 debug: false
@@ -178,9 +204,13 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.applyEnvOverrides()
+	// Validate before resolving env vars so a broken env reference is reported
+	// against the config as written (e.g. "env var X is not set") rather than
+	// after the Env field has been consumed and cleared.
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration in %q: %w", path, err)
 	}
+	cfg.resolveAllowedPaths()
 	return cfg, nil
 }
 
@@ -260,7 +290,12 @@ func (c *Config) applyEnvOverrides() {
 		c.SessionSecret = v
 	}
 	if v := os.Getenv("FILETOASTER_ALLOWED_PATHS"); v != "" {
-		c.AllowedPaths = splitAndTrim(v)
+		raw := splitAndTrim(v)
+		aps := make([]AllowedPath, 0, len(raw))
+		for _, p := range raw {
+			aps = append(aps, AllowedPath{Name: displayName(p), Path: p})
+		}
+		c.AllowedPaths = aps
 	}
 	if v := os.Getenv("FILETOASTER_DEBUG"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
@@ -283,6 +318,36 @@ func splitAndTrim(s string) []string {
 	return out
 }
 
+// resolveAllowedPaths consumes each entry's Env by resolving it to a concrete
+// absolute Path (env is used only when Path is empty, so Path takes precedence)
+// and clears the Env field so the resolved path is what the server serves. This
+// mutates the config, so it runs only in Load, not in LoadForEdit.
+func (c *Config) resolveAllowedPaths() {
+	for i := range c.AllowedPaths {
+		ap := &c.AllowedPaths[i]
+		if strings.TrimSpace(ap.Path) == "" && strings.TrimSpace(ap.Env) != "" {
+			if resolved := os.Getenv(ap.Env); resolved != "" {
+				ap.Path = filepath.Clean(resolved)
+			}
+		}
+		if p := strings.TrimSpace(ap.Path); p != "" {
+			ap.Path = filepath.Clean(p)
+		}
+		ap.Env = ""
+	}
+}
+
+// displayName returns a reasonable icon label for a raw path taken from the
+// FILETOASTER_ALLOWED_PATHS env var. It uses the path's base element, falling
+// back to "Files" for roots like "/" or ".".
+func displayName(path string) string {
+	base := filepath.Base(filepath.Clean(path))
+	if base == "." || base == "/" || base == string(filepath.Separator) {
+		return "Files"
+	}
+	return base
+}
+
 // Validate checks that all required settings are present and sane. The returned
 // error lists every problem found, joined with "; ".
 func (c *Config) Validate() error {
@@ -297,17 +362,40 @@ func (c *Config) Validate() error {
 	if len(c.AllowedPaths) == 0 {
 		errs = append(errs, "allowed_paths must contain at least one directory")
 	}
-	for _, p := range c.AllowedPaths {
-		if p == "" {
-			errs = append(errs, "allowed_paths contains an empty entry")
+	for i, ap := range c.AllowedPaths {
+		label := fmt.Sprintf("allowed_paths[%d]", i)
+		if strings.TrimSpace(ap.Name) == "" {
+			errs = append(errs, label+" name is required")
+		}
+		hasPath := strings.TrimSpace(ap.Path) != ""
+		hasEnv := strings.TrimSpace(ap.Env) != ""
+		if !hasPath && !hasEnv {
+			errs = append(errs, label+" must set one of path or env")
 			continue
 		}
-		info, err := os.Stat(p)
+		var target string
+		var source string
+		if hasPath {
+			target = ap.Path
+			source = "path"
+		} else {
+			target = os.Getenv(ap.Env)
+			source = "env var " + ap.Env
+		}
+		if strings.TrimSpace(target) == "" {
+			errs = append(errs, fmt.Sprintf("%s resolves to an empty path (%s is not set or is empty)", label, source))
+			continue
+		}
+		if !filepath.IsAbs(target) {
+			errs = append(errs, fmt.Sprintf("%s %q is not an absolute path", label, target))
+			continue
+		}
+		info, err := os.Stat(target)
 		switch {
 		case err != nil:
-			errs = append(errs, fmt.Sprintf("allowed_paths entry %q does not exist or is not accessible: %v", p, err))
+			errs = append(errs, fmt.Sprintf("%s %q does not exist or is not accessible: %v", label, target, err))
 		case !info.IsDir():
-			errs = append(errs, fmt.Sprintf("allowed_paths entry %q is not a directory", p))
+			errs = append(errs, fmt.Sprintf("%s %q is not a directory", label, target))
 		}
 	}
 

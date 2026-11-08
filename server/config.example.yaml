@@ -10,8 +10,17 @@ addr: ":8080"
 
 # Directories the server is allowed to serve. Every file operation is confined
 # to these roots; anything outside is rejected (path-traversal protection).
+# Each entry is rendered on the frontend as one folder icon labeled by `name`,
+# and opens the directory given by `path` (an absolute path) or `env` (the name
+# of an environment variable whose value is a single absolute directory path).
+# `name` is mandatory; at least one of `path` or `env` must be set. When both
+# are present, `path` takes precedence. The resolved directory must exist and be
+# a real directory (checked at server start).
 allowed_paths:
-  - /data
+    - name: Documents
+      path: /data/documents
+    - name: SharedDrive
+      env: SHARED_DRIVE_PATH
 
 # Maximum number of tasks allowed to run in parallel. Extra tasks wait in an
 # in-memory queue.

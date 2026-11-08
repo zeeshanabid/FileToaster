@@ -18,7 +18,7 @@ func writeTestConfig(t *testing.T, path, root string) {
 	t.Helper()
 	tmp := filepath.Join(t.TempDir(), "uploads")
 	content := "addr: \"127.0.0.1:0\"\n" +
-		"allowed_paths:\n  - " + root + "\n" +
+		"allowed_paths:\n  - name: Files\n    path: " + root + "\n" +
 		"max_parallel_tasks: 2\n" +
 		"tmp_dir: " + tmp + "\n" +
 		"session_secret: session-secret\n" +

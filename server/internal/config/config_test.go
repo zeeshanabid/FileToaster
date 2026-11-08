@@ -27,11 +27,16 @@ func validYAML(t *testing.T) string {
 	root := t.TempDir()
 	tmp := t.TempDir()
 	return "addr: \"127.0.0.1:0\"\n" +
-		"allowed_paths:\n  - " + root + "\n" +
+		"allowed_paths:\n  - name: Files\n    path: " + root + "\n" +
 		"max_parallel_tasks: 2\n" +
 		"gomaxprocs: 0\n" +
 		"tmp_dir: " + tmp + "\n" +
 		"session_secret: supersecret\n"
+}
+
+// allowedOne returns a single AllowedPath rooted at p.
+func allowedOne(p string) []AllowedPath {
+	return []AllowedPath{{Name: "root", Path: p}}
 }
 
 func TestDefaultConfigDefaults(t *testing.T) {
@@ -53,7 +58,7 @@ func TestDefaultConfigDefaults(t *testing.T) {
 func TestValidateAllGood(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Addr = ":8080"
-	cfg.AllowedPaths = []string{t.TempDir()}
+	cfg.AllowedPaths = []AllowedPath{{Name: "root", Path: t.TempDir()}}
 	cfg.MaxParallelTasks = 4
 	cfg.SessionSecret = "x"
 	cfg.TMPDir = t.TempDir()
@@ -65,14 +70,16 @@ func TestValidateAllGood(t *testing.T) {
 func TestValidateErrors(t *testing.T) {
 	root := t.TempDir()
 	cases := map[string]*Config{
-		"empty addr":       {Addr: "", AllowedPaths: []string{root}, SessionSecret: "x", TMPDir: t.TempDir()},
-		"bad addr":         {Addr: ":::not-an-addr", AllowedPaths: []string{root}, SessionSecret: "x", TMPDir: t.TempDir()},
-		"no allowed_paths": {Addr: ":8080", SessionSecret: "x", TMPDir: t.TempDir()},
-		"missing secret":   {Addr: ":8080", AllowedPaths: []string{root}, TMPDir: t.TempDir()},
-		"bad tmp_dir":      {Addr: ":8080", AllowedPaths: []string{root}, SessionSecret: "x", TMPDir: ""},
-		"zero tasks":       {Addr: ":8080", AllowedPaths: []string{root}, SessionSecret: "x", TMPDir: t.TempDir(), MaxParallelTasks: 0},
-		"negative gc":      {Addr: ":8080", AllowedPaths: []string{root}, SessionSecret: "x", TMPDir: t.TempDir(), GOMAXPROCS: -1},
-		"nonexistent root": {Addr: ":8080", AllowedPaths: []string{filepath.Join(t.TempDir(), "nope")}, SessionSecret: "x", TMPDir: t.TempDir()},
+		"empty addr":           {Addr: "", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir()},
+		"bad addr":             {Addr: ":::not-an-addr", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir()},
+		"no allowed_paths":     {Addr: ":8080", SessionSecret: "x", TMPDir: t.TempDir()},
+		"missing secret":       {Addr: ":8080", AllowedPaths: allowedOne(root), TMPDir: t.TempDir()},
+		"bad tmp_dir":          {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: ""},
+		"zero tasks":           {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), MaxParallelTasks: 0},
+		"negative gc":          {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), GOMAXPROCS: -1},
+		"nonexistent root":     {Addr: ":8080", AllowedPaths: allowedOne(filepath.Join(t.TempDir(), "nope")), SessionSecret: "x", TMPDir: t.TempDir()},
+		"missing name":         {Addr: ":8080", AllowedPaths: []AllowedPath{{Path: root}}, SessionSecret: "x", TMPDir: t.TempDir()},
+		"neither path nor env": {Addr: ":8080", AllowedPaths: []AllowedPath{{Name: "x"}}, SessionSecret: "x", TMPDir: t.TempDir()},
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -202,7 +209,7 @@ func TestResolveConfigPath_AutoCreate(t *testing.T) {
 	if cfg.Debug {
 		t.Error("auto-created debug should default to false")
 	}
-	if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0] != filepath.Join(home, "filetoaster-data") {
+	if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0].Path != filepath.Join(home, "filetoaster-data") {
 		t.Errorf("auto-created allowed_paths = %v", cfg.AllowedPaths)
 	}
 }
@@ -232,7 +239,7 @@ func TestWriteDefaultConfig_Loads(t *testing.T) {
 
 func TestDebugEnvOverride(t *testing.T) {
 	t.Setenv("FILETOASTER_DEBUG", "true")
-	cfg, err := Load(writeConfig(t, "session_secret: x\nallowed_paths:\n  - "+t.TempDir()+"\n"))
+	cfg, err := Load(writeConfig(t, "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+t.TempDir()+"\n"))
 	if err != nil {
 		t.Fatalf("Load = %v", err)
 	}
@@ -260,7 +267,7 @@ func TestLoadValid(t *testing.T) {
 
 func TestLoadFillsDefaults(t *testing.T) {
 	// Omits addr and max_parallel_tasks; defaults should apply.
-	yaml := "allowed_paths:\n  - " + t.TempDir() + "\nsession_secret: x\n"
+	yaml := "allowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\nsession_secret: x\n"
 	cfg, err := Load(writeConfig(t, yaml))
 	if err != nil {
 		t.Fatalf("Load = %v", err)
@@ -284,7 +291,7 @@ func TestLoadMalformedYAML(t *testing.T) {
 }
 
 func TestLoadUnknownField(t *testing.T) {
-	yaml := "session_secret: x\nallowed_paths:\n  - " + t.TempDir() + "\nbogus_key: 1\n"
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\nbogus_key: 1\n"
 	_, err := Load(writeConfig(t, yaml))
 	if err == nil {
 		t.Fatal("Load = nil, want unknown-field error")
@@ -293,7 +300,7 @@ func TestLoadUnknownField(t *testing.T) {
 
 func TestLoadMissingAllowedPathDoesNotEx(t *testing.T) {
 	// allowed_paths points at a non-existent directory.
-	yaml := "session_secret: x\nallowed_paths:\n  - " + filepath.Join(t.TempDir(), "nope") + "\n"
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + filepath.Join(t.TempDir(), "nope") + "\n"
 	_, err := Load(writeConfig(t, yaml))
 	if err == nil {
 		t.Fatal("Load = nil, want validation error")
@@ -304,7 +311,7 @@ func TestLoadMissingAllowedPathDoesNotEx(t *testing.T) {
 }
 
 func TestLoadMissingSecret(t *testing.T) {
-	yaml := "allowed_paths:\n  - " + t.TempDir() + "\n"
+	yaml := "allowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
 	_, err := Load(writeConfig(t, yaml))
 	if err == nil {
 		t.Fatal("Load = nil, want missing-secret error")
@@ -345,7 +352,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 	if cfg.SessionSecret != "envsecret" {
 		t.Errorf("SessionSecret override = %q, want envsecret", cfg.SessionSecret)
 	}
-	if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0] != root {
+	if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0].Path != root {
 		t.Errorf("AllowedPaths override = %v", cfg.AllowedPaths)
 	}
 }
@@ -354,7 +361,7 @@ func TestSaveRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "saved.yaml")
 	cfg := DefaultConfig()
 	cfg.Addr = ":8080"
-	cfg.AllowedPaths = []string{t.TempDir()}
+	cfg.AllowedPaths = []AllowedPath{{Name: "root", Path: t.TempDir()}}
 	cfg.MaxParallelTasks = 3
 	cfg.SessionSecret = "roundtrip"
 	cfg.TMPDir = t.TempDir()
@@ -390,7 +397,7 @@ func TestChangeAdminPasswordOverwritesHashAndPreservesRest(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	writeYAML(t, path, "addr: \"127.0.0.1:0\"\n"+
-		"allowed_paths:\n  - "+root+"\n"+
+		"allowed_paths:\n  - name: Files\n    path: "+root+"\n"+
 		"max_parallel_tasks: 2\n"+
 		"gomaxprocs: 0\n"+
 		"tmp_dir: "+tmp+"\n"+
@@ -419,8 +426,8 @@ func TestChangeAdminPasswordOverwritesHashAndPreservesRest(t *testing.T) {
 	if reloaded.Addr != "127.0.0.1:0" {
 		t.Errorf("addr = %q, want 127.0.0.1:0", reloaded.Addr)
 	}
-	if reloaded.AllowedPaths[0] != root {
-		t.Errorf("allowed_paths changed = %q, want %q", reloaded.AllowedPaths[0], root)
+	if reloaded.AllowedPaths[0].Path != root {
+		t.Errorf("allowed_paths changed = %q, want %q", reloaded.AllowedPaths[0].Path, root)
 	}
 	if reloaded.SessionSecret != "supersecret" {
 		t.Errorf("session_secret = %q, want supersecret", reloaded.SessionSecret)
@@ -441,7 +448,7 @@ func TestChangeAdminPasswordUsesFileValuesNotEnv(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	writeYAML(t, path, "addr: \"127.0.0.1:0\"\n"+
-		"allowed_paths:\n  - "+root+"\n"+
+		"allowed_paths:\n  - name: Files\n    path: "+root+"\n"+
 		"max_parallel_tasks: 2\n"+
 		"tmp_dir: "+tmp+"\n"+
 		"session_secret: file-secret\n")

@@ -40,7 +40,7 @@ func TestLoadCustomAdminCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := "addr: \"127.0.0.1:0\"\n" +
-		"allowed_paths:\n  - " + root + "\n" +
+		"allowed_paths:\n  - name: Files\n    path: " + root + "\n" +
 		"max_parallel_tasks: 1\n" +
 		"tmp_dir: " + tmp + "\n" +
 		"session_secret: xyz\n" +
