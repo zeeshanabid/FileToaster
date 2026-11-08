@@ -66,6 +66,10 @@ Required env: `FILETOASTER_SESSION_SECRET`. Optional: `FILETOASTER_ADMIN_PASSWOR
 
 ## Status
 
-Milestones 0–1 (config) + Frontend POC implemented. Auth, the task engine, FS
-ops, compression, upload, protocol, the full window manager/DnD, and packaging
-are not yet implemented. See `TASKS.md`.
+Milestones 0–1 (config + auth) + Frontend POC + **Directory listing** implemented.
+`allowed_paths` is a list of `{name, path, env}` entries; `internal/fs` confines
+paths to the allowed roots; `/api/fs` + `/api/fs/roots` (authenticated POSTs) list directories; the
+resizable `Window.svelte` file-manager window (tree view, sortable list, status
+bar) loads from the server. Auth, the task engine, fs fileset ops, compression,
+upload, protocol, the full DnD/conflict/SSE window manager, and packaging remain.
+See `TASKS.md`.
