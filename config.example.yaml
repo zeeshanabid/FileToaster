@@ -1,0 +1,34 @@
+# FileToaster configuration example.
+# Copy to config.yaml (or a path given via --config-file / FILETOASTER_CONFIG)
+# and adjust. All settings except admin_password_hash and session_secret can
+# also be overridden with environment variables (see AGENTS.md).
+
+# Bind address for the HTTP server, e.g. ":8080" or "127.0.0.1:8080".
+addr: ":8080"
+
+# Directories the server is allowed to serve. Every file operation is confined
+# to these roots; anything outside is rejected (path-traversal protection).
+allowed_paths:
+  - /data
+
+# Maximum number of tasks allowed to run in parallel. Extra tasks wait in an
+# in-memory queue.
+max_parallel_tasks: 4
+
+# Set to true to enable debug-level logging (defaults to info logging).
+debug: false
+
+# Set GOMAXPROCS to this value. 0 (the default) leaves it to the Go runtime.
+gomaxprocs: 0
+
+# Directory used to stage uploads. Deliberately OUTSIDE the served roots so
+# incomplete uploads never appear in listings.
+tmp_dir: /tmp/filetoaster-uploads
+
+# HMAC secret used to sign the session cookie. Required. Prefer setting it via
+# the FILETOASTER_SESSION_SECRET environment variable.
+session_secret: "change-me-in-production"
+
+# Optional pre-hashed Argon2id admin password. Leave empty to bootstrap the
+# admin password via FILETOASTER_ADMIN_PASSWORD on the first run.
+admin_password_hash: ""
