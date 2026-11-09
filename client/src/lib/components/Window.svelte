@@ -1,10 +1,39 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { closeWindow, focusWindow, updateWindow, type AppWindow } from '$lib/store/windows';
-	import { fetchListing, type Entry } from '$lib/fs/api';
+	import { onMount, onDestroy } from 'svelte';
+	import { derived } from 'svelte/store';
+	import {
+		closeWindow,
+		focusWindow,
+		updateWindow,
+		windows,
+		type AppWindow
+	} from '$lib/store/windows';
+	import { type Entry } from '$lib/fs/api';
+	import { tree } from '$lib/fs/tree';
 	import FileIcon from './FileIcon.svelte';
 
-	let { window: win }: { window: AppWindow } = $props();
+	let { window: winProp }: { window: AppWindow } = $props();
+
+	// Subscribe to this window's slice of the store so the tree highlight, title
+	// and main view all react to navigation performed anywhere (tree click,
+	// double-click, up button). Both views observe the same store, so they cannot
+	// diverge. `winProp` only supplies the values set once at window creation.
+	const selection = derived(windows, ($all) => $all.find((w) => w.id === winProp.id) ?? null);
+	let win = $state<AppWindow | null>(null);
+	let stop: (() => void) | undefined;
+	onMount(() => {
+		tree.resetWindow(winProp.id);
+		stop = selection.subscribe((w) => {
+			win = w;
+		});
+		void navigate(winProp.path);
+	});
+	onDestroy(() => stop?.());
+
+	// `tree` is an external cache; Svelte only re-renders when a $state changes.
+	// Bump `frame` after every tree mutation so the fold/outlines and per-directory
+	// loading/error nodes update even when the store path did not change (twisty).
+	let frame = $state(0);
 
 	// --- geometry: drag (header) and resize (bottom-right handle) ---
 	let pos = $state<{ x: number; y: number } | null>(null);
@@ -12,7 +41,7 @@
 	let resizeStart = $state({ x: 0, y: 0, w: 0, h: 0 });
 	let resizing = $state(false);
 	// svelte-ignore state_referenced_locally
-	let size = $state({ width: win.width, height: win.height });
+	let size = $state({ width: winProp.width, height: winProp.height });
 
 	const MIN_W = 480;
 	const MIN_H = 300;
@@ -26,9 +55,9 @@
 		window.removeEventListener('pointerup', onPointerUp);
 	}
 	function onHeaderPointerDown(e: PointerEvent) {
-		if (pos === null) pos = { x: win.x, y: win.y };
+		if (pos === null) pos = { x: winProp.x, y: winProp.y };
 		dragStart = { x: e.clientX, y: e.clientY };
-		dragOrigin = pos ? { ...pos } : { x: win.x, y: win.y };
+		dragOrigin = pos ? { ...pos } : { x: winProp.x, y: winProp.y };
 		dragging = true;
 		addMoveListeners();
 	}
@@ -67,14 +96,10 @@
 		return i <= 0 ? p : p.slice(i + 1);
 	}
 
-	// --- data: current listing, per-path cache, tree expansion, sort ---
+	// --- data: main listing view state (derived from the store's `path`) ---
 	let entries = $state<Entry[]>([]);
-	let listingCache = $state<Map<string, { entries: Entry[] }>>(new Map());
-	let expanded = $state<Set<string>>(new Set());
-	let currentPath = $state('');
-	let title = $state('');
-	let loading = $state(false);
-	let error = $state<string | null>(null);
+	let mainLoading = $state(false);
+	let mainError = $state<string | null>(null);
 
 	type SortKey = 'name' | 'size' | 'created' | 'updated';
 	const SORT_KEYS: SortKey[] = ['name', 'size', 'created', 'updated'];
@@ -90,64 +115,37 @@
 		}
 	}
 
-	// Load a directory. When asMain is true the listing replaces the current view
-	// (and status totals); otherwise it only populates the cache for the tree.
-	async function load(path: string, asMain: boolean) {
-		try {
-			loading = true;
-			error = null;
-			let cached = listingCache.get(path);
-			if (!cached) {
-				const listing = await fetchListing(path);
-				cached = { entries: listing.entries };
-				listingCache.set(path, cached);
-			}
-			if (asMain) {
-				entries = cached.entries;
-			}
-			expanded.add(path);
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'could not open this folder';
-		} finally {
-			loading = false;
-		}
-	}
+	// The tree is anchored at the window's root and never re-rooted on navigation.
+	// The title bar shows the currently opened folder; the store's `name` stays as
+	// the window's display name (the root label) and never changes after open.
+	let title = $derived(
+		win ? (win.path === win.rootPath ? win.name : basename(win.path)) : winProp.name
+	);
 
-	// The path chain from the window's root down to `path`, inclusive.
-	function chainTo(path: string): string[] {
+	// Navigate to `path`: it becomes the active folder (store `path`), the tree
+	// expands root..path (lazy child-load, cached), and the main listing reloads.
+	async function navigate(path: string): Promise<void> {
+		if (!win) return;
 		const root = win.rootPath;
-		if (path === root) return [root];
-		const rel = path.startsWith(root + '/') ? path.slice(root.length + 1) : basename(path);
-		const parts = rel.split('/').filter(Boolean);
-		const chain = [root];
-		let acc = root;
-		for (const part of parts) {
-			acc = acc + '/' + part;
-			chain.push(acc);
+		if (path !== root && !path.startsWith(root + '/')) return;
+		try {
+			mainLoading = true;
+			mainError = null;
+			const listing = await tree.navigate(win.id, path, root);
+			entries = listing.entries;
+			updateWindow(win.id, { path });
+		} catch (err) {
+			mainError = err instanceof Error ? err.message : 'could not open this folder';
+		} finally {
+			mainLoading = false;
 		}
-		return chain;
-	}
-
-	function currentTitle(path: string): string {
-		return path === win.rootPath ? win.name : basename(path);
-	}
-
-	// Navigate (double-click) into a directory: expand the branch in the tree and
-	// refresh the main view.
-	async function navigate(dir: string) {
-		const chain = chainTo(dir);
-		for (const d of chain) expanded.add(d);
-		await Promise.all(chain.map((d) => load(d, false)));
-		await load(dir, true);
-		currentPath = dir;
-		setTitle(dir);
 	}
 
 	// Move up one directory from the currently opened folder (the toolbar "up"
 	// button). Never navigates above the window's root path.
 	function goUp() {
-		if (!currentPath || currentPath === win.rootPath) return;
-		const parent = dirname(currentPath);
+		if (!win || !win.path || win.path === win.rootPath) return;
+		const parent = dirname(win.path);
 		if (parent !== win.rootPath && !parent.startsWith(win.rootPath + '/')) {
 			void navigate(win.rootPath);
 			return;
@@ -155,27 +153,22 @@
 		void navigate(parent);
 	}
 
-	// Set the visible title and mirror it into the window's taskbar label.
-	function setTitle(path: string) {
-		title = currentTitle(path);
-		updateWindow(win.id, { name: title });
-	}
-
-	// Single-click a tree node: expand or collapse it (loading children on expand).
-	function toggleExpand(dir: string) {
-		if (expanded.has(dir)) {
-			expanded.delete(dir);
-		} else {
-			expanded.add(dir);
-			void load(dir, false);
-		}
-	}
-
-	// Subdirectories of a directory, from the cache.
-	function childDirs(dir: string): Entry[] {
-		const cached = listingCache.get(dir);
-		if (!cached) return [];
-		return cached.entries.filter((e) => e.type === 'dir');
+	// Snapshot of the reactive shape the tree row renders from. Reading `frame`
+	// (bumped on every tree mutation) makes this snapshot re-subscribe to the
+	// shared `tree` cache, which is not itself reactive, so the row re-renders
+	// when expansion, loading, or error state changes.
+	function rowSnapshot(dir: string) {
+		const version = frame;
+		void version;
+		const active = win?.path;
+		void active;
+		return {
+			version,
+			expanded: tree.isExpanded(winProp.id, dir),
+			loading: tree.isLoading(dir),
+			error: tree.getError(dir),
+			kids: tree.isExpanded(winProp.id, dir) ? tree.childEntries(dir) : []
+		};
 	}
 
 	// Sorted view of the current entries. For name, folders sort first; the other
@@ -208,10 +201,18 @@
 		}
 	}
 
+	// Tree node label: the window's display name at the root, folder name below.
+	function label(dir: string): string {
+		if (!win) return basename(dir);
+		return dir === win.rootPath ? win.name : basename(dir);
+	}
+
 	function arrow(dir: string): string {
-		const kids = childDirs(dir);
+		if (!win) return '·';
+		if (tree.isLoading(dir)) return '▾';
+		const kids = tree.childEntries(dir);
 		if (kids.length === 0) return '·';
-		return expanded.has(dir) ? '▾' : '▸';
+		return tree.isExpanded(win.id, dir) ? '▾' : '▸';
 	}
 
 	// --- formatting helpers ---
@@ -224,7 +225,7 @@
 			v /= 1024;
 			i++;
 		}
-		return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+		return `${v.toFixed(v < 1 ? 1 : 0)} ${units[i]}`;
 	}
 	function formatDate(iso: string): string {
 		const d = new Date(iso);
@@ -239,21 +240,29 @@
 		});
 	}
 
-	onMount(() => {
-		currentPath = win.rootPath;
-		setTitle(win.rootPath);
-		void navigate(win.rootPath);
+	// Keep the highlighted active row scrolled into view on navigation.
+	$effect(() => {
+		const active = win?.path;
+		if (!active) return;
+		requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>(
+				`[data-tree-active="${CSS.escape(active)}"]`
+			);
+			if (el && typeof el.scrollIntoView === 'function') {
+				el.scrollIntoView({ block: 'nearest' });
+			}
+		});
 	});
 </script>
 
 <div
 	class="window"
-	class:minimized={win.minimized}
+	class:minimized={winProp.minimized}
 	role="dialog"
 	tabindex="0"
-	aria-label="{title}"
-	style="left:{pos ? pos.x : win.x}px; top:{pos ? pos.y : win.y}px; width:{size.width}px; height:{size.height}px; z-index:{win.zIndex};"
-	onmousedown={() => focusWindow(win.id)}
+	aria-label={title}
+	style="left:{pos ? pos.x : winProp.x}px; top:{pos ? pos.y : winProp.y}px; width:{size.width}px; height:{size.height}px; z-index:{winProp.zIndex};"
+	onmousedown={() => focusWindow(winProp.id)}
 >
 	<header class="header" onpointerdown={onHeaderPointerDown} aria-roledescription="draggable" role="application">
 		<span class="logo" aria-hidden="true">
@@ -262,8 +271,8 @@
 				<path d="M9 12h6M9 15h4" />
 			</svg>
 		</span>
-		<span class="title" title={`${title} — ${currentPath}`}>{title}</span>
-		<button class="close" type="button" onclick={() => closeWindow(win.id)} aria-label="Close window">
+		<span class="title" title={`${title} — ${winProp.path}`}>{title}</span>
+		<button class="close" type="button" onclick={() => closeWindow(winProp.id)} aria-label="Close window">
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
 				<path d="M7 7l10 10M17 7L7 17" />
 			</svg>
@@ -271,13 +280,13 @@
 	</header>
 
 	<div class="toolbar">
-		{#if currentPath !== win.rootPath}
+		{#if win?.path !== win?.rootPath}
 			<button
 				class="up"
 				type="button"
 				title="Up one directory"
 				aria-label="Up one directory"
-				onclick={goUp}
+				onclick={() => goUp()}
 			>
 				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
 					<path d="M12 19V5M5 12l7-7 7 7" />
@@ -288,35 +297,47 @@
 
 	<main class="body">
 		<aside class="tree" aria-label="Folder tree">
-			{#if error && entries.length === 0}
-				<div class="tree-error">{error}</div>
-			{:else}
-				<ul class="tree-root">{#snippet treeRow(dir: string, depth: number)}
-					<li class="trow" style="padding-left:{8 + depth * 14}px">
-						<button type="button" class="tnode" onclick={() => toggleExpand(dir)} ondblclick={() => navigate(dir)}>
-							<span class="twisty" aria-hidden="true">{arrow(dir)}</span>
-							<span class="ticon" aria-hidden="true">
-								<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-									<path d="M3 6a1 1 0 0 1 1-1h3l1.5 1.5H16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z" />
-								</svg>
-							</span>
-							<span class="tname" title={dir}>{basename(dir)}</span>
-						</button>
-						{#if expanded.has(dir)}
-							{#each childDirs(dir).sort((a, b) => a.name.localeCompare(b.name)) as child (child.path)}
-								{treeRow(child.path, depth + 1)}
+			<ul class="tree-root" data-frame={frame}>
+				{#if win}
+					{@render treeRow(win.rootPath, 0)}
+				{/if}
+				{#snippet treeRow(dir: string, depth: number)}
+				{@const s = rowSnapshot(dir)}
+				<li
+					class="trow"
+					class:active={win && win.path === dir}
+					data-tree-active={win && win.path === dir ? dir : undefined}
+					style="padding-left:{8 + depth * 14}px"
+				>
+					<button type="button" class="tnode" title={dir} onclick={() => navigate(dir)}>
+						<span class="twisty" aria-hidden="true" onclick={(e) => { e.stopPropagation(); void tree.toggleExpand(winProp.id, dir).then(() => frame += 1).catch(() => frame += 1); frame += 1; }}>{arrow(dir)}</span>
+						<span class="ticon" aria-hidden="true">
+							<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+								<path d="M3 6a1 1 0 0 1 1-1h3l1.5 1.5H16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z" />
+							</svg>
+						</span>
+						<span class="tname" title={label(dir)}>{label(dir)}</span>
+					</button>
+					{#if s.expanded}
+						{#if s.loading}
+							<span class="tchild t-loading">Loading…</span>
+						{:else if s.error}
+							<span class="tchild t-error">{s.error}</span>
+						{:else}
+							{#each s.kids as child (child.path)}
+								{@render treeRow(child.path, depth + 1)}
 							{/each}
 						{/if}
-					</li>
-				{/snippet}</ul>
-			{/if}
+					{/if}
+				</li>
+			{/snippet}</ul>
 		</aside>
 
 		<div class="content">
-			{#if loading && entries.length === 0}
+			{#if mainLoading && entries.length === 0}
 				<div class="empty">Loading…</div>
-			{:else if error}
-				<div class="error">{error}</div>
+			{:else if mainError}
+				<div class="error">{mainError}</div>
 			{:else if rows.length === 0}
 				<div class="empty">This folder is empty.</div>
 			{:else}
@@ -357,7 +378,7 @@
 				<path d="M3 6a1 1 0 0 1 1-1h3l1.5 1.5H16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z" />
 			</svg>
 		</span>
-		<span class="spath-val" title={currentPath}>{currentPath}</span>
+		<span class="spath-val" title={winProp.path}>{winProp.path}</span>
 		<span class="count">{rows.length} item{rows.length === 1 ? '' : 's'}</span>
 	</footer>
 
@@ -499,12 +520,22 @@
 	.tnode:hover {
 		background: var(--surface-inset);
 	}
+	.trow.active > .tnode {
+		color: var(--accent-strong);
+		font-weight: 600;
+		background: var(--surface-inset);
+		border-radius: 6px;
+	}
 	.twisty {
 		width: 12px;
 		text-align: center;
 		font-size: 11px;
 		color: var(--text-faint);
 		flex: none;
+		cursor: pointer;
+	}
+	.twisty:hover {
+		color: var(--text);
 	}
 	.ticon {
 		flex: none;
@@ -519,9 +550,15 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.tree-error {
-		padding: 10px 12px;
+	.tchild {
 		font-size: 12px;
+		padding: 4px 10px 4px 20px;
+		white-space: nowrap;
+	}
+	.t-loading {
+		color: var(--text-muted);
+	}
+	.t-error {
 		color: var(--alert);
 	}
 	.content {
