@@ -167,6 +167,40 @@ func serveFsMkdir(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
 	writeJSON(w, http.StatusCreated, map[string]any{"path": created})
 }
 
+// fsInfoRequest is the JSON body of an information POST. It carries the list of
+// selected paths (files and/or directories) to describe.
+type fsInfoRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// serveFsInfo computes the information dialog payload for each selected path,
+// confined to the allowed roots. Paths that cannot be resolved (outside the
+// roots, missing, unreadable) are skipped; the surviving FileInfo values are
+// returned so the UI can aggregate them.
+func serveFsInfo(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFsRequestSize)
+	var req fsInfoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "the 'paths' request field is required")
+		return
+	}
+	if len(req.Paths) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one path is required")
+		return
+	}
+
+	roots := fs.NewRoots(pathsOf(cfg)...)
+	items := make([]fs.FileInfo, 0, len(req.Paths))
+	for _, p := range req.Paths {
+		info, err := fs.Info(roots, p)
+		if err != nil {
+			continue
+		}
+		items = append(items, info)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

@@ -28,6 +28,9 @@ import (
 //   - POST /api/fs/mkdir : authenticated directory-creation endpoint (wrapped in
 //     auth.Middleware); the parent directory and new name are read from the JSON
 //     request body.
+//   - POST /api/fs/info : authenticated information endpoint (wrapped in
+//     auth.Middleware); the selected paths are read from the JSON request body
+//     and their recursive size/file/dir counts and permissions are returned.
 //   - everything else : the embedded SvelteKit SPA, served publicly so the login
 //     screen can load before any cookie exists. auth.Middleware is available to
 //     protect future data endpoints; the SPA shell itself must stay public.
@@ -52,6 +55,9 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	})))
 	mux.Handle("POST /api/fs/mkdir", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveFsMkdir(w, r, fsCfg)
+	})))
+	mux.Handle("POST /api/fs/info", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveFsInfo(w, r, fsCfg)
 	})))
 
 	files := http.FileServer(http.FS(filetoaster.Assets))
