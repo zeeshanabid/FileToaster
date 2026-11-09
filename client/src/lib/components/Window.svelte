@@ -8,7 +8,7 @@
 		windows,
 		type AppWindow
 	} from '$lib/store/windows';
-	import { type Entry } from '$lib/fs/api';
+	import { type Entry, mkdirDirectory } from '$lib/fs/api';
 	import { tree } from '$lib/fs/tree';
 	import FileIcon from './FileIcon.svelte';
 
@@ -153,6 +153,59 @@
 		void navigate(parent);
 	}
 
+	// Reload the currently opened directory from the server, bypassing cache, so
+	// changes made outside the UI become visible without navigating away.
+	async function reload() {
+		if (!win) return;
+		try {
+			mainLoading = true;
+			mainError = null;
+			const listing = await tree.refresh(win.path);
+			entries = listing.entries;
+			frame += 1;
+		} catch (err) {
+			mainError = err instanceof Error ? err.message : 'could not reload this folder';
+		} finally {
+			mainLoading = false;
+		}
+	}
+
+	// In-place directory naming in the toolbar. `editingNew` toggles the input;
+	// Enter creates and navigates into the folder, Escape/blur discards.
+	let editingNew = $state(false);
+	let newName = $state('');
+	let inputEl: HTMLInputElement | null = $state(null);
+	let isAtRoot = $derived(win ? win.path === win.rootPath : true);
+
+	function startNewDir() {
+		if (!win) return;
+		newName = '';
+		editingNew = true;
+	}
+	// Focus the in-place input once it is rendered (it does not exist while
+	// `editingNew` is false, so a plain call in startNewDir would be a no-op).
+	$effect(() => {
+		if (editingNew) inputEl?.focus();
+	});
+	function cancelNewDir() {
+		if (!editingNew) return;
+		editingNew = false;
+		newName = '';
+	}
+	async function confirmNewDir() {
+		const name = newName.trim();
+		if (!name || !win || !editingNew) return;
+		editingNew = false;
+		const parent = win.path;
+		try {
+			await mkdirDirectory(parent, name);
+			void navigate(parent + '/' + name);
+		} catch (err) {
+			mainError = err instanceof Error ? err.message : 'could not create folder';
+		}
+		newName = '';
+	}
+
 	// Snapshot of the reactive shape the tree row renders from. Reading `frame`
 	// (bumped on every tree mutation) makes this snapshot re-subscribe to the
 	// shared `tree` cache, which is not itself reactive, so the row re-renders
@@ -280,18 +333,30 @@
 	</header>
 
 	<div class="toolbar">
-		{#if win?.path !== win?.rootPath}
-			<button
-				class="up"
-				type="button"
-				title="Up one directory"
-				aria-label="Up one directory"
-				onclick={() => goUp()}
-			>
-				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-					<path d="M12 19V5M5 12l7-7 7 7" />
-				</svg>
-			</button>
+		<button class="tool" type="button" title="New folder" aria-label="New folder" onclick={() => startNewDir()} disabled={editingNew}>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" />
+				<path d="M12 11v6M9 14h6" />
+			</svg>
+		</button>
+		<button class="tool" type="button" title="Reload" aria-label="Reload" onclick={() => reload()}>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M21 12a9 9 0 1 1-3.2-6.9" />
+				<path d="M21 4v5h-5" />
+			</svg>
+		</button>
+		<button class="up" type="button" title="Up one directory" aria-label="Up one directory" disabled={isAtRoot} onclick={() => goUp()}>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M12 19V5M5 12l7-7 7 7" />
+			</svg>
+		</button>
+		{#if editingNew}
+			<form class="new" onsubmit={() => confirmNewDir()}>
+				<input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
+					placeholder="New folder"
+					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
+					onblur={() => cancelNewDir()} />
+			</form>
 		{/if}
 	</div>
 
@@ -481,6 +546,47 @@
 	.up svg {
 		width: 16px;
 		height: 16px;
+	}
+	.tool {
+		display: grid;
+		place-items: center;
+		height: 30px;
+		width: 30px;
+		background: transparent;
+		border: none;
+		border-radius: 8px;
+		color: var(--text-muted);
+		cursor: pointer;
+	}
+	.tool:hover:not(:disabled) {
+		background: var(--surface-inset);
+		color: var(--text);
+	}
+	.tool:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+	.tool svg {
+		width: 16px;
+		height: 16px;
+	}
+	.new {
+		display: grid;
+		place-items: center;
+		margin-left: auto;
+		padding-right: 4px;
+	}
+	.new-input {
+		width: 160px;
+		height: 28px;
+		padding: 0 8px;
+		font: inherit;
+		font-size: 13px;
+		color: var(--text);
+		background: var(--surface);
+		border: 1px solid var(--accent-strong);
+		border-radius: 7px;
+		outline: none;
 	}
 	.body {
 		flex: 1;

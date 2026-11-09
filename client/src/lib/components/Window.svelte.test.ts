@@ -10,15 +10,20 @@ import {
 	getByLabelText,
 	getByTitle,
 	getByRole,
+	getByPlaceholderText,
 	queryByText
 } from '@testing-library/dom';
+import userEvent from '@testing-library/user-event';
 import type { Mock } from 'vitest';
 import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
-import { fetchListing } from '$lib/fs/api';
+import { fetchListing, mkdirDirectory } from '$lib/fs/api';
 
-vi.mock('$lib/fs/api', () => ({ fetchListing: vi.fn() }));
+vi.mock('$lib/fs/api', () => ({
+	fetchListing: vi.fn(),
+	mkdirDirectory: vi.fn()
+}));
 
 const FS: Record<string, { path: string; name: string; type: 'file' | 'dir'; size: number; created: string; modified: string }[]> = {
 	'/root': [
@@ -94,12 +99,13 @@ async function clickNode(name: string): Promise<void> {
 	await tick();
 }
 
-beforeEach(() => {
-	windows.set([]);
-	fileTree.resetAll();
-	(fetchListing as Mock).mockClear();
-	(fetchListing as Mock).mockImplementation(async (path: string) => ({ path, entries: FS[path] ?? [] }));
-});
+	beforeEach(() => {
+		windows.set([]);
+		fileTree.resetAll();
+		(fetchListing as Mock).mockClear();
+		(fetchListing as Mock).mockImplementation(async (path: string) => ({ path, entries: FS[path] ?? [] }));
+		(mkdirDirectory as Mock).mockReset();
+	});
 
 afterEach(() => {
 	unmountAll();
@@ -154,15 +160,55 @@ describe('Window tree — store sync', () => {
 		await waitFor(() => expect(tree().querySelector('[data-tree-active="/root/documents/work"]')).toBeTruthy());
 	});
 
-	it('up button navigates to the parent folder', async () => {
+	it('up button is always visible, disabled at root, navigates below root', async () => {
+		await openAndRender();
+		// Up button is always present (even at the root)...
+		const upAtRoot = screen.getByLabelText('Up one directory') as HTMLButtonElement;
+		expect(upAtRoot).toBeInTheDocument();
+		expect(upAtRoot).toBeDisabled();
+		// ...and only becomes enabled once navigated below the root.
+		await clickNode('/root/documents');
+		await waitFor(() => expect(screen.getByLabelText('Up one directory')).not.toBeDisabled());
+		fireEvent.click(upAtRoot);
+		await waitFor(() => expect(currentStorePath()).toBe(ROOT));
+	});
+
+	it('reload button refetches the currently opened directory', async () => {
 		await openAndRender();
 		await clickNode('/root/documents');
-		// Up button is visible now that we are below root.
-		const up = screen.getByLabelText('Up one directory') as HTMLButtonElement;
-		fireEvent.click(up);
-		await waitFor(() => expect(currentStorePath()).toBe(ROOT));
-		// Up button hidden again at root.
-		await waitFor(() => expect(screen.queryByLabelText('Up one directory')).not.toBeInTheDocument());
+		const listing = fetchListing as Mock;
+		listing.mockClear();
+		fireEvent.click(screen.getByLabelText('Reload'));
+		await waitFor(() => expect(listing).toHaveBeenCalledWith('/root/documents'));
+		// The main view re-renders from the fresh listing.
+		await waitFor(() => expect(within(screen.getByRole('table')).getByText('work')).toBeInTheDocument());
+	});
+
+	it('creates a new directory in-place and navigates into it', async () => {
+		await openAndRender();
+		(fetchListing as Mock).mockImplementation(async (path: string) => ({ path, entries: FS[path] ?? [] }));
+		(mkdirDirectory as Mock).mockResolvedValue('/root/TestFolder');
+		const user = userEvent.setup();
+		await user.click(screen.getByLabelText('New folder'));
+		const input = await waitFor(() => screen.getByPlaceholderText('New folder') as HTMLInputElement);
+		await user.type(input, 'TestFolder{enter}');
+		expect(mkdirDirectory).toHaveBeenCalledWith('/root', 'TestFolder');
+		await waitFor(() => expect(currentStorePath()).toBe('/root/TestFolder'));
+		// The toolbar returns to its quiet state (input gone, button re-enabled).
+		await waitFor(() => expect(screen.queryByPlaceholderText('New folder')).not.toBeInTheDocument());
+		expect(screen.getByLabelText('New folder')).not.toBeDisabled();
+	});
+
+	it('discards an in-place new folder on Escape', async () => {
+		await openAndRender();
+		(mkdirDirectory as Mock).mockResolvedValue('/root/Something');
+		const user = userEvent.setup();
+		await user.click(screen.getByLabelText('New folder'));
+		const input = await waitFor(() => screen.getByPlaceholderText('New folder') as HTMLInputElement);
+		await user.type(input, 'Something{escape}');
+		await waitFor(() => expect(screen.queryByPlaceholderText('New folder')).not.toBeInTheDocument());
+		expect(currentStorePath()).toBe(ROOT);
+		expect(mkdirDirectory).not.toHaveBeenCalled();
 	});
 
 	it('expands only the root..folder branch on navigation', async () => {
