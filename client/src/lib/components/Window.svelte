@@ -69,14 +69,10 @@
 
 	// --- data: current listing, per-path cache, tree expansion, sort ---
 	let entries = $state<Entry[]>([]);
-	let listingCache = $state<Map<string, { entries: Entry[]; total: number; human: string }>>(
-		new Map()
-	);
+	let listingCache = $state<Map<string, { entries: Entry[] }>>(new Map());
 	let expanded = $state<Set<string>>(new Set());
 	let currentPath = $state('');
 	let title = $state('');
-	let totalBytes = $state(0);
-	let humanSize = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
@@ -103,13 +99,11 @@
 			let cached = listingCache.get(path);
 			if (!cached) {
 				const listing = await fetchListing(path);
-				cached = { entries: listing.entries, total: listing.total, human: listing.human };
+				cached = { entries: listing.entries };
 				listingCache.set(path, cached);
 			}
 			if (asMain) {
 				entries = cached.entries;
-				totalBytes = cached.total;
-				humanSize = cached.human;
 			}
 			expanded.add(path);
 		} catch (err) {
@@ -324,7 +318,6 @@
 		</span>
 		<span class="spath-val" title={currentPath}>{currentPath}</span>
 		<span class="count">{rows.length} item{rows.length === 1 ? '' : 's'}</span>
-		<span class="total" title="Total size of this directory">{humanSize}</span>
 	</footer>
 
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -573,12 +566,6 @@
 	.count {
 		margin-left: auto;
 		white-space: nowrap;
-	}
-	.total {
-		margin-left: 12px;
-		white-space: nowrap;
-		font-weight: 600;
-		color: var(--text);
 	}
 	.resize {
 		position: absolute;

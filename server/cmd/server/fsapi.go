@@ -91,16 +91,8 @@ func serveFsList(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
 		return
 	}
 
-	total, terr := fs.TotalSize(roots, rawPath)
-	if terr != nil {
-		// Directory size is best-effort; still return the entries we have.
-		total = 0
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":    rawPath,
-		"total":   total,
-		"human":   fs.HumanSize(total),
 		"entries": entries,
 	})
 }

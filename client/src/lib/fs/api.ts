@@ -14,8 +14,6 @@ export interface Entry {
 
 export interface Listing {
 	path: string;
-	total: number;
-	human: string;
 	entries: Entry[];
 }
 

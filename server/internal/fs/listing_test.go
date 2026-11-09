@@ -132,28 +132,6 @@ func TestContainmentEdgeCases(t *testing.T) {
 	}
 }
 
-func TestHumanSize(t *testing.T) {
-	cases := []struct {
-		n    int64
-		want string
-	}{
-		{0, "0B"},
-		{512, "512B"},
-		{1023, "1023B"},
-		{1024, "1KB"},
-		{1536, "1.5KB"},
-		{1024 * 1024, "1MB"},
-		{3 * 1024 * 1024, "3MB"},
-		{1536 * 1024 * 1024, "1.5GB"},
-		{1024 * 1024 * 1024 * 1024, "1TB"},
-	}
-	for _, c := range cases {
-		if got := HumanSize(c.n); got != c.want {
-			t.Errorf("HumanSize(%d) = %q, want %q", c.n, got, c.want)
-		}
-	}
-}
-
 func TestNewRootsDedupesAndDropsEmpty(t *testing.T) {
 	root := t.TempDir()
 	roots := NewRoots("", root, root)

@@ -155,8 +155,6 @@ func TestServeFsList(t *testing.T) {
 	}
 	var body struct {
 		Path    string `json:"path"`
-		Total   int64  `json:"total"`
-		Human   string `json:"human"`
 		Entries []struct {
 			Name string `json:"name"`
 			Type string `json:"type"`
@@ -168,9 +166,6 @@ func TestServeFsList(t *testing.T) {
 	}
 	if body.Path != filepath.Clean(cfg.AllowedPaths[0].Path) {
 		t.Errorf("path = %q", body.Path)
-	}
-	if body.Total != 120 {
-		t.Errorf("total = %d, want 120", body.Total)
 	}
 	if len(body.Entries) != 2 {
 		t.Errorf("entries len = %d, want 2 (a.txt + sub)", len(body.Entries))
