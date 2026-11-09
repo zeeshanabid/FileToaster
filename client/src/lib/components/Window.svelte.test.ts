@@ -18,11 +18,12 @@ import type { Mock } from 'vitest';
 import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
-import { fetchListing, mkdirDirectory } from '$lib/fs/api';
+import { fetchListing, mkdirDirectory, fetchInfo } from '$lib/fs/api';
 
 vi.mock('$lib/fs/api', () => ({
 	fetchListing: vi.fn(),
-	mkdirDirectory: vi.fn()
+	mkdirDirectory: vi.fn(),
+	fetchInfo: vi.fn()
 }));
 
 const FS: Record<string, { path: string; name: string; type: 'file' | 'dir'; size: number; created: string; modified: string }[]> = {
@@ -331,5 +332,191 @@ describe('Window tree — per-window expansion', () => {
 		expect(tree().querySelector('[data-tree-active="/root/photos"]')).toBeNull();
 		expect(within(tree()).queryByText('2023')).not.toBeInTheDocument();
 		expect(idB).not.toBe(idA);
+	});
+});
+
+describe('Window selection & information dialog', () => {
+	// Main-list rows, in DOM order (which mirrors the sorted rows used for
+	// shift-range selection).
+	function rows(): HTMLElement[] {
+		return [...screen.getByRole('table').querySelectorAll('tbody tr.row')] as HTMLElement[];
+	}
+	function rowByName(name: string): HTMLElement {
+		const row = rows().find((r) => r.textContent?.includes(name));
+		if (!row) throw new Error(`no row named ${name}`);
+		return row;
+	}
+	function infoButton(): HTMLButtonElement {
+		return screen.getByLabelText('Information') as HTMLButtonElement;
+	}
+	// The Window root also has role="dialog"; the info overlay is the modal one.
+	// Query it by testid to stay unambiguous.
+	function dialog(): HTMLElement {
+		return screen.getByTestId('info-dialog') as HTMLElement;
+	}
+	function badgeCount(): number {
+		const badge = infoButton().querySelector('.badge') as HTMLElement | null;
+		return badge ? parseInt(badge.textContent ?? '0', 10) : 0;
+	}
+
+	beforeEach(() => {
+		(fetchInfo as Mock).mockClear();
+		(fetchInfo as Mock).mockResolvedValue([]);
+	});
+
+	async function clickRow(name: string, modifier?: 'ctrl' | 'shift') {
+		const row = rowByName(name);
+		if (modifier === 'ctrl') {
+			fireEvent.click(row, { ctrlKey: true });
+		} else if (modifier === 'shift') {
+			fireEvent.click(row, { shiftKey: true });
+		} else {
+			fireEvent.click(row);
+		}
+		await tick();
+	}
+
+	it('plain-click selects a single row and shows a badge', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		expect(badgeCount()).toBe(1);
+		expect(infoButton().querySelector('.badge')).toHaveTextContent('1');
+	});
+
+	it('styles the selected row with a visible selection class', async () => {
+		await openAndRender();
+		const notes = rowByName('notes.txt');
+		const documents = rowByName('documents');
+		// Nothing is selected until a row is clicked, so no row is styled.
+		expect(notes).not.toHaveClass('selected');
+		expect(documents).not.toHaveClass('selected');
+
+		await clickRow('notes.txt');
+		expect(notes).toHaveClass('selected');
+		expect(documents).not.toHaveClass('selected');
+
+		// A second ctrl-click keeps both rows styled as selected.
+		await clickRow('documents', 'ctrl');
+		expect(documents).toHaveClass('selected');
+
+		// Deselecting a row removes its styling.
+		await clickRow('notes.txt', 'ctrl');
+		expect(notes).not.toHaveClass('selected');
+		expect(documents).toHaveClass('selected');
+	});
+
+	it('ctrl-click toggles individual rows (accumulate then deselect)', async () => {
+		await openAndRender();
+		await clickRow('notes.txt', 'ctrl');
+		expect(badgeCount()).toBe(1);
+
+		await clickRow('documents', 'ctrl');
+		expect(badgeCount()).toBe(2);
+
+		// Clicking a selected row again with ctrl deselects it.
+		await clickRow('notes.txt', 'ctrl');
+		expect(badgeCount()).toBe(1);
+	});
+
+	it('shift-click extends the selection across the sorted order', async () => {
+		await openAndRender();
+		// Root rows are sorted dirs-first then files: documents, photos, notes.txt.
+		await clickRow('documents');
+		await clickRow('notes.txt', 'shift');
+		expect(badgeCount()).toBe(3);
+	});
+
+	it('clicking the empty background clears selection', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		expect(badgeCount()).toBe(1);
+		// Click the content container directly (not a row).
+		fireEvent.click(screen.getByRole('table').closest('.content') as HTMLElement);
+		await tick();
+		expect(infoButton().querySelector('.badge')).toBeNull();
+	});
+
+	it('opens the information dialog and calls fetchInfo with selected paths', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		await clickRow('documents', 'ctrl');
+
+		const items: { path: string; name: string; type: 'file' | 'dir'; size: number; fileCount: number; dirCount: number; perms: string; permsOctal: string; created: string; modified: string }[] = [
+			{
+				path: '/root/notes.txt',
+				name: 'notes.txt',
+				type: 'file',
+				size: 42,
+				fileCount: 1,
+				dirCount: 0,
+				perms: '-rw-r--r--',
+				permsOctal: '0644',
+				created: '2023-01-02T03:04:05Z',
+				modified: '2024-05-06T07:08:09Z'
+			},
+			{
+				path: '/root/documents',
+				name: 'documents',
+				type: 'dir',
+				size: 160,
+				fileCount: 3,
+				dirCount: 2,
+				perms: 'drwxr-xr-x',
+				permsOctal: '0755',
+				created: '2022-11-12T13:14:15Z',
+				modified: '2025-01-02T03:04:05Z'
+			}
+		];
+		(fetchInfo as Mock).mockResolvedValue(items);
+
+		fireEvent.click(infoButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		expect(fetchInfo).toHaveBeenCalledTimes(1);
+		// fetchInfo is called with the selected paths (order preserved).
+		const arg = (fetchInfo as Mock).mock.calls[0][0] as string[];
+		expect(arg).toEqual(['/root/notes.txt', '/root/documents']);
+
+		// Summary aggregates the selected items. The four stats render in order:
+		// Selected, Total files, Total directories, Total size.
+		const dlg = dialog();
+		expect(within(dlg).getByText('Selected (1 files, 1 directories)')).toBeInTheDocument();
+		const stats = dlg.querySelectorAll('.stat');
+		expect(stats[0].querySelector('.stat-val')?.textContent).toBe('2');
+		expect(stats[1].querySelector('.stat-val')?.textContent).toBe('4');
+		expect(stats[2].querySelector('.stat-val')?.textContent).toBe('2');
+		expect(stats[3].querySelector('.stat-val')?.textContent).toBe('202 B');
+
+		// Each selected item appears in the table with its details.
+		expect(within(dlg).getByText('notes.txt')).toBeInTheDocument();
+		expect(within(dlg).getByText('drwxr-xr-x')).toBeInTheDocument();
+		expect(within(dlg).getByText('0644')).toBeInTheDocument();
+	});
+
+	it('closes the dialog on the close button', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		(fetchInfo as Mock).mockResolvedValue([]);
+		fireEvent.click(infoButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(screen.getByLabelText('Close'));
+		await waitFor(() => expect(screen.queryByTestId('info-dialog')).not.toBeInTheDocument());
+	});
+
+	it('closes the dialog with Escape', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		(fetchInfo as Mock).mockResolvedValue([]);
+		fireEvent.click(infoButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.keyDown(dialog(), { key: 'Escape' });
+		await waitFor(() => expect(screen.queryByTestId('info-dialog')).not.toBeInTheDocument());
+	});
+
+	it('does not open the dialog when nothing is selected', async () => {
+		await openAndRender();
+		expect(badgeCount()).toBe(0);
+		fireEvent.click(infoButton());
+		expect(screen.queryByText('Information')).not.toBeInTheDocument();
+		expect(fetchInfo).not.toHaveBeenCalled();
 	});
 });

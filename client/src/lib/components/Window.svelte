@@ -8,9 +8,11 @@
 		windows,
 		type AppWindow
 	} from '$lib/store/windows';
-	import { type Entry, mkdirDirectory } from '$lib/fs/api';
+	import { type Entry, fetchInfo, type FileInfo, mkdirDirectory } from '$lib/fs/api';
 	import { tree } from '$lib/fs/tree';
 	import FileIcon from './FileIcon.svelte';
+	import InfoDialog from './InfoDialog.svelte';
+	import { formatSize, formatDate } from '$lib/fs/format';
 
 	let { window: winProp }: { window: AppWindow } = $props();
 
@@ -113,6 +115,83 @@
 			sortKey = key;
 			sortDir = 'asc';
 		}
+	}
+
+	// --- selection (files/folders in the main list) ---
+	// `selected` holds the paths of the currently selected rows; `lastClicked` is
+	// the most recently clicked path, used as the anchor for shift-range selects.
+	// Selection mirrors macOS/Windows file managers: a plain click selects a single
+	// item, ctrl/cmd selects (or deselects) individually, and shift extends the
+	// selection across the visible (sorted) order.
+	let selected = $state<Set<string>>(new Set());
+	let lastClicked: string | null = $state(null);
+
+	function selectOnly(p: string) {
+		selected = new Set([p]);
+		lastClicked = p;
+	}
+	function togglePath(p: string) {
+		const next = new Set(selected);
+		if (next.delete(p)) {
+			// Nothing left selected: forget the range anchor; otherwise keep it so
+			// a following shift-click extends from the new last item.
+			if (next.size === 0) lastClicked = null;
+		} else {
+			next.add(p);
+		}
+		selected = next;
+		lastClicked = p;
+	}
+	function rangeSelect(anchor: string, target: string) {
+		const order = rows.map((r) => r.path);
+		const i = order.indexOf(anchor);
+		const j = order.indexOf(target);
+		if (i === -1 || j === -1) {
+			selectOnly(target);
+			return;
+		}
+		const lo = Math.min(i, j);
+		const hi = Math.max(i, j);
+		selected = new Set(order.slice(lo, hi + 1));
+		lastClicked = target;
+	}
+	function onRowClick(e: MouseEvent, row: Entry) {
+		if (e.ctrlKey || e.metaKey) {
+			togglePath(row.path);
+		} else if (e.shiftKey && lastClicked !== null) {
+			rangeSelect(lastClicked, row.path);
+		} else {
+			selectOnly(row.path);
+		}
+	}
+	function clearSelectionIfBackground(e: MouseEvent) {
+		if (e.target === e.currentTarget) selected = new Set();
+	}
+
+	// --- information dialog ---
+	let infoOpen = $state(false);
+	let infoItems = $state<FileInfo[] | null>(null);
+	let infoLoading = $state(false);
+	let infoError = $state<string | null>(null);
+
+	async function openInfo() {
+		if (selected.size === 0) return;
+		infoLoading = true;
+		infoError = null;
+		try {
+			infoItems = await fetchInfo([...selected]);
+			infoOpen = true;
+		} catch (err) {
+			infoItems = null;
+			infoError = err instanceof Error ? err.message : 'could not load information';
+		} finally {
+			infoLoading = false;
+		}
+	}
+	function closeInfo() {
+		infoOpen = false;
+		infoItems = null;
+		infoError = null;
 	}
 
 	// The tree is anchored at the window's root and never re-rooted on navigation.
@@ -268,30 +347,7 @@
 		return tree.isExpanded(win.id, dir) ? '▾' : '▸';
 	}
 
-	// --- formatting helpers ---
-	function formatSize(n: number): string {
-		if (n < 1024) return `${n} B`;
-		const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
-		let v = n / 1024;
-		let i = 0;
-		while (v >= 1024 && i < units.length - 1) {
-			v /= 1024;
-			i++;
-		}
-		return `${v.toFixed(v < 1 ? 1 : 0)} ${units[i]}`;
-	}
-	function formatDate(iso: string): string {
-		const d = new Date(iso);
-		if (isNaN(d.getTime())) return '';
-		return d.toLocaleString(undefined, {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit'
-		});
-	}
+	// --- formatting helpers (shared with the info dialog via $lib/fs/format) ---
 
 	// Keep the highlighted active row scrolled into view on navigation.
 	$effect(() => {
@@ -350,6 +406,15 @@
 				<path d="M12 19V5M5 12l7-7 7 7" />
 			</svg>
 		</button>
+		<button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
+				<path d="M12 16v-4M12 8h.01" />
+			</svg>
+			{#if selected.size > 0}
+				<span class="badge" aria-hidden="true">{selected.size}</span>
+			{/if}
+		</button>
 		{#if editingNew}
 			<form class="new" onsubmit={() => confirmNewDir()}>
 				<input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
@@ -398,7 +463,8 @@
 			{/snippet}</ul>
 		</aside>
 
-		<div class="content">
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div class="content" onclick={clearSelectionIfBackground}>
 			{#if mainLoading && entries.length === 0}
 				<div class="empty">Loading…</div>
 			{:else if mainError}
@@ -419,7 +485,12 @@
 					</thead>
 					<tbody>
 						{#each rows as row (row.path)}
-							<tr class="row" ondblclick={() => (row.type === 'dir' && navigate(row.path))}>
+							<tr
+								class="row"
+								class:selected={selected.has(row.path)}
+								onclick={(e) => onRowClick(e, row)}
+								ondblclick={() => (row.type === 'dir' && navigate(row.path))}
+							>
 								<td class="name">
 									<span class="fg" aria-hidden="true">
 										<FileIcon type={row.type === 'dir' ? 'folder' : 'doc'} />
@@ -449,6 +520,10 @@
 
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="resize" onpointerdown={onResizePointerDown} aria-label="Resize window"></div>
+
+	{#if infoOpen}
+		<InfoDialog items={infoItems ?? []} onClose={closeInfo} />
+	{/if}
 </div>
 
 <style>
@@ -569,6 +644,25 @@
 	.tool svg {
 		width: 16px;
 		height: 16px;
+	}
+	.tool.info {
+		position: relative;
+	}
+	.badge {
+		position: absolute;
+		top: 2px;
+		right: 2px;
+		min-width: 15px;
+		height: 15px;
+		padding: 0 4px;
+		display: grid;
+		place-items: center;
+		font-size: 10px;
+		font-weight: 700;
+		line-height: 1;
+		color: #fff;
+		background: var(--alert);
+		border-radius: 9px;
 	}
 	.new {
 		display: grid;
@@ -723,6 +817,15 @@
 	}
 	.row:hover td {
 		background: var(--surface-soft);
+	}
+	.row.selected td {
+		background: var(--accent-strong);
+		color: #fff;
+	}
+	.row.selected .rname,
+	.row.selected .size,
+	.row.selected .date {
+		color: #fff;
 	}
 	.name {
 		display: flex;
