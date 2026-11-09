@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { closeWindow, focusWindow, type AppWindow } from '$lib/store/windows';
+	import { closeWindow, focusWindow, updateWindow, type AppWindow } from '$lib/store/windows';
 	import { fetchListing, type Entry } from '$lib/fs/api';
 	import FileIcon from './FileIcon.svelte';
 
@@ -140,7 +140,25 @@
 		await Promise.all(chain.map((d) => load(d, false)));
 		await load(dir, true);
 		currentPath = dir;
-		title = currentTitle(dir);
+		setTitle(dir);
+	}
+
+	// Move up one directory from the currently opened folder (the toolbar "up"
+	// button). Never navigates above the window's root path.
+	function goUp() {
+		if (!currentPath || currentPath === win.rootPath) return;
+		const parent = dirname(currentPath);
+		if (parent !== win.rootPath && !parent.startsWith(win.rootPath + '/')) {
+			void navigate(win.rootPath);
+			return;
+		}
+		void navigate(parent);
+	}
+
+	// Set the visible title and mirror it into the window's taskbar label.
+	function setTitle(path: string) {
+		title = currentTitle(path);
+		updateWindow(win.id, { name: title });
 	}
 
 	// Single-click a tree node: expand or collapse it (loading children on expand).
@@ -211,12 +229,19 @@
 	function formatDate(iso: string): string {
 		const d = new Date(iso);
 		if (isNaN(d.getTime())) return '';
-		return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+		return d.toLocaleString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit'
+		});
 	}
 
 	onMount(() => {
 		currentPath = win.rootPath;
-		title = win.name;
+		setTitle(win.rootPath);
 		void navigate(win.rootPath);
 	});
 </script>
@@ -244,6 +269,22 @@
 			</svg>
 		</button>
 	</header>
+
+	<div class="toolbar">
+		{#if currentPath !== win.rootPath}
+			<button
+				class="up"
+				type="button"
+				title="Up one directory"
+				aria-label="Up one directory"
+				onclick={goUp}
+			>
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+					<path d="M12 19V5M5 12l7-7 7 7" />
+				</svg>
+			</button>
+		{/if}
+	</div>
 
 	<main class="body">
 		<aside class="tree" aria-label="Folder tree">
@@ -392,6 +433,34 @@
 		width: 14px;
 		height: 14px;
 	}
+	.toolbar {
+		display: flex;
+		align-items: center;
+		height: 40px;
+		padding: 0 10px;
+		background: var(--surface-soft);
+		border-bottom: 1px solid var(--border);
+		flex: none;
+	}
+	.up {
+		display: grid;
+		place-items: center;
+		height: 30px;
+		width: 30px;
+		background: transparent;
+		border: none;
+		border-radius: 8px;
+		color: var(--text-muted);
+		cursor: pointer;
+	}
+	.up:hover {
+		background: var(--surface-inset);
+		color: var(--text);
+	}
+	.up svg {
+		width: 16px;
+		height: 16px;
+	}
 	.body {
 		flex: 1;
 		display: flex;
@@ -526,12 +595,19 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.size,
+	.size {
+		width: 1%;
+		white-space: nowrap;
+		text-align: right;
+		color: var(--text-muted);
+		min-width: 76px;
+	}
 	.date {
 		width: 1%;
 		white-space: nowrap;
 		text-align: right;
 		color: var(--text-muted);
+		min-width: 156px;
 	}
 	.status {
 		flex: none;
