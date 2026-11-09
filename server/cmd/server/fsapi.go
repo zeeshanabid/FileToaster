@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"filetoaster/internal/config"
 	"filetoaster/internal/fs"
@@ -117,6 +118,53 @@ func fsStatus(err error) (int, string) {
 	default:
 		return http.StatusBadRequest, "could not read the requested path"
 	}
+}
+
+// createStatus maps a Mkdir failure to a status and message, reusing the
+// containment rule but with create-oriented wording for the other cases.
+func createStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the requested location is outside the allowed folders"
+	case errors.Is(err, fs.ErrExists):
+		return http.StatusConflict, "a folder with that name already exists"
+	case errors.Is(err, fs.ErrEmptyName):
+		return http.StatusBadRequest, "a directory name is required"
+	case errors.Is(err, fs.ErrInvalidName):
+		return http.StatusBadRequest, "the directory name is not valid"
+	default:
+		return http.StatusBadRequest, "could not create the directory"
+	}
+}
+
+type fsMkdirRequest struct {
+	Parent string `json:"parent"`
+	Name   string `json:"name"`
+}
+
+// serveFsMkdir creates a directory named `name` inside `parent`, confined to the
+// allowed roots. It returns 201 with the created path, or a typed error status.
+func serveFsMkdir(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFsRequestSize)
+	var req fsMkdirRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "the 'parent' and 'name' request fields are required")
+		return
+	}
+	if req.Parent == "" || strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, "the 'parent' and 'name' request fields are required")
+		return
+	}
+
+	roots := fs.NewRoots(pathsOf(cfg)...)
+	if err := fs.Mkdir(roots, req.Parent, req.Name); err != nil {
+		status, message := createStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	created := filepath.Clean(filepath.Join(req.Parent, strings.TrimSpace(req.Name)))
+	writeJSON(w, http.StatusCreated, map[string]any{"path": created})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

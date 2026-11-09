@@ -259,3 +259,119 @@ func TestFsEndpointsRequireAuth(t *testing.T) {
 		}
 	})
 }
+
+// mkdirBody marshals a fsMkdirRequest into a JSON request body.
+func mkdirBody(parent, name string) *bytes.Reader {
+	b, _ := json.Marshal(fsMkdirRequest{Parent: parent, Name: name})
+	return bytes.NewReader(b)
+}
+
+func TestServeFsMkdir(t *testing.T) {
+	cfg := buildTestConfig(t)
+	rec := httptest.NewRecorder()
+	serveFsMkdir(rec, httptest.NewRequest(http.MethodPost, "/api/fs/mkdir", mkdirBody(cfg.AllowedPaths[0].Path, "created")), cfg)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Path != filepath.Clean(filepath.Join(cfg.AllowedPaths[0].Path, "created")) {
+		t.Errorf("path = %q", body.Path)
+	}
+	// The new directory is visible in a fresh listing of the parent.
+	listRec := httptest.NewRecorder()
+	serveFsList(listRec, httptest.NewRequest(http.MethodPost, "/api/fs", listingBody(cfg.AllowedPaths[0].Path)), cfg)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("listing status = %d", listRec.Code)
+	}
+	var listed struct {
+		Entries []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range listed.Entries {
+		if e.Name == "created" && e.Type == "dir" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("created directory not listed in parent")
+	}
+}
+
+func TestServeFsMkdirValidates(t *testing.T) {
+	cfg := buildTestConfig(t)
+	for _, tc := range []struct {
+		name     string
+		body     io.Reader
+		wantCode int
+	}{{
+		name:     "missing fields",
+		body:     bytes.NewReader([]byte(`{}`)),
+		wantCode: http.StatusBadRequest,
+	}, {
+		name:     "empty name",
+		body:     mkdirBody(cfg.AllowedPaths[0].Path, "  "),
+		wantCode: http.StatusBadRequest,
+	}, {
+		name:     "conflict",
+		body:     mkdirBody(cfg.AllowedPaths[0].Path, "sub"),
+		wantCode: http.StatusConflict,
+	}, {
+		name:     "escape outside roots",
+		body:     mkdirBody(filepath.Join(filepath.Dir(cfg.AllowedPaths[0].Path), "outside"), "x"),
+		wantCode: http.StatusForbidden,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "escape outside roots" {
+				// The outside parent must exist so Resolve reaches the containment
+				// check (an unknown path fails resolution with 400 instead).
+				if err := os.MkdirAll(filepath.Join(filepath.Dir(cfg.AllowedPaths[0].Path), "outside"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rec := httptest.NewRecorder()
+			serveFsMkdir(rec, httptest.NewRequest(http.MethodPost, "/api/fs/mkdir", tc.body), cfg)
+			if rec.Code != tc.wantCode {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tc.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestServeFsMkdirRequiresAuth(t *testing.T) {
+	guard := newTestGuard(t)
+	cfg := buildTestConfig(t)
+	t.Run("no cookie is rejected", func(t *testing.T) {
+		handler := guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serveFsMkdir(w, r, cfg)
+		}))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/fs/mkdir", mkdirBody(cfg.AllowedPaths[0].Path, "x")))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", rec.Code)
+		}
+	})
+	t.Run("valid cookie is accepted", func(t *testing.T) {
+		handler := guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serveFsMkdir(w, r, cfg)
+		}))
+		req := httptest.NewRequest(http.MethodPost, "/api/fs/mkdir", mkdirBody(cfg.AllowedPaths[0].Path, "x"))
+		req.AddCookie(signedSession(t, guard))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Errorf("status = %d, want 201", rec.Code)
+		}
+	})
+}
