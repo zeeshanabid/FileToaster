@@ -50,3 +50,10 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
 export async function fetchListing(path: string): Promise<Listing> {
 	return postJSON<Listing>('/api/fs', { path });
 }
+
+// mkdirDirectory creates a directory named `name` directly inside `parent`
+// (confined to the allowed roots server-side). Returns the created absolute path.
+export async function mkdirDirectory(parent: string, name: string): Promise<string> {
+	const res = await postJSON<{ path: string }>('/api/fs/mkdir', { parent, name });
+	return res.path;
+}
