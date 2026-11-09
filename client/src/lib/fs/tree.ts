@@ -133,6 +133,16 @@ export class FileTree {
 		return this.list(path);
 	}
 
+	// refresh reloads a single path from the server, bypassing cache (used by the
+	// toolbar "reload" button so changes made outside the UI become visible).
+	// Expansion of other nodes is left untouched.
+	refresh(path: string): Promise<Listing> {
+		this.cache.delete(path);
+		this.error.delete(path);
+		this.loading.delete(path);
+		return this.list(path);
+	}
+
 	resetWindow(windowId: string): void {
 		this.expanded.delete(windowId);
 	}

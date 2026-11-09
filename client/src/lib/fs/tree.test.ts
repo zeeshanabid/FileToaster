@@ -163,4 +163,15 @@ describe('FileTree', () => {
 		f.resetWindow(W);
 		expect(f.isExpanded(W, ROOT)).toBe(false);
 	});
+
+	it('refresh bypasses cache and reloads a single path', async () => {
+		const { fn, calls } = makeLoader();
+		const f = new FileTree(fn);
+		await f.navigate(W, '/root/documents/work', ROOT);
+		const before = calls.get('/root/documents/work') ?? 0;
+		const listing = await f.refresh('/root/documents/work');
+		expect(listing.path).toBe('/root/documents/work');
+		// The path was fetched again even though it was already cached.
+		expect(calls.get('/root/documents/work')).toBe(before + 1);
+	});
 });
