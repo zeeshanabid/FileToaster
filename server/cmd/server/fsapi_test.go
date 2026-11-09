@@ -103,8 +103,44 @@ func TestServeRoots(t *testing.T) {
 	if body.AllowedPaths[0].Name != "Files" {
 		t.Errorf("name = %q, want Files", body.AllowedPaths[0].Name)
 	}
-	if body.AllowedPaths[0].Path != cfg.AllowedPaths[0].Path {
-		t.Errorf("served path = %q, want %q", body.AllowedPaths[0].Path, cfg.AllowedPaths[0].Path)
+	if body.AllowedPaths[0].Path != filepath.Clean(cfg.AllowedPaths[0].Path) {
+		t.Errorf("served path = %q, want %q", body.AllowedPaths[0].Path, filepath.Clean(cfg.AllowedPaths[0].Path))
+	}
+}
+
+// TestServeRootsResolvesSymlink verifies a symlinked allowed path (e.g. /bin)
+// is served at its resolved target (e.g. /usr/bin), so the UI opens the
+// directory actually referenced and containment stays consistent.
+func TestServeRootsResolvesSymlink(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(filepath.Dir(root), filepath.Base(root)+"-link")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	cfg := fsConfig{AllowedPaths: []config.AllowedPath{{Name: "Bin", Path: alias}}}
+
+	rec := httptest.NewRecorder()
+	serveRoots(rec, httptest.NewRequest(http.MethodGet, "/api/fs/roots", nil), cfg)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		AllowedPaths []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"allowed_paths"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.AllowedPaths) != 1 {
+		t.Fatalf("allowed_paths len = %d, want 1", len(body.AllowedPaths))
+	}
+	if body.AllowedPaths[0].Name != "Bin" {
+		t.Errorf("name = %q, want Bin", body.AllowedPaths[0].Name)
+	}
+	if body.AllowedPaths[0].Path != root {
+		t.Errorf("served path = %q, want resolved %q", body.AllowedPaths[0].Path, root)
 	}
 }
 

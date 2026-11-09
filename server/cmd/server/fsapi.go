@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 
 	"filetoaster/internal/config"
 	"filetoaster/internal/fs"
@@ -32,12 +33,26 @@ func serveRoots(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
 		if ap.Path == "" {
 			continue
 		}
-		paths = append(paths, ap.Path)
-		out = append(out, rootJSON{Name: ap.Name, Path: ap.Path})
+		resolved := resolveRootPath(ap.Path)
+		paths = append(paths, resolved)
+		out = append(out, rootJSON{Name: ap.Name, Path: resolved})
 	}
 	// Sanity-check containment so a misconfigured root is reported, not served.
 	fs.NewRoots(paths...)
 	writeJSON(w, http.StatusOK, map[string]any{"allowed_paths": out})
+}
+
+// resolveRootPath canonicalizes a configured allowed root the same way requests
+// are canonicalized (EvalSymlinks + Clean). A symlinked root such as /bin is
+// served at its resolved target (e.g. /usr/bin) so the UI opens the directory
+// actually referenced and containment comparisons stay consistent. A path that
+// cannot be resolved falls back to its cleaned form so a stale root is still
+// shown.
+func resolveRootPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(p)
 }
 
 // fsListRequest is the JSON body of a listing POST. The path travels in the

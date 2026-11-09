@@ -32,6 +32,12 @@ func NewRoots(paths ...string) *Roots {
 		if clean == "" || clean == "." {
 			continue
 		}
+		// Canonicalize the root the same way requests are (EvalSymlinks + Clean)
+		// so a symlinked allowed root (e.g. /bin -> /usr/bin) is compared against
+		// the resolved requested path rather than its un-resolved config form.
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+			clean = resolved
+		}
 		if _, dup := seen[clean]; dup {
 			continue
 		}
@@ -45,11 +51,22 @@ func NewRoots(paths ...string) *Roots {
 func (r *Roots) Allowed() []string { return r.roots }
 
 // Contained reports whether canonPath (already cleaned) lies within a root,
-// either equal to it or nested under it.
+// either equal to it or nested under it. The filesystem root ("/") is treated
+// as containing everything beneath it.
 func (r *Roots) Contained(canonPath string) bool {
 	canonPath = filepath.Clean(canonPath)
 	for _, root := range r.roots {
-		if canonPath == root || strings.HasPrefix(canonPath, root+string(filepath.Separator)) {
+		root = filepath.Clean(root)
+		if canonPath == root {
+			return true
+		}
+		// A child starts with root + separator. For the filesystem root that
+		// would be "//"; treat "/" as containing everything beneath it.
+		prefix := root + string(filepath.Separator)
+		if root == string(filepath.Separator) {
+			prefix = string(filepath.Separator)
+		}
+		if strings.HasPrefix(canonPath, prefix) {
 			return true
 		}
 	}

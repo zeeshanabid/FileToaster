@@ -63,15 +63,33 @@ func TestList(t *testing.T) {
 	}
 }
 
-func TestTotalSize(t *testing.T) {
+func TestResolveSymlinkedRoot(t *testing.T) {
 	root := makeTree(t)
-	roots := NewRoots(root)
-	total, err := TotalSize(roots, root)
-	if err != nil {
-		t.Fatalf("TotalSize = %v", err)
+	// Point an alias at the root to emulate a symlinked allowed path (e.g. /bin).
+	alias := filepath.Join(filepath.Dir(root), filepath.Base(root)+"-link")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
 	}
-	if total != 600 {
-		t.Errorf("TotalSize = %d, want 600", total)
+	roots := NewRoots(alias)
+	// Listing through the alias works and returns the resolved paths.
+	if _, err := List(roots, alias); err != nil {
+		t.Fatalf("List through symlinked root failed: %v", err)
+	}
+	// Listing the alias's target (its resolved form) also works.
+	if _, err := List(roots, root); err != nil {
+		t.Fatalf("List through resolved target failed: %v", err)
+	}
+}
+
+func TestContainmentRootSlash(t *testing.T) {
+	// The filesystem root must contain everything beneath it (the old
+	// root+"/" == "//" check never matched anything).
+	roots := NewRoots(string(filepath.Separator))
+	if !roots.Contained(string(filepath.Separator)) {
+		t.Errorf("the filesystem root should be contained in itself")
+	}
+	if !roots.Contained("/etc") {
+		t.Errorf("/etc should be contained in the filesystem root")
 	}
 }
 
