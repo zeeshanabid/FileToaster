@@ -31,9 +31,23 @@ build: frontend
 run: frontend
 	cd server && go run ./cmd/server
 
-# Run the Go tests.
-test:
+# Run the Go tests and the client unit tests (vitest) together.
+test: test-client test-server
+
+# Run the client unit tests (vitest).
+test-client:
+	cd client && npm test
+
+# Stage the built client assets so the //go:embed directive resolves, then run
+# the Go tests. The server packages embed the frontend, so they cannot compile
+# without it — building it here keeps `make test` self-contained.
+test-server: stage-frontend
 	cd server && go test ./...
+
+# Build the client and copy its output into server/frontend-build for embedding.
+stage-frontend: frontend
+	rm -rf server/frontend-build
+	cp -r client/frontend-build server/frontend-build
 
 # Vet the Go source.
 vet:
