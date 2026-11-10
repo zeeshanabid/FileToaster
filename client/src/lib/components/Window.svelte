@@ -10,6 +10,12 @@
 	} from '$lib/store/windows';
 	import { type Entry, fetchInfo, type FileInfo, mkdirDirectory } from '$lib/fs/api';
 	import { tree } from '$lib/fs/tree';
+	import {
+		clipboard,
+		clearClipboard,
+		setClipboard,
+		submitCopyTask
+	} from '$lib/store/tasks';
 	import FileIcon from './FileIcon.svelte';
 	import InfoDialog from './InfoDialog.svelte';
 	import { formatSize, formatDate } from '$lib/fs/format';
@@ -192,6 +198,77 @@
 		infoOpen = false;
 		infoItems = null;
 		infoError = null;
+	}
+
+	// --- copy / paste: the task engine -----------------------------------------
+	// `status` is a transient one-line message in the toolbar (copied / pasted /
+	// error). Colliding destinations are renamed by the server (" (copy)",
+	// " (copy) 1", …) with no prompt, so paste goes straight to the destination
+	// folder the window has open.
+	let status = $state<string | null>(null);
+	let statusTimer: ReturnType<typeof setTimeout> | null = null;
+	let pasteError = $state<string | null>(null);
+
+	function flash(message: string | null) {
+		status = message;
+		if (statusTimer !== null) {
+			clearTimeout(statusTimer);
+			statusTimer = null;
+		}
+		if (message) {
+			statusTimer = setTimeout(() => {
+				status = null;
+				statusTimer = null;
+			}, 4000);
+		}
+	}
+
+	// Copy the current selection into the clipboard (no server call yet).
+	function copySelection() {
+		if (selected.size === 0) {
+			flash('Select one or more items to copy.');
+			return;
+		}
+		setClipboard([...selected]);
+		const n = selected.size;
+		clearSelection();
+		flash(`${n} item${n === 1 ? '' : 's'} copied.`);
+	}
+
+	// Paste: copy the clipboard straight into the folder this window has open.
+	function paste() {
+		if ($clipboard.length === 0) {
+			flash('Nothing in the clipboard. Copy items first.');
+			return;
+		}
+		pasteInto(win ? win.path : '/');
+	}
+
+	// Submit a paste into `dest`. The destination is always the folder the window
+	// has open; collisions are renamed by the server (" (copy)", " (copy) 1", …),
+	// so there is nothing to prompt for.
+	async function pasteInto(dest: string) {
+		const d = (dest ?? '').trim();
+		if (!d) {
+			pasteError = 'Enter a destination folder.';
+			return;
+		}
+		pasteError = null;
+		try {
+			const res = await submitCopyTask([...$clipboard], d);
+			if (res.taskID) {
+				clearClipboard();
+				clearSelection();
+				flash(`Copying… (task ${res.taskID}).`);
+			}
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not paste');
+		}
+	}
+
+	function clearSelection() {
+		selected = new Set();
+		lastClicked = null;
 	}
 
 	// The tree is anchored at the window's root and never re-rooted on navigation.
@@ -406,6 +483,32 @@
 				<path d="M12 19V5M5 12l7-7 7 7" />
 			</svg>
 		</button>
+		<button
+			class="tool copy"
+			type="button"
+			title="Copy selected to clipboard"
+			aria-label="Copy"
+			disabled={selected.size === 0}
+			onclick={copySelection}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M9 9h10v10H9Z" />
+				<path d="M5 15V5a2 2 0 0 1 2-2h10" />
+			</svg>
+		</button>
+		<button
+			class="tool paste"
+			type="button"
+			title="Paste clipboard into this folder"
+			aria-label="Paste"
+			disabled={$clipboard.length === 0}
+			onclick={paste}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M8 5h8v3H8Z" />
+				<path d="M5 8h14v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z" />
+			</svg>
+		</button>
 		<button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
 				<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
@@ -515,6 +618,9 @@
 			</svg>
 		</span>
 		<span class="spath-val" title={winProp.path}>{winProp.path}</span>
+		{#if status}
+			<span class="status-msg">{status}</span>
+		{/if}
 		<span class="count">{rows.length} item{rows.length === 1 ? '' : 's'}</span>
 	</footer>
 
@@ -889,6 +995,12 @@
 		margin-left: auto;
 		white-space: nowrap;
 	}
+	.status-msg {
+		margin-left: 8px;
+		color: var(--accent-strong);
+		font-size: 12px;
+		white-space: nowrap;
+	}
 	.resize {
 		position: absolute;
 		right: 0;
@@ -907,5 +1019,5 @@
 		border-right: 2px solid var(--text-faint);
 		border-bottom: 2px solid var(--text-faint);
 		border-radius: 0 0 3px 0;
-	}
+		}
 </style>

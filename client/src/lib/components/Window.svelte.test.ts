@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
-import { get } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import {
 	fireEvent,
 	screen,
@@ -19,12 +19,26 @@ import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
 import { fetchListing, mkdirDirectory, fetchInfo } from '$lib/fs/api';
+import { clipboard, clearClipboard, setClipboard, submitCopyTask } from '$lib/store/tasks';
 
 vi.mock('$lib/fs/api', () => ({
 	fetchListing: vi.fn(),
 	mkdirDirectory: vi.fn(),
 	fetchInfo: vi.fn()
 }));
+
+// The tasks store is mocked so copy/paste can be tested without a backend. The
+// `clipboard` store is created inside the factory (where the imported `writable`
+// is available); the clipboard helpers mutate it to mimic the real module.
+vi.mock('$lib/store/tasks', () => {
+	const store = writable<string[]>([]);
+	return {
+		clipboard: store,
+		setClipboard: vi.fn((paths: string[]) => store.set(paths)),
+		clearClipboard: vi.fn(() => store.set([])),
+		submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' }))
+	};
+});
 
 const FS: Record<string, { path: string; name: string; type: 'file' | 'dir'; size: number; created: string; modified: string }[]> = {
 	'/root': [
@@ -304,6 +318,112 @@ describe('Window tree — per-directory states', () => {
 		);
 		// The rest of the tree is still intact (the error did not block it).
 		expect(within(tree()).getByText('work')).toBeInTheDocument();
+	});
+});
+
+describe('Window copy & paste task', () => {
+	function clickRow(name: string) {
+		const row = [
+			...screen.getByRole('table').querySelectorAll('tbody tr.row')
+		].find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+		if (!row) throw new Error(`no row named ${name}`);
+		fireEvent.click(row);
+	}
+	function copyButton(): HTMLButtonElement {
+		return screen.getByLabelText('Copy') as HTMLButtonElement;
+	}
+	function pasteButton(): HTMLButtonElement {
+		return screen.getByLabelText('Paste') as HTMLButtonElement;
+	}
+	function status(): string | null {
+		const el = screen.queryByText(/copied\.|nothing in the clipboard|could not paste/i) as HTMLElement | null;
+		return el ? el.textContent : null;
+	}
+
+	beforeEach(() => {
+		clipboard.set([]);
+		(clearClipboard as unknown as Mock).mockClear();
+		(setClipboard as unknown as Mock).mockClear();
+		(submitCopyTask as Mock).mockClear();
+		(submitCopyTask as Mock).mockResolvedValue({ taskID: 'task-1' });
+	});
+
+	it('copies the selection into the clipboard and clears it', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(copyButton());
+		await tick();
+		expect(get(clipboard)).toEqual(['/root/notes.txt']);
+		expect(setClipboard).toHaveBeenCalledTimes(1);
+		// Selection is cleared after copying (badge count back to zero).
+		expect(screen.getByLabelText('Information').querySelector('.badge')).toBeNull();
+		// A transient status confirms the copy.
+		expect(status()).toBe('1 item copied.');
+	});
+
+	it('disables paste when the clipboard is empty and enables it after a copy', async () => {
+		await openAndRender();
+		expect(pasteButton()).toBeDisabled();
+		await clickRow('notes.txt');
+		fireEvent.click(copyButton());
+		await tick();
+		expect(pasteButton()).toBeEnabled();
+	});
+
+	it('pastes into the current folder without a prompt', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(copyButton());
+		// Navigate to the destination folder; the clipboard survives the move.
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+
+		// No destination prompt is shown; paste goes straight to the open folder.
+		expect(screen.queryByPlaceholderText('Paste to folder')).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(submitCopyTask).toHaveBeenCalledWith(['/root/notes.txt'], '/root/documents')
+		);
+		// The clipboard is cleared once the task is submitted.
+		await waitFor(() => expect(get(clipboard)).toEqual([]));
+		await waitFor(() => expect(screen.getByText(/Copying/i)).toBeInTheDocument());
+	});
+
+	it('pastes straight to the open folder with no overwrite prompt', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(copyButton());
+		// Navigate to the destination folder; the clipboard survives the move.
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+
+		// No destination prompt is shown; paste goes straight to the open folder.
+		expect(screen.queryByPlaceholderText('Paste to folder')).not.toBeInTheDocument();
+		// The copy is submitted with exactly (paths, dest) — no overwrite/conflict
+		// argument — because collisions are renamed by the server.
+		await waitFor(() =>
+			expect(submitCopyTask).toHaveBeenCalledWith(['/root/notes.txt'], '/root/documents')
+		);
+		expect((submitCopyTask as Mock).mock.calls.at(-1)!.length).toBe(2);
+		// No overwrite/cancel dialog is ever rendered.
+		expect(document.querySelector('.conflict-backdrop')).toBeNull();
+		// The clipboard is cleared once the task is submitted.
+		await waitFor(() => expect(get(clipboard)).toEqual([]));
+		await waitFor(() => expect(screen.getByText(/Copying/i)).toBeInTheDocument());
+	});
+
+	it('copies again over an existing destination without asking (server renames)', async () => {
+		// Even when the destination already holds a same-named item (which the
+		// server will rename to " (copy)"), the UI just submits — no prompt.
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(copyButton());
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+
+		await waitFor(() =>
+			expect(submitCopyTask).toHaveBeenLastCalledWith(['/root/notes.txt'], '/root/documents')
+		);
+		expect(document.querySelector('.conflict-backdrop')).toBeNull();
 	});
 });
 

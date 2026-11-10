@@ -1,12 +1,19 @@
 <script lang="ts">
+	import { onMount, onDestroy } from 'svelte';
 	import { windows } from '$lib/store/windows';
 	import { logout } from '$lib/store/auth';
+	import { initTasks, shutdownTasks } from '$lib/store/tasks';
 	import WindowButton from './WindowButton.svelte';
 	import RunningTaskIcon from './RunningTaskIcon.svelte';
 
 	// Callback to open the change-password dialog. The dialog itself is owned by
 	// the page root so it renders outside this taskbar's stacking context.
 	let { onChangePassword }: { onChangePassword: () => void } = $props();
+
+	// The taskbar only renders while authenticated, so (re)start the task engine
+	// (snapshot + SSE) on mount and tear it down on logout.
+	onMount(() => initTasks());
+	onDestroy(() => shutdownTasks());
 
 	// Log the user out of the current session; the page re-renders the login form.
 	async function handleLogout() {
