@@ -76,11 +76,22 @@ export interface CopyMeta {
 	conflict: string;
 }
 
+// DeleteMeta is the delete operation's plan (the resolved source paths), carried
+// in a task's Meta field so the label can count the selected items. It stays
+// opaque to the client's task rendering; the engine only reads the paths.
+export interface DeleteMeta {
+	paths: string[];
+}
+
 export interface TaskListResponse {
 	tasks: Task[];
 }
 
 export interface CopyResponse {
+	taskID?: string;
+}
+
+export interface DeleteResponse {
 	taskID?: string;
 }
 
@@ -168,6 +179,28 @@ export async function submitCopy(req: CopyTaskRequest): Promise<CopyResponse> {
 		throw new ApiError(message);
 	}
 	return (await res.json()) as CopyResponse;
+}
+
+// submitDelete enqueues a delete task for the given paths. Delete is destructive
+// and has no destination, so the request carries only paths; the client confirms
+// before submitting. It resolves to the server's response ({ taskID } on success)
+// and rejects on any other error.
+export async function submitDelete(paths: string[]): Promise<DeleteResponse> {
+	const res = await fetch('/api/delete', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ paths })
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `delete failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	return (await res.json()) as DeleteResponse;
 }
 
 // cancelTask asks the server to stop a queued or running task (POST

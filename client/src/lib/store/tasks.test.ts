@@ -66,6 +66,26 @@ describe('taskLabel', () => {
 		expect(taskLabel(t)).toBe('Copy 2 items');
 	});
 
+	it('describes a single delete', () => {
+		const t = task({
+			id: '4',
+			type: 'delete',
+			status: 'running',
+			meta: { paths: ['/root/notes.txt'] }
+		});
+		expect(taskLabel(t)).toBe('Delete');
+	});
+
+	it('describes a multi-item delete', () => {
+		const t = task({
+			id: '5',
+			type: 'delete',
+			status: 'running',
+			meta: { paths: ['/root/a.txt', '/root/b.txt', '/root/documents'] }
+		});
+		expect(taskLabel(t)).toBe('Delete 3 items');
+	});
+
 	it('falls back to the bare operation type for unknown operations', () => {
 		expect(taskLabel(task({ id: '3', type: 'compress', status: 'running' }))).toBe('compress');
 	});

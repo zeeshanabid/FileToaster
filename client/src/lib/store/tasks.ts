@@ -4,8 +4,10 @@ import {
 	cancelTask as apiCancel,
 	listTasks,
 	submitCopy,
+	submitDelete,
 	type Task,
-	type CopyMeta
+	type CopyMeta,
+	type DeleteMeta
 } from '$lib/fs/api';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
@@ -54,6 +56,12 @@ export function submitCopyTask(paths: string[], dest: string) {
 	return submitCopy({ paths, dest, conflict: '' });
 }
 
+// submitDeleteTask enqueues a delete task for `paths`. Delete is destructive and
+// confirmed by the UI before this runs, so nothing is asked to be overwritten.
+export function submitDeleteTask(paths: string[]) {
+	return submitDelete(paths);
+}
+
 // cancelTaskAction asks the server to stop a queued or running task.
 export function cancelTaskAction(id: string) {
 	return apiCancel(id);
@@ -70,6 +78,12 @@ export function taskLabel(task: Task): string {
 			const name = dest ? dest.split('/').filter(Boolean).pop() ?? dest : '';
 			if (n === 1) return `Copy ${name || 'file'}`;
 			return n > 1 ? `Copy ${n} items` : 'Copy';
+		}
+		case 'delete': {
+			const meta = (task.meta ?? null) as DeleteMeta | null;
+			const n = meta?.paths?.length ?? 1;
+			if (n === 1) return 'Delete';
+			return `Delete ${n} items`;
 		}
 		default:
 			return task.type;
