@@ -13,6 +13,9 @@ import (
 
 	"filetoaster/internal/auth"
 	"filetoaster/internal/config"
+	"filetoaster/internal/fs"
+	"filetoaster/internal/protocol"
+	"filetoaster/internal/service"
 )
 
 // startServer serves the embedded frontend on cfg.Addr and blocks until the
@@ -60,6 +63,20 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 		serveFsInfo(w, r, fsCfg)
 	})))
 
+	// Task engine. The pool runs at most cfg.MaxParallelTasks tasks at once;
+	// overflow queues. Copy is the first operation; more register the same way.
+	// The task routes (copy, task snapshot/list, cancel, SSE progress) are all
+	// authenticated like the fs endpoints.
+	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
+	taskService := service.NewService(cfg.MaxParallelTasks, logger)
+	registerCopyOp(taskService, roots)
+	taskSrv := protocol.NewServer(taskService, logger)
+	mux.Handle("POST /api/copy", guard.Middleware(http.HandlerFunc(taskSrv.ServeCopy)))
+	mux.Handle("GET /api/tasks", guard.Middleware(http.HandlerFunc(taskSrv.ServeTasksList)))
+	mux.Handle("GET /api/tasks/{id}", guard.Middleware(http.HandlerFunc(taskSrv.ServeTask)))
+	mux.Handle("POST /api/tasks/{id}/cancel", guard.Middleware(http.HandlerFunc(taskSrv.ServeCancel)))
+	mux.Handle("GET /api/events", guard.Middleware(http.HandlerFunc(taskSrv.ServeEvents)))
+
 	files := http.FileServer(http.FS(filetoaster.Assets))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		files.ServeHTTP(w, r)
@@ -83,6 +100,9 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	<-stop
 
 	logger.Info("shutdown signal received; stopping server")
+	// Drain running tasks so their final progress reaches subscribed clients,
+	// then stop accepting HTTP connections (which closes the SSE streams).
+	taskService.Shutdown()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
