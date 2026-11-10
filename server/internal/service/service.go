@@ -16,6 +16,9 @@ import (
 // CopyOperation is the operation key registered for copy.
 const CopyOperation = "copy"
 
+// MoveOperation is the operation key registered for move.
+const MoveOperation = "move"
+
 // DeleteOperation is the operation key registered for delete.
 const DeleteOperation = "delete"
 
