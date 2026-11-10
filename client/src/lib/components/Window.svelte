@@ -14,10 +14,12 @@
 		clipboard,
 		clearClipboard,
 		setClipboard,
-		submitCopyTask
+		submitCopyTask,
+		submitDeleteTask
 	} from '$lib/store/tasks';
 	import FileIcon from './FileIcon.svelte';
 	import InfoDialog from './InfoDialog.svelte';
+	import ConfirmDelete from './ConfirmDelete.svelte';
 	import { formatSize, formatDate } from '$lib/fs/format';
 
 	let { window: winProp }: { window: AppWindow } = $props();
@@ -198,6 +200,34 @@
 		infoOpen = false;
 		infoItems = null;
 		infoError = null;
+	}
+
+	// --- delete: confirm dialog then submit a tracked async task ---------------
+	// `deleteOpen` toggles the confirm modal; `deleteEntries` is the selected rows
+	// rendered inside it. The heading counts only the root-level selection
+	// (entries.length), while the task's progress bar reports the recursive
+	// files+directories total — both are computed by the engine.
+	let deleteOpen = $state(false);
+	let deleteEntries = $derived(
+		entries.filter((it) => selected.has(it.path)).map((it) => ({ path: it.path, name: it.name, type: it.type }))
+	);
+
+	function startDelete() {
+		if (selected.size === 0) return;
+		deleteOpen = true;
+	}
+	function cancelDelete() {
+		deleteOpen = false;
+	}
+	async function confirmDelete() {
+		deleteOpen = false;
+		try {
+			const res = await submitDeleteTask([...selected]);
+			clearSelection();
+			if (res.taskID) flash(`Deleting… (task ${res.taskID}).`);
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not delete');
+		}
 	}
 
 	// --- copy / paste: the task engine -----------------------------------------
@@ -518,6 +548,20 @@
 				<span class="badge" aria-hidden="true">{selected.size}</span>
 			{/if}
 		</button>
+		<button
+			class="tool delete"
+			type="button"
+			title="Delete selected"
+			aria-label="Delete"
+			disabled={selected.size === 0}
+			onclick={startDelete}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M5 7h14" />
+				<path d="M8 7V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+				<path d="M6 7l1 12h10l1-12" />
+			</svg>
+		</button>
 		{#if editingNew}
 			<form class="new" onsubmit={() => confirmNewDir()}>
 				<input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
@@ -629,6 +673,10 @@
 
 	{#if infoOpen}
 		<InfoDialog items={infoItems ?? []} onClose={closeInfo} />
+	{/if}
+
+	{#if deleteOpen}
+		<ConfirmDelete entries={deleteEntries} onClose={cancelDelete} onConfirm={confirmDelete} />
 	{/if}
 </div>
 

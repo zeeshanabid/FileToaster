@@ -19,7 +19,7 @@ import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
 import { fetchListing, mkdirDirectory, fetchInfo } from '$lib/fs/api';
-import { clipboard, clearClipboard, setClipboard, submitCopyTask } from '$lib/store/tasks';
+import { clipboard, clearClipboard, setClipboard, submitCopyTask, submitDeleteTask } from '$lib/store/tasks';
 
 vi.mock('$lib/fs/api', () => ({
 	fetchListing: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock('$lib/fs/api', () => ({
 	fetchInfo: vi.fn()
 }));
 
-// The tasks store is mocked so copy/paste can be tested without a backend. The
+// The tasks store is mocked so copy/paste/delete can be tested without a backend. The
 // `clipboard` store is created inside the factory (where the imported `writable`
 // is available); the clipboard helpers mutate it to mimic the real module.
 vi.mock('$lib/store/tasks', () => {
@@ -36,7 +36,8 @@ vi.mock('$lib/store/tasks', () => {
 		clipboard: store,
 		setClipboard: vi.fn((paths: string[]) => store.set(paths)),
 		clearClipboard: vi.fn(() => store.set([])),
-		submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' }))
+		submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' })),
+		submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' }))
 	};
 });
 
@@ -632,11 +633,105 @@ describe('Window selection & information dialog', () => {
 		await waitFor(() => expect(screen.queryByTestId('info-dialog')).not.toBeInTheDocument());
 	});
 
-	it('does not open the dialog when nothing is selected', async () => {
+		it('does not open the dialog when nothing is selected', async () => {
+			await openAndRender();
+			expect(badgeCount()).toBe(0);
+			fireEvent.click(infoButton());
+			expect(screen.queryByText('Information')).not.toBeInTheDocument();
+			expect(fetchInfo).not.toHaveBeenCalled();
+		});
+});
+
+describe('Window delete', () => {
+	function rows(): HTMLElement[] {
+		return [...screen.getByRole('table').querySelectorAll('tbody tr.row')] as HTMLElement[];
+	}
+	function rowByName(name: string): HTMLElement {
+		const row = rows().find((r) => r.textContent?.includes(name));
+		if (!row) throw new Error(`no row named ${name}`);
+		return row;
+	}
+	async function clickRow(name: string, modifier?: 'ctrl' | 'shift') {
+		const row = rowByName(name);
+		if (modifier === 'ctrl') {
+			fireEvent.click(row, { ctrlKey: true });
+		} else if (modifier === 'shift') {
+			fireEvent.click(row, { shiftKey: true });
+		} else {
+			fireEvent.click(row);
+		}
+		await tick();
+	}
+	function deleteButton(): HTMLButtonElement {
+		return screen.getByLabelText('Delete') as HTMLButtonElement;
+	}
+	function dialog(): HTMLElement {
+		return screen.getByTestId('delete-dialog') as HTMLElement;
+	}
+
+	beforeEach(() => {
+		(submitDeleteTask as Mock).mockClear();
+		(submitDeleteTask as Mock).mockResolvedValue({ taskID: 'task-9' });
+	});
+
+	it('is disabled until a row is selected, then enabled', async () => {
 		await openAndRender();
-		expect(badgeCount()).toBe(0);
-		fireEvent.click(infoButton());
-		expect(screen.queryByText('Information')).not.toBeInTheDocument();
-		expect(fetchInfo).not.toHaveBeenCalled();
+		expect(deleteButton()).toBeDisabled();
+		await clickRow('notes.txt');
+		await waitFor(() => expect(deleteButton()).not.toBeDisabled());
+	});
+
+	it('opens the modal and shows the root-level selection count', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		await clickRow('documents', 'ctrl');
+
+		fireEvent.click(deleteButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		expect(within(dialog()).getByText('Are you sure you want to delete 2 files and directories?')).toBeInTheDocument();
+		expect(within(dialog()).getByText('notes.txt')).toBeInTheDocument();
+		expect(within(dialog()).getByText('documents')).toBeInTheDocument();
+	});
+
+	it('does not open the modal when nothing is selected', async () => {
+		await openAndRender();
+		fireEvent.click(deleteButton());
+		expect(screen.queryByTestId('delete-dialog')).not.toBeInTheDocument();
+		expect(submitDeleteTask).not.toHaveBeenCalled();
+	});
+
+	it('confirms delete, submits the task, clears selection, and flashes a status', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		await clickRow('documents', 'ctrl');
+
+		fireEvent.click(deleteButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Delete' }));
+		await tick();
+
+		// The selected paths are submitted in selection order.
+		await waitFor(() =>
+			expect(submitDeleteTask).toHaveBeenCalledWith(['/root/notes.txt', '/root/documents'])
+		);
+
+		// Selection is cleared (delete button disabled again).
+		await waitFor(() => expect(deleteButton()).toBeDisabled());
+
+		// A transient status confirms the task was submitted.
+		await waitFor(() => expect(screen.getByText(/Deleting/i)).toBeInTheDocument());
+	});
+
+	it('keeps the dialog open (no submit) when Cancel is pressed', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+
+		fireEvent.click(deleteButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Cancel' }));
+		await waitFor(() => expect(screen.queryByTestId('delete-dialog')).not.toBeInTheDocument());
+		expect(submitDeleteTask).not.toHaveBeenCalled();
+		// Selection survives a cancel.
+		expect(deleteButton()).not.toBeDisabled();
 	});
 });
