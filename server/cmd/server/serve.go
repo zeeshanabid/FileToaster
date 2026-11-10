@@ -100,12 +100,17 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	<-stop
 
 	logger.Info("shutdown signal received; stopping server")
-	// Drain running tasks so their final progress reaches subscribed clients,
-	// then stop accepting HTTP connections (which closes the SSE streams).
-	taskService.Shutdown()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	// Drain running tasks first so their final progress reaches subscribed
+	// clients, then stop accepting HTTP connections (which closes the SSE
+	// streams). The pool keeps existing operations running for up to the
+	// configured shutdown timeout before cancelling them and returning.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeout)*time.Second)
+	defer shutdownCancel()
+	taskService.Shutdown(shutdownCtx)
+	// Stop the HTTP server once the task pool has drained (or been force-cancelled).
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer httpCancel()
+	if err := srv.Shutdown(httpCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err.Error())
 		return err
 	}

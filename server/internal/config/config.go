@@ -54,6 +54,11 @@ type Config struct {
 	AllowedPaths []AllowedPath `yaml:"allowed_paths"`
 	// MaxParallelTasks bounds the task worker pool. Overflow waits in a queue.
 	MaxParallelTasks int `yaml:"max_parallel_tasks"`
+	// ShutdownTimeout bounds graceful shutdown, in seconds: how long the pool
+	// keeps running while existing operations finish after a shutdown signal
+	// before it forcibly cancels them and the server exits. 0 disables the drain
+	// and cancels running tasks immediately. Defaults to 30.
+	ShutdownTimeout int `yaml:"shutdown_timeout_seconds"`
 	// GOMAXPROCS pins runtime.GOMAXPROCS. 0 means use the Go runtime default.
 	GOMAXPROCS int `yaml:"gomaxprocs"`
 	// TMPDir stages uploads. It is intentionally outside AllowedPaths.
@@ -80,6 +85,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Addr:             ":8080",
 		MaxParallelTasks: 4,
+		ShutdownTimeout:  30,
 		GOMAXPROCS:       0,
 		TMPDir:           filepath.Join(os.TempDir(), "filetoaster-uploads"),
 	}
@@ -164,6 +170,9 @@ allowed_paths:
     - name: Files
       path: %s
 max_parallel_tasks: 4
+# Graceful shutdown: seconds to let running operations finish after a shutdown
+# signal before forcibly cancelling them and exiting the server (0 = immediate).
+shutdown_timeout_seconds: 30
 # Set to true to enable debug logging (defaults to info).
 debug: false
 tmp_dir: %s
@@ -276,6 +285,11 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("FILETOASTER_MAX_TASKS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.MaxParallelTasks = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_SHUTDOWN_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.ShutdownTimeout = n
 		}
 	}
 	if v := os.Getenv("FILETOASTER_GOMAXPROCS"); v != "" {
@@ -401,6 +415,9 @@ func (c *Config) Validate() error {
 
 	if c.MaxParallelTasks < 1 {
 		errs = append(errs, "max_parallel_tasks must be at least 1")
+	}
+	if c.ShutdownTimeout < 0 {
+		errs = append(errs, "shutdown_timeout_seconds must be >= 0")
 	}
 	if c.GOMAXPROCS < 0 {
 		errs = append(errs, "gomaxprocs must be >= 0 (0 = Go runtime default)")

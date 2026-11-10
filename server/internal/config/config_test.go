@@ -47,6 +47,9 @@ func TestDefaultConfigDefaults(t *testing.T) {
 	if c.MaxParallelTasks != 4 {
 		t.Errorf("MaxParallelTasks = %d, want 4", c.MaxParallelTasks)
 	}
+	if c.ShutdownTimeout != 30 {
+		t.Errorf("ShutdownTimeout = %d, want default 30", c.ShutdownTimeout)
+	}
 	if c.GOMAXPROCS != 0 {
 		t.Errorf("GOMAXPROCS = %d, want 0", c.GOMAXPROCS)
 	}
@@ -76,6 +79,7 @@ func TestValidateErrors(t *testing.T) {
 		"missing secret":       {Addr: ":8080", AllowedPaths: allowedOne(root), TMPDir: t.TempDir()},
 		"bad tmp_dir":          {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: ""},
 		"zero tasks":           {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), MaxParallelTasks: 0},
+		"negative shutdown":    {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), ShutdownTimeout: -1},
 		"negative gc":          {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), GOMAXPROCS: -1},
 		"nonexistent root":     {Addr: ":8080", AllowedPaths: allowedOne(filepath.Join(t.TempDir(), "nope")), SessionSecret: "x", TMPDir: t.TempDir()},
 		"missing name":         {Addr: ":8080", AllowedPaths: []AllowedPath{{Path: root}}, SessionSecret: "x", TMPDir: t.TempDir()},
@@ -355,6 +359,57 @@ func TestApplyEnvOverrides(t *testing.T) {
 	if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0].Path != root {
 		t.Errorf("AllowedPaths override = %v", cfg.AllowedPaths)
 	}
+}
+
+func TestShutdownTimeoutDefault(t *testing.T) {
+	// No YAML and no env: the documented default applies.
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
+	cfg, err := Load(writeConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("Load = %v", err)
+	}
+	if cfg.ShutdownTimeout != 30 {
+		t.Errorf("ShutdownTimeout = %d, want default 30", cfg.ShutdownTimeout)
+	}
+}
+
+func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
+	t.Run("from file", func(t *testing.T) {
+		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
+			"shutdown_timeout_seconds: 5\n"
+		cfg, err := Load(writeConfig(t, yaml))
+		if err != nil {
+			t.Fatalf("Load = %v", err)
+		}
+		if cfg.ShutdownTimeout != 5 {
+			t.Errorf("ShutdownTimeout = %d, want 5", cfg.ShutdownTimeout)
+		}
+	})
+
+	t.Run("env overrides file", func(t *testing.T) {
+		t.Setenv("FILETOASTER_SHUTDOWN_TIMEOUT", "120")
+		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
+			"shutdown_timeout_seconds: 5\n"
+		cfg, err := Load(writeConfig(t, yaml))
+		if err != nil {
+			t.Fatalf("Load = %v", err)
+		}
+		if cfg.ShutdownTimeout != 120 {
+			t.Errorf("ShutdownTimeout = %d, want 120 (env over file)", cfg.ShutdownTimeout)
+		}
+	})
+
+	t.Run("non-integer env ignored", func(t *testing.T) {
+		t.Setenv("FILETOASTER_SHUTDOWN_TIMEOUT", "not-a-number")
+		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
+		cfg, err := Load(writeConfig(t, yaml))
+		if err != nil {
+			t.Fatalf("Load = %v", err)
+		}
+		if cfg.ShutdownTimeout != 30 {
+			t.Errorf("ShutdownTimeout = %d, want default 30 when env is invalid", cfg.ShutdownTimeout)
+		}
+	})
 }
 
 func TestSaveRoundTrip(t *testing.T) {

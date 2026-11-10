@@ -246,9 +246,18 @@ func (p *Pool) Cancel(id string) error {
 
 // Close begins graceful shutdown: it stops accepting new work, drains the
 // running tasks, then releases the pool. Queued-but-not-started tasks are marked
-// cancelled. Close blocks until all running tasks have finished.
-func (p *Pool) Close() {
+// cancelled. Close blocks until all running tasks have finished; ctx bounds how
+// long it waits and, once the deadline passes, Cancel is called on every running
+// task so they stop, then Close waits briefly for them to observe it before
+// returning. A ctx that is already Done (or an empty pool) returns immediately.
+func (p *Pool) Close(ctx context.Context) {
 	p.mu.Lock()
+	if p.shutdown.Load() {
+		// Already shutting down; still wait for any in-flight work to finish.
+		p.mu.Unlock()
+		p.wg.Wait()
+		return
+	}
 	queued := p.queued
 	p.queued = nil
 	p.shutdown.Store(true)
@@ -261,6 +270,44 @@ func (p *Pool) Close() {
 	// Wake the dispatcher so it observes shutdown and exits once running tasks drain.
 	p.wake()
 
-	p.wg.Wait()
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		p.wg.Wait()
+	}()
+
+	select {
+	case <-drained:
+		// Every running task finished within the grace period.
+	case <-ctx.Done():
+		// Grace period elapsed: force-cancel running tasks and wait for them to
+		// observe cancellation before giving up.
+		p.mu.Lock()
+		for _, cancel := range p.cancels {
+			cancel()
+		}
+		p.mu.Unlock()
+		p.logger.Warn("shutdown timeout reached; cancelling running tasks", "seconds", ctxDeadlineSeconds(ctx))
+		select {
+		case <-drained:
+		case <-ctx.Done():
+			p.logger.Warn("a task did not stop in time during shutdown")
+		}
+	}
 	p.logger.Info("task pool drained")
+}
+
+// ctxDeadlineSeconds reports the whole-second portion of a context's remaining
+// time, used only for logging. It returns 0 when the context has no deadline or
+// has already expired.
+func ctxDeadlineSeconds(ctx context.Context) int64 {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0
+	}
+	return int64(remaining/time.Second) + 1
 }

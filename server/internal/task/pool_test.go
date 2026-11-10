@@ -32,7 +32,7 @@ func TestPoolBoundedConcurrency(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
 	pool := NewPool(store, hub, 2, testLogger())
-	defer pool.Close()
+	defer pool.Close(context.Background())
 
 	var cur, maxRun int32
 	release := make(chan struct{})
@@ -122,14 +122,14 @@ func TestPoolQueueFIFOCompletion(t *testing.T) {
 	if len(order) != 2 || order[0] != "a" || order[1] != "b" {
 		t.Fatalf("execution order = %v, want [a b]", order)
 	}
-	pool.Close()
+	pool.Close(context.Background())
 }
 
 func TestPoolProgressReported(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
 	pool := NewPool(store, hub, 1, testLogger())
-	defer pool.Close()
+	defer pool.Close(context.Background())
 
 	runner := func(ctx context.Context, prog *Progression) error {
 		prog.SetTotal(100, 0)
@@ -148,7 +148,7 @@ func TestPoolCancelRunning(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
 	pool := NewPool(store, hub, 1, testLogger())
-	defer pool.Close()
+	defer pool.Close(context.Background())
 
 	block := make(chan struct{})
 	runner := func(ctx context.Context, prog *Progression) error {
@@ -172,7 +172,7 @@ func TestPoolCancelQueued(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
 	pool := NewPool(store, hub, 1, testLogger())
-	defer pool.Close()
+	defer pool.Close(context.Background())
 
 	release := make(chan struct{})
 	var ran int32
@@ -190,7 +190,7 @@ func TestPoolCancelQueued(t *testing.T) {
 	}
 	close(release)
 	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusFinished })
-	pool.Close()
+	pool.Close(context.Background())
 
 	if got := atomic.LoadInt32(&ran); got != 1 {
 		t.Fatalf("runners executed = %d, want 1", got)
@@ -202,7 +202,7 @@ func TestPoolCancelQueued(t *testing.T) {
 
 func TestPoolCancelUnknown(t *testing.T) {
 	pool := NewPool(NewStore(), NewHub(), 1, testLogger())
-	defer pool.Close()
+	defer pool.Close(context.Background())
 	if err := pool.Cancel("nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Cancel unknown err = %v, want ErrNotFound", err)
 	}
@@ -222,10 +222,175 @@ func TestPoolShutdownDrainsAndCancelsQueued(t *testing.T) {
 	t2, _ := pool.Enqueue("t", nil, runner)
 	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusRunning })
 
-	go func() { pool.Close() }()
+	go func() { pool.Close(context.Background()) }()
 	// The queued task is marked cancelled during shutdown.
 	waitFor(t, func() bool { return store.Get(t2.ID).Status == StatusCancelled })
 	close(release)
 	// Running task finishes.
 	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusFinished })
+}
+
+// TestPoolShutdownRejectsAndFinishesExisting verifies the shutdown contract at
+// the pool level: a submission made while a shutdown is in flight is rejected
+// (and never started), while the already-running task is allowed to finish.
+func TestPoolShutdownRejectsAndFinishesExisting(t *testing.T) {
+	store := NewStore()
+	hub := NewHub()
+	pool := NewPool(store, hub, 1, testLogger())
+
+	release := make(chan struct{})
+	var ranTasks, existingFinished int32
+	runner := func(ctx context.Context, prog *Progression) error {
+		atomic.AddInt32(&ranTasks, 1)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			atomic.AddInt32(&existingFinished, 1)
+			return nil
+		}
+	}
+	t1, _ := pool.Enqueue("t", nil, runner)
+	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusRunning })
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		pool.Close(context.Background())
+		close(shutdownDone)
+	}()
+
+	// A new operation submitted while shutdown is in flight must never run: it is
+	// either rejected outright or accepted-then-cancelled before it can start,
+	// regardless of the race with Close's shutdown flag.
+	t2, _ := pool.Enqueue("t", nil, runner)
+	waitFor(t, func() bool { return store.Get(t2.ID).Status.IsTerminal() })
+
+	close(release)
+	waitFor(t, func() bool { return atomic.LoadInt32(&existingFinished) == 1 })
+	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusFinished })
+	<-shutdownDone
+
+	if got := atomic.LoadInt32(&ranTasks); got != 1 {
+		t.Fatalf("runners started = %d, want 1 (only the pre-existing task)", got)
+	}
+}
+
+// TestPoolRejectsAfterFullShutdown verifies that a submission after the pool has
+// fully drained is rejected and marked failed with ErrShuttingDown.
+func TestPoolRejectsAfterFullShutdown(t *testing.T) {
+	store := NewStore()
+	hub := NewHub()
+	pool := NewPool(store, hub, 1, testLogger())
+	pool.Close(context.Background())
+
+	var ran int32
+	runner := func(ctx context.Context, prog *Progression) error {
+		atomic.AddInt32(&ran, 1)
+		return nil
+	}
+	t2, enqueued := pool.Enqueue("t", nil, runner)
+	if enqueued {
+		t.Fatal("task accepted after shutdown, want rejected")
+	}
+	if got := atomic.LoadInt32(&ran); got != 0 {
+		t.Fatalf("runner started = %d, want 0", got)
+	}
+	waitFor(t, func() bool { return store.Get(t2.ID).Status == StatusFailed })
+	if got := store.Get(t2.ID).Error; got != ErrShuttingDown.Error() {
+		t.Fatalf("rejected task error = %q, want %q", got, ErrShuttingDown.Error())
+	}
+}
+
+// TestPoolGracefulDrainCompletesBeforeTimeout verifies Close returns as soon as
+// the running tasks finish, without waiting out the (much larger) deadline.
+func TestPoolGracefulDrainCompletesBeforeTimeout(t *testing.T) {
+	store := NewStore()
+	hub := NewHub()
+	pool := NewPool(store, hub, 1, testLogger())
+
+	t1, _ := pool.Enqueue("t", nil, func(ctx context.Context, prog *Progression) error { return nil })
+	// Let the dispatcher start the task so Close cannot mistake it for a
+	// queued-but-not-started task (which it would cancel).
+	waitFor(t, func() bool {
+		s := store.Get(t1.ID).Status
+		return s == StatusRunning || s == StatusFinished
+	})
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		pool.Close(ctx)
+		close(shutdownDone)
+	}()
+
+	select {
+	case <-shutdownDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close blocked past task completion; should have drained promptly")
+	}
+	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusFinished })
+}
+
+// TestPoolTimeoutForceCancelsRunning verifies that once the shutdown deadline
+// passes, running tasks are force-cancelled and Close returns promptly.
+func TestPoolTimeoutForceCancelsRunning(t *testing.T) {
+	store := NewStore()
+	hub := NewHub()
+	pool := NewPool(store, hub, 1, testLogger())
+
+	var observedCancel int32
+	runner := func(ctx context.Context, prog *Progression) error {
+		<-ctx.Done()
+		atomic.AddInt32(&observedCancel, 1)
+		return ctx.Err()
+	}
+	t1, _ := pool.Enqueue("t", nil, runner)
+	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusRunning })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		pool.Close(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not honour the shutdown timeout")
+	}
+	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusCancelled })
+	if got := atomic.LoadInt32(&observedCancel); got != 1 {
+		t.Fatalf("runner observed context cancellation = %d, want 1", got)
+	}
+}
+
+// TestPoolEmptyPoolExitsGracefully verifies Close returns immediately for an
+// empty pool, even with a deadline shorter than any task could possibly run.
+func TestPoolEmptyPoolExitsGracefully(t *testing.T) {
+	store := NewStore()
+	hub := NewHub()
+	pool := NewPool(store, hub, 1, testLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		pool.Close(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close hung on an empty pool")
+	}
+	if got := pool.RunningCount(); got != 0 {
+		t.Fatalf("running = %d, want 0", got)
+	}
+	if got := pool.QueuedCount(); got != 0 {
+		t.Fatalf("queued = %d, want 0", got)
+	}
 }

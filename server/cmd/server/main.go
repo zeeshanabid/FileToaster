@@ -94,6 +94,7 @@ func run() error {
 		"addr", cfg.Addr,
 		"allowed_paths", cfg.AllowedPaths,
 		"max_parallel_tasks", cfg.MaxParallelTasks,
+		"shutdown_timeout", cfg.ShutdownTimeout,
 		"gomaxprocs", cfg.GOMAXPROCS,
 		"tmp_dir", cfg.TMPDir,
 		"session_secret", maskSecret(cfg.SessionSecret),

@@ -26,6 +26,11 @@ allowed_paths:
 # in-memory queue.
 max_parallel_tasks: 4
 
+# Graceful shutdown: how many seconds the server lets running operations finish
+# after a SIGINT/SIGTERM before forcibly cancelling them and exiting. Set to 0
+# to cancel running operations immediately on shutdown.
+shutdown_timeout_seconds: 30
+
 # Set to true to enable debug-level logging (defaults to info logging).
 debug: false
 

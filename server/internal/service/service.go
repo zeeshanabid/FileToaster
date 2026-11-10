@@ -112,8 +112,9 @@ func (s *Service) Get(id string) *task.Task { return s.store.Get(id) }
 // Subscribe registers an SSE client, optionally filtered to the given task IDs.
 func (s *Service) Subscribe(ids []string) *task.Subscription { return s.hub.Subscribe(ids) }
 
-// Shutdown gracefully stops the pool, draining running tasks.
-func (s *Service) Shutdown() { s.pool.Close() }
+// Shutdown gracefully stops the pool, draining running tasks. ctx bounds how
+// long the drain waits before the pool force-cancels the remaining tasks.
+func (s *Service) Shutdown(ctx context.Context) { s.pool.Close(ctx) }
 
 // ErrUnknownOperation is returned when submitting an unregistered operation.
 var ErrUnknownOperation = errors.New("unknown operation")
