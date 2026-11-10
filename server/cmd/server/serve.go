@@ -70,8 +70,10 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
 	taskService := service.NewService(cfg.MaxParallelTasks, logger)
 	registerCopyOp(taskService, roots)
+	registerDeleteOp(taskService, roots)
 	taskSrv := protocol.NewServer(taskService, logger)
 	mux.Handle("POST /api/copy", guard.Middleware(http.HandlerFunc(taskSrv.ServeCopy)))
+	mux.Handle("POST /api/delete", guard.Middleware(http.HandlerFunc(taskSrv.ServeDelete)))
 	mux.Handle("GET /api/tasks", guard.Middleware(http.HandlerFunc(taskSrv.ServeTasksList)))
 	mux.Handle("GET /api/tasks/{id}", guard.Middleware(http.HandlerFunc(taskSrv.ServeTask)))
 	mux.Handle("POST /api/tasks/{id}/cancel", guard.Middleware(http.HandlerFunc(taskSrv.ServeCancel)))

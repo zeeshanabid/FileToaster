@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"filetoaster/internal/fs"
+	"filetoaster/internal/fs/ops"
 	"filetoaster/internal/service"
 	"filetoaster/internal/task"
 )
@@ -76,6 +77,52 @@ func copyStatus(err error) (int, string) {
 		return http.StatusInternalServerError, "the requested operation is not available"
 	default:
 		return http.StatusBadRequest, "could not copy the selected items"
+	}
+}
+
+type deleteRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// ServeDelete handles a delete request: it enqueues a delete task and returns its
+// id. Delete is destructive and has no destination, so there is no conflict
+// handling; the client must confirm before submitting.
+func (s *Server) ServeDelete(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxCopyRequestSize))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+
+	var req deleteRequest
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Paths) == 0 {
+		writeError(w, http.StatusBadRequest, "the request requires one or more 'paths'")
+		return
+	}
+
+	taskRec, err := s.svc.Submit(service.DeleteOperation, body)
+	if err != nil {
+		status, message := deleteStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"taskID": taskRec.ID})
+}
+
+// deleteStatus maps an operation failure to an HTTP status and user-facing message.
+func deleteStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the selected path is outside the allowed folders"
+	case errors.Is(err, ops.DeleteErrRootPath):
+		return http.StatusBadRequest, "the selected path is inside an allowed root and cannot be deleted"
+	case errors.Is(err, task.ErrShuttingDown):
+		return http.StatusServiceUnavailable, "the server is shutting down; please try again later"
+	case errors.Is(err, service.ErrUnknownOperation):
+		return http.StatusInternalServerError, "the requested operation is not available"
+	default:
+		return http.StatusBadRequest, "could not delete the selected items"
 	}
 }
 

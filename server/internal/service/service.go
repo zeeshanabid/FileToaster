@@ -16,6 +16,9 @@ import (
 // CopyOperation is the operation key registered for copy.
 const CopyOperation = "copy"
 
+// DeleteOperation is the operation key registered for delete.
+const DeleteOperation = "delete"
+
 // Op is a pluggable file operation. Prepare validates and resolves the request
 // body into an opaque spec and returns its serializable meta (shown in the task
 // record); Run executes the prepared spec.
