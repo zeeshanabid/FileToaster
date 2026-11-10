@@ -34,6 +34,10 @@ import (
 //   - POST /api/fs/info : authenticated information endpoint (wrapped in
 //     auth.Middleware); the selected paths are read from the JSON request body
 //     and their recursive size/file/dir counts and permissions are returned.
+//   - POST /api/copy, POST /api/move, POST /api/delete : authenticated task
+//     endpoints (wrapped in auth.Middleware); copy/move read `paths` and a
+//     `dest` from the body and move overwrites any same-named item at the
+//     destination; delete reads only `paths`.
 //   - everything else : the embedded SvelteKit SPA, served publicly so the login
 //     screen can load before any cookie exists. auth.Middleware is available to
 //     protect future data endpoints; the SPA shell itself must stay public.
@@ -70,9 +74,11 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
 	taskService := service.NewService(cfg.MaxParallelTasks, logger)
 	registerCopyOp(taskService, roots)
+	registerMoveOp(taskService, roots)
 	registerDeleteOp(taskService, roots)
 	taskSrv := protocol.NewServer(taskService, logger)
 	mux.Handle("POST /api/copy", guard.Middleware(http.HandlerFunc(taskSrv.ServeCopy)))
+	mux.Handle("POST /api/move", guard.Middleware(http.HandlerFunc(taskSrv.ServeMove)))
 	mux.Handle("POST /api/delete", guard.Middleware(http.HandlerFunc(taskSrv.ServeDelete)))
 	mux.Handle("GET /api/tasks", guard.Middleware(http.HandlerFunc(taskSrv.ServeTasksList)))
 	mux.Handle("GET /api/tasks/{id}", guard.Middleware(http.HandlerFunc(taskSrv.ServeTask)))

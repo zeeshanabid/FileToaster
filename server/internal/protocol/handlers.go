@@ -126,6 +126,56 @@ func deleteStatus(err error) (int, string) {
 	}
 }
 
+type moveRequest struct {
+	Paths []string `json:"paths"`
+	Dest  string   `json:"dest"`
+}
+
+// ServeMove handles a move request: it enqueues a move task and returns its id.
+// A move overwrites an existing same-named item at the destination, so there is
+// no conflict handling and no 409 is produced; the client confirms before submit.
+func (s *Server) ServeMove(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxCopyRequestSize))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+
+	var req moveRequest
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Paths) == 0 || strings.TrimSpace(req.Dest) == "" {
+		writeError(w, http.StatusBadRequest, "the request requires 'paths' and a 'dest'")
+		return
+	}
+
+	taskRec, err := s.svc.Submit(service.MoveOperation, body)
+	if err != nil {
+		status, message := moveStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"taskID": taskRec.ID})
+}
+
+// moveStatus maps an operation failure to an HTTP status and user-facing message.
+func moveStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the source or destination is outside the allowed folders"
+	case errors.Is(err, ops.ErrMoveEmptyPaths),
+		errors.Is(err, ops.ErrMoveEmptyDest),
+		errors.Is(err, ops.ErrSelfMove),
+		errors.Is(err, ops.ErrOverlappingSources):
+		return http.StatusBadRequest, "could not move the selected items"
+	case errors.Is(err, task.ErrShuttingDown):
+		return http.StatusServiceUnavailable, "the server is shutting down; please try again later"
+	case errors.Is(err, service.ErrUnknownOperation):
+		return http.StatusInternalServerError, "the requested operation is not available"
+	default:
+		return http.StatusBadRequest, "could not move the selected items"
+	}
+}
+
 // ServeTasksList returns the snapshot of every tracked task, oldest first.
 func (s *Server) ServeTasksList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": s.svc.Snapshot()})
