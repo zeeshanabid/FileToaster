@@ -40,6 +40,56 @@ export interface FileInfos {
 	items: FileInfo[];
 }
 
+// TaskProgress is the byte/file accounting and throughput for a task. It maps to
+// the server's task.ByteProgress: Total/Done are bytes processed (for copy, the
+// bytes copied), FilesTotal/FilesDone are the files processed, and RatePerSec is
+// the smoothed bytes-per-second throughput used to render KB/s or MB/s.
+export interface TaskProgress {
+	total: number;
+	done: number;
+	filesTotal: number;
+	filesDone: number;
+	ratePerSec: number;
+}
+
+// Task is a tracked async operation. It maps to the server's task.Task. Status is
+// one of queued, running, finished, failed, cancelled. Bytes carries the live
+// progress; Meta is operation-specific (opaque to the client) and, for copy,
+// holds the resolved plan (items with their final, possibly renamed, dst).
+export type TaskStatus = 'queued' | 'running' | 'finished' | 'failed' | 'cancelled';
+
+export interface Task {
+	id: string;
+	type: string;
+	status: TaskStatus;
+	progress: number;
+	created: string;
+	updated: string;
+	error?: string;
+	bytes: TaskProgress;
+	meta?: unknown;
+}
+
+// CopyMeta is the copy operation's plan, carried in a task's Meta field.
+export interface CopyMeta {
+	items: Array<{ src: string; dst: string }>;
+	conflict: string;
+}
+
+export interface TaskListResponse {
+	tasks: Task[];
+}
+
+export interface CopyResponse {
+	taskID?: string;
+}
+
+export interface CopyTaskRequest {
+	paths: string[];
+	dest: string;
+	conflict: string;
+}
+
 // apiError carries a UI-facing message from the server's `{"error": ...}` body.
 export class ApiError extends Error {
 	override name = 'ApiError';
@@ -87,4 +137,44 @@ export async function mkdirDirectory(parent: string, name: string): Promise<stri
 export async function fetchInfo(paths: string[]): Promise<FileInfo[]> {
 	const res = await postJSON<FileInfos>('/api/fs/info', { paths });
 	return res.items;
+}
+
+// listTasks returns every tracked task, oldest first (matches GET /api/tasks).
+export async function listTasks(): Promise<Task[]> {
+	const res = await fetch('/api/tasks', { credentials: 'include' });
+	if (!res.ok) {
+		throw new ApiError(`could not list tasks (${res.status})`);
+	}
+	return (await res.json()).tasks;
+}
+
+// submitCopy enqueues a copy task. It resolves to the server's response
+// ({ taskID } on success). Destination collisions are resolved server-side by
+// renaming, so the request never needs an overwrite decision and a 409 is never
+// produced. It rejects on any other error.
+export async function submitCopy(req: CopyTaskRequest): Promise<CopyResponse> {
+	const res = await fetch('/api/copy', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `copy failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	return (await res.json()) as CopyResponse;
+}
+
+// cancelTask asks the server to stop a queued or running task (POST
+// /api/tasks/{id}/cancel).
+export async function cancelTask(id: string): Promise<void> {
+	await postJSON<{ cancelled: string }>(
+		'/api/tasks/' + encodeURIComponent(id) + '/cancel',
+		{}
+	);
 }
