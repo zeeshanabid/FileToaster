@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSize, formatDate } from '$lib/fs/format';
+import { formatSize, formatDate, formatRate } from '$lib/fs/format';
 
 describe('formatSize', () => {
 	// Each pair is [input bytes, expected human string]. The on-disk values are
@@ -50,5 +50,27 @@ describe('formatDate', () => {
 		expect(formatDate('')).toBe('');
 		expect(formatDate('not-a-date')).toBe('');
 		expect(formatDate('2023-13-40')).toBe('');
+	});
+});
+
+describe('formatRate', () => {
+	const cases: Array<[number, string]> = [
+		[0, '0 B/s'],
+		[512, '512 B/s'],
+		[1023, '1023 B/s'],
+		[1024, '1 KB/s'],
+		[1536, '2 KB/s'],
+		[1048576, '1 MB/s'],
+		[5 * 1024 * 1024, '5 MB/s'],
+		[3 * 1073741824, '3 GB/s']
+	];
+	it.each(cases)('formats %s bytes/s as %s', (rate, want) => {
+		expect(formatRate(rate)).toBe(want);
+	});
+
+	it('treats non-finite and negative rates as zero', () => {
+		expect(formatRate(NaN)).toBe('0 B/s');
+		expect(formatRate(-Infinity)).toBe('0 B/s');
+		expect(formatRate(-100)).toBe('0 B/s');
 	});
 });
