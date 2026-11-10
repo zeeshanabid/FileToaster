@@ -18,13 +18,24 @@ import type { Mock } from 'vitest';
 import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
-import { fetchListing, mkdirDirectory, fetchInfo } from '$lib/fs/api';
-import { clipboard, clearClipboard, setClipboard, submitCopyTask, submitDeleteTask } from '$lib/store/tasks';
+import { fetchListing, mkdirDirectory, fetchInfo, submitMove } from '$lib/fs/api';
+import {
+	clipboard,
+	cutMode,
+	cutEntries,
+	clearClipboard,
+	setClipboard,
+	setCut,
+	submitCopyTask,
+	submitDeleteTask,
+	submitMoveTask
+} from '$lib/store/tasks';
 
 vi.mock('$lib/fs/api', () => ({
 	fetchListing: vi.fn(),
 	mkdirDirectory: vi.fn(),
-	fetchInfo: vi.fn()
+	fetchInfo: vi.fn(),
+	submitMove: vi.fn()
 }));
 
 // The tasks store is mocked so copy/paste/delete can be tested without a backend. The
@@ -32,12 +43,29 @@ vi.mock('$lib/fs/api', () => ({
 // is available); the clipboard helpers mutate it to mimic the real module.
 vi.mock('$lib/store/tasks', () => {
 	const store = writable<string[]>([]);
+	const cutMode = writable<boolean>(false);
+	const cutEntries = writable<Array<{ path: string; name: string; type: 'file' | 'dir' }>>([]);
 	return {
 		clipboard: store,
-		setClipboard: vi.fn((paths: string[]) => store.set(paths)),
-		clearClipboard: vi.fn(() => store.set([])),
+		cutMode,
+		cutEntries,
+		setClipboard: vi.fn((paths: string[]) => {
+			store.set(paths);
+			cutMode.set(false);
+		}),
+		clearClipboard: vi.fn(() => {
+			store.set([]);
+			cutMode.set(false);
+			cutEntries.set([]);
+		}),
+		setCut: vi.fn((entries: Array<{ path: string; name: string; type: 'file' | 'dir' }>) => {
+			store.set(entries.map((e) => e.path));
+			cutEntries.set(entries);
+			cutMode.set(true);
+		}),
 		submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' })),
-		submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' }))
+		submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' })),
+		submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' }))
 	};
 });
 
@@ -425,6 +453,120 @@ describe('Window copy & paste task', () => {
 			expect(submitCopyTask).toHaveBeenLastCalledWith(['/root/notes.txt'], '/root/documents')
 		);
 		expect(document.querySelector('.conflict-backdrop')).toBeNull();
+	});
+});
+
+describe('Window cut & move', () => {
+	function copyButton(): HTMLButtonElement {
+		return screen.getByLabelText('Copy') as HTMLButtonElement;
+	}
+	function cutButton(): HTMLButtonElement {
+		return screen.getByLabelText('Cut') as HTMLButtonElement;
+	}
+	function pasteButton(): HTMLButtonElement {
+		return screen.getByLabelText('Paste') as HTMLButtonElement;
+	}
+	function clickRow(name: string) {
+		const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+			.find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+		if (!row) throw new Error(`no row named ${name}`);
+		fireEvent.click(row);
+	}
+	function moveDialog(): HTMLElement {
+		return screen.getByTestId('move-dialog') as HTMLElement;
+	}
+
+	beforeEach(() => {
+		clipboard.set([]);
+		cutMode.set(false);
+		cutEntries.set([]);
+		(setCut as unknown as Mock).mockClear();
+		(submitMoveTask as Mock).mockClear();
+		(submitMoveTask as Mock).mockResolvedValue({ taskID: 'task-5' });
+		(submitCopyTask as Mock).mockClear();
+	});
+
+	it('is disabled until a row is selected, then enabled', async () => {
+		await openAndRender();
+		expect(cutButton()).toBeDisabled();
+		await clickRow('notes.txt');
+		await waitFor(() => expect(cutButton()).not.toBeDisabled());
+	});
+
+	it('cuts the selection into the cut clipboard and clears it', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(cutButton());
+		await tick();
+		// Cut sets cut mode, copies the path into the clipboard, and records the entries.
+		expect(get(cutMode)).toBe(true);
+		expect(get(clipboard)).toEqual(['/root/notes.txt']);
+		expect(get(cutEntries)).toEqual([{ path: '/root/notes.txt', name: 'notes.txt', type: 'file' }]);
+		expect(setCut).toHaveBeenCalledTimes(1);
+		// Selection is cleared after cutting (cut button disabled again).
+		expect(cutButton()).toBeDisabled();
+	});
+
+	it('opens the confirm dialog on paste when cut, and does not copy', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(cutButton());
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+
+		// The move dialog opens with the count, the selected name and the overwrite
+		// notice — and the copy path is not taken.
+		await waitFor(() => expect(moveDialog()).toBeInTheDocument());
+		expect(within(moveDialog()).getByText('Are you sure you want to move 1 file and directories?')).toBeInTheDocument();
+		expect(within(moveDialog()).getByText(/already exists at the destination/)).toBeInTheDocument();
+		expect(within(moveDialog()).getByText('notes.txt')).toBeInTheDocument();
+		expect(submitCopyTask).not.toHaveBeenCalled();
+	});
+
+	it('confirms a move, submits submitMoveTask, clears selection and flashes', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(cutButton());
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+		await waitFor(() => expect(moveDialog()).toBeInTheDocument());
+
+		fireEvent.click(within(moveDialog()).getByRole('button', { name: 'Move' }));
+		await tick();
+
+		await waitFor(() =>
+			expect(submitMoveTask).toHaveBeenCalledWith(['/root/notes.txt'], '/root/documents')
+		);
+		// Selection is cleared (cut button disabled again).
+		await waitFor(() => expect(cutButton()).toBeDisabled());
+		// A transient status confirms the move task was submitted.
+		await waitFor(() => expect(screen.getByText(/Moving/i)).toBeInTheDocument());
+	});
+
+	it('keeps the dialog closed (no submit) when Cancel is pressed', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(cutButton());
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+		await waitFor(() => expect(moveDialog()).toBeInTheDocument());
+
+		fireEvent.click(within(moveDialog()).getByRole('button', { name: 'Cancel' }));
+		await waitFor(() => expect(screen.queryByTestId('move-dialog')).not.toBeInTheDocument());
+		expect(submitMoveTask).not.toHaveBeenCalled();
+	});
+
+	it('copy → paste still calls submitCopyTask with no dialog (regression guard)', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		fireEvent.click(copyButton());
+		await clickNode('/root/documents');
+		fireEvent.click(pasteButton());
+
+		await waitFor(() =>
+			expect(submitCopyTask).toHaveBeenCalledWith(['/root/notes.txt'], '/root/documents')
+		);
+		expect(screen.queryByTestId('move-dialog')).not.toBeInTheDocument();
 	});
 });
 

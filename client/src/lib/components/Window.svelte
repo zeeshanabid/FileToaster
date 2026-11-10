@@ -10,17 +10,22 @@
 	} from '$lib/store/windows';
 	import { type Entry, fetchInfo, type FileInfo, mkdirDirectory } from '$lib/fs/api';
 	import { tree } from '$lib/fs/tree';
-	import {
-		clipboard,
-		clearClipboard,
-		setClipboard,
-		submitCopyTask,
-		submitDeleteTask
-	} from '$lib/store/tasks';
-	import FileIcon from './FileIcon.svelte';
-	import InfoDialog from './InfoDialog.svelte';
-	import ConfirmDelete from './ConfirmDelete.svelte';
-	import { formatSize, formatDate } from '$lib/fs/format';
+import {
+	clipboard,
+	cutEntries,
+	cutMode,
+	clearClipboard,
+	setClipboard,
+	setCut,
+	submitCopyTask,
+	submitDeleteTask,
+	submitMoveTask
+} from '$lib/store/tasks';
+import FileIcon from './FileIcon.svelte';
+import InfoDialog from './InfoDialog.svelte';
+import ConfirmDelete from './ConfirmDelete.svelte';
+import ConfirmMove from './ConfirmMove.svelte';
+import { formatSize, formatDate } from '$lib/fs/format';
 
 	let { window: winProp }: { window: AppWindow } = $props();
 
@@ -265,10 +270,16 @@
 		flash(`${n} item${n === 1 ? '' : 's'} copied.`);
 	}
 
-	// Paste: copy the clipboard straight into the folder this window has open.
+	// Paste: branches to move when the clipboard holds a cut, else copies into the
+	// folder this window has open. A move confirms first (overwrite notice); a copy
+	// goes straight to the destination (the server renames collisions).
 	function paste() {
 		if ($clipboard.length === 0) {
-			flash('Nothing in the clipboard. Copy items first.');
+			flash('Nothing to cut or copy. Cut items first.');
+			return;
+		}
+		if ($cutMode) {
+			moveOpen = true;
 			return;
 		}
 		pasteInto(win ? win.path : '/');
@@ -296,9 +307,42 @@
 		}
 	}
 
-	function clearSelection() {
+		function clearSelection() {
 		selected = new Set();
 		lastClicked = null;
+	}
+
+	// --- cut + move: paste branches to a tracked move task when cutMode is set ---
+	// `moveOpen` toggles the confirm modal; `cutEntries` (the store) holds the cut
+	// rows rendered inside it. Cut also stores the entries in the clipboard, so the
+	// same Paste button works for both copy and move.
+	let moveOpen = $state(false);
+
+	function cutSelection() {
+		if (selected.size === 0) {
+			flash('Select one or more items to cut.');
+			return;
+		}
+		const n = selected.size;
+		const selectedEntries = entries
+			.filter((it) => selected.has(it.path))
+			.map((it) => ({ path: it.path, name: it.name, type: it.type }));
+		setCut(selectedEntries);
+		clearSelection();
+		flash(`${n} item${n === 1 ? '' : 's'} cut.`);
+	}
+
+	async function confirmMove() {
+		moveOpen = false;
+		const dest = win ? win.path : '/';
+		try {
+			const res = await submitMoveTask([...$clipboard], dest);
+			clearClipboard();
+			clearSelection();
+			if (res.taskID) flash(`Moving… (task ${res.taskID}).`);
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not move');
+		}
 	}
 
 	// The tree is anchored at the window's root and never re-rooted on navigation.
@@ -514,6 +558,20 @@
 			</svg>
 		</button>
 		<button
+			class="tool cut"
+			class:cut-active={$cutMode}
+			type="button"
+			title="Cut selected to clipboard"
+			aria-label="Cut"
+			disabled={selected.size === 0}
+			onclick={cutSelection}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M6 10a4 4 0 1 1 5.6 3.6L4.4 19.6a2 2 0 1 1-2.8-2.8L9.6 10A4 4 0 0 1 6 10Z" />
+				<path d="M18 14a4 4 0 1 1-5.6-3.6l7.2-7.2a2 2 0 1 1 2.8 2.8L14.4 14A4 4 0 0 1 18 14Z" />
+			</svg>
+		</button>
+		<button
 			class="tool copy"
 			type="button"
 			title="Copy selected to clipboard"
@@ -678,6 +736,10 @@
 	{#if deleteOpen}
 		<ConfirmDelete entries={deleteEntries} onClose={cancelDelete} onConfirm={confirmDelete} />
 	{/if}
+
+	{#if moveOpen}
+		<ConfirmMove entries={$cutEntries} onClose={() => (moveOpen = false)} onConfirm={confirmMove} />
+	{/if}
 </div>
 
 <style>
@@ -798,6 +860,10 @@
 	.tool svg {
 		width: 16px;
 		height: 16px;
+	}
+	.tool.cut.cut-active {
+		color: var(--accent-strong);
+		background: var(--surface-inset);
 	}
 	.tool.info {
 		position: relative;
