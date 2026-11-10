@@ -5,9 +5,11 @@ import {
 	listTasks,
 	submitCopy,
 	submitDelete,
+	submitMove,
 	type Task,
 	type CopyMeta,
-	type DeleteMeta
+	type DeleteMeta,
+	type MoveMeta
 } from '$lib/fs/api';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
@@ -43,10 +45,24 @@ export const failedCount: Readable<number> = derived(taskList, ($list, set) =>
 // `clipboard` holds the paths the user has copied so a paste can reference them.
 export const clipboard = writable<string[]>([]);
 export function setClipboard(paths: string[]) {
+	// A fresh copy resets any prior cut state, so the next paste is a copy.
 	clipboard.set(paths);
+	cutMode.set(false);
 }
 export function clearClipboard() {
 	clipboard.set([]);
+	cutMode.set(false);
+	cutEntries.set([]);
+}
+
+// `cutMode` + `cutEntries` track a cut (move) selection: cut stores the entries
+// in the clipboard too, but paste branches to a move when cutMode is set.
+export const cutMode = writable<boolean>(false);
+export const cutEntries = writable<Array<{ path: string; name: string; type: 'file' | 'dir' }>>([]);
+export function setCut(entries: Array<{ path: string; name: string; type: 'file' | 'dir' }>) {
+	clipboard.set(entries.map((e) => e.path));
+	cutEntries.set(entries);
+	cutMode.set(true);
 }
 
 // submitCopyTask enqueues a copy of `paths` into `dest`. Destination collisions
@@ -60,6 +76,12 @@ export function submitCopyTask(paths: string[], dest: string) {
 // confirmed by the UI before this runs, so nothing is asked to be overwritten.
 export function submitDeleteTask(paths: string[]) {
 	return submitDelete(paths);
+}
+
+// submitMoveTask enqueues a move of `paths` into `dest`. Move overwrites any
+// same-named item at the destination, so no overwrite/cancel decision is passed.
+export function submitMoveTask(paths: string[], dest: string) {
+	return submitMove({ paths, dest, conflict: '' });
 }
 
 // cancelTaskAction asks the server to stop a queued or running task.
@@ -84,6 +106,12 @@ export function taskLabel(task: Task): string {
 			const n = meta?.paths?.length ?? 1;
 			if (n === 1) return 'Delete';
 			return `Delete ${n} items`;
+		}
+		case 'move': {
+			const meta = (task.meta ?? null) as MoveMeta | null;
+			const n = meta?.items?.length ?? 1;
+			if (n === 1) return 'Move';
+			return `Move ${n} items`;
 		}
 		default:
 			return task.type;

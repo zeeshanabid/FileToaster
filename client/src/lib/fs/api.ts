@@ -83,6 +83,13 @@ export interface DeleteMeta {
 	paths: string[];
 }
 
+// MoveMeta is the move operation's plan, carried in a task's Meta field so the
+// label can count the selected items. It stays opaque to the client's task
+// rendering; the engine only reads the items.
+export interface MoveMeta {
+	items: Array<{ src: string; dst: string }>;
+}
+
 export interface TaskListResponse {
 	tasks: Task[];
 }
@@ -95,7 +102,17 @@ export interface DeleteResponse {
 	taskID?: string;
 }
 
+export interface MoveResponse {
+	taskID?: string;
+}
+
 export interface CopyTaskRequest {
+	paths: string[];
+	dest: string;
+	conflict: string;
+}
+
+export interface MoveTaskRequest {
 	paths: string[];
 	dest: string;
 	conflict: string;
@@ -201,6 +218,28 @@ export async function submitDelete(paths: string[]): Promise<DeleteResponse> {
 		throw new ApiError(message);
 	}
 	return (await res.json()) as DeleteResponse;
+}
+
+// submitMove enqueues a move task for `paths` into `dest`. A move overwrites any
+// same-named item at the destination (no conflict handling, no 409), so the
+// request carries a placeholder `conflict` that the server ignores. It resolves
+// to the server's response ({ taskID } on success) and rejects on any other error.
+export async function submitMove(req: MoveTaskRequest): Promise<MoveResponse> {
+	const res = await fetch('/api/move', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `move failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	return (await res.json()) as MoveResponse;
 }
 
 // cancelTask asks the server to stop a queued or running task (POST
