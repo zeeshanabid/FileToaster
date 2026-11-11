@@ -159,6 +159,16 @@ export async function mkdirDirectory(parent: string, name: string): Promise<stri
 	return res.path;
 }
 
+// renameFile renames the given paths synchronously (confined to the allowed
+// roots server-side). The first path is renamed to the exact `name` (each file
+// keeping its own extension); subsequent paths get a " (N)" suffix, so a batch
+// of three files becomes name, name (1), name (2). It rejects (never 409) the
+// moment a target name already exists, leaving the selection untouched — the UI
+// surfaces the message as an inline error, like a failed new-folder.
+export async function renameFile(paths: string[], name: string): Promise<void> {
+	await postJSON<{ ok: boolean }>('/api/fs/rename', { paths, name });
+}
+
 // fetchInfo computes information (recursive size, file/dir counts, permissions,
 // times) for the given paths. Each path must lie within the allowed roots;
 // unresolvable paths are skipped by the server.

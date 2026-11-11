@@ -18,7 +18,7 @@ import type { Mock } from 'vitest';
 import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
-import { fetchListing, mkdirDirectory, fetchInfo, submitMove } from '$lib/fs/api';
+import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile } from '$lib/fs/api';
 import {
 	clipboard,
 	cutMode,
@@ -35,7 +35,8 @@ vi.mock('$lib/fs/api', () => ({
 	fetchListing: vi.fn(),
 	mkdirDirectory: vi.fn(),
 	fetchInfo: vi.fn(),
-	submitMove: vi.fn()
+	submitMove: vi.fn(),
+	renameFile: vi.fn()
 }));
 
 // The tasks store is mocked so copy/paste/delete can be tested without a backend. The
@@ -149,6 +150,7 @@ async function clickNode(name: string): Promise<void> {
 		(fetchListing as Mock).mockClear();
 		(fetchListing as Mock).mockImplementation(async (path: string) => ({ path, entries: FS[path] ?? [] }));
 		(mkdirDirectory as Mock).mockReset();
+		(renameFile as Mock).mockReset();
 	});
 
 afterEach(() => {
@@ -875,5 +877,96 @@ describe('Window delete', () => {
 		expect(submitDeleteTask).not.toHaveBeenCalled();
 		// Selection survives a cancel.
 		expect(deleteButton()).not.toBeDisabled();
+	});
+});
+
+	describe('Window rename', () => {
+		function renameButton(): HTMLButtonElement {
+			return screen.getByLabelText('Rename') as HTMLButtonElement;
+		}
+		async function clickRow(name: string, modifier?: 'ctrl' | 'shift') {
+			const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+				.find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+			if (!row) throw new Error(`no row named ${name}`);
+			if (modifier === 'ctrl') {
+				fireEvent.click(row, { ctrlKey: true });
+			} else if (modifier === 'shift') {
+				fireEvent.click(row, { shiftKey: true });
+			} else {
+				fireEvent.click(row);
+			}
+			await tick();
+		}
+
+	beforeEach(() => {
+		(renameFile as Mock).mockClear();
+		(renameFile as Mock).mockResolvedValue(undefined);
+	});
+
+	it('is disabled until a row is selected, then enabled', async () => {
+		await openAndRender();
+		expect(renameButton()).toBeDisabled();
+		await clickRow('notes.txt');
+		await waitFor(() => expect(renameButton()).not.toBeDisabled());
+	});
+
+	it('opens an in-place input and renames a single selection on Enter', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		const user = userEvent.setup();
+		await user.click(renameButton());
+		const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+		await user.type(input, 'journal{enter}');
+
+		expect(renameFile).toHaveBeenCalledWith(['/root/notes.txt'], 'journal');
+		// Selection is cleared and the toolbar returns to its quiet state.
+		await waitFor(() => expect(renameButton()).toBeDisabled());
+		await waitFor(() => expect(screen.queryByPlaceholderText('Rename')).not.toBeInTheDocument());
+		// A transient status confirms the rename.
+		await waitFor(() => expect(screen.getByText(/Renamed 1 item/i)).toBeInTheDocument());
+	});
+
+	it('renames a multi-selection, passing every path (and the raw name) to the server', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		await clickRow('documents', 'ctrl');
+		const user = userEvent.setup();
+		await user.click(renameButton());
+		const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+		await user.type(input, 'archive{enter}');
+
+		// Suffixing (" (1)", " (2)") is server-side; the client forwards the raw
+		// name and every selected path in selection order.
+		await waitFor(() =>
+			expect(renameFile).toHaveBeenCalledWith(['/root/notes.txt', '/root/documents'], 'archive')
+		);
+		await waitFor(() => expect(renameButton()).toBeDisabled());
+	});
+
+	it('discards the in-place rename on Escape', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		const user = userEvent.setup();
+		await user.click(renameButton());
+		const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+		await user.type(input, 'journal{escape}');
+		await waitFor(() => expect(screen.queryByPlaceholderText('Rename')).not.toBeInTheDocument());
+		expect(renameFile).not.toHaveBeenCalled();
+	});
+
+	it('reports a conflict inline and keeps the selection for a retry', async () => {
+		(renameFile as Mock).mockRejectedValue(new Error('a file with that name already exists'));
+		await openAndRender();
+		await clickRow('notes.txt');
+		const user = userEvent.setup();
+		await user.click(renameButton());
+		const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+		await user.type(input, 'notes{enter}');
+
+		// The server's conflict is surfaced inline (mainError replaces the list).
+		await waitFor(() => expect(screen.getByText(/already exists/i)).toBeInTheDocument());
+		// The in-place input closed, but the selection survives so the user can retry.
+		await waitFor(() => expect(screen.queryByPlaceholderText('Rename')).not.toBeInTheDocument());
+		expect(renameButton()).not.toBeDisabled();
 	});
 });

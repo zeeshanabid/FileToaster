@@ -8,7 +8,7 @@
 		windows,
 		type AppWindow
 	} from '$lib/store/windows';
-	import { type Entry, fetchInfo, type FileInfo, mkdirDirectory } from '$lib/fs/api';
+	import { type Entry, fetchInfo, type FileInfo, mkdirDirectory, renameFile } from '$lib/fs/api';
 	import { tree } from '$lib/fs/tree';
 import {
 	clipboard,
@@ -422,19 +422,58 @@ import { formatSize, formatDate } from '$lib/fs/format';
 		editingNew = false;
 		newName = '';
 	}
-	async function confirmNewDir() {
-		const name = newName.trim();
-		if (!name || !win || !editingNew) return;
-		editingNew = false;
-		const parent = win.path;
-		try {
-			await mkdirDirectory(parent, name);
-			void navigate(parent + '/' + name);
-		} catch (err) {
-			mainError = err instanceof Error ? err.message : 'could not create folder';
+		async function confirmNewDir() {
+			const name = newName.trim();
+			if (!name || !win || !editingNew) return;
+			editingNew = false;
+			const parent = win.path;
+			try {
+				await mkdirDirectory(parent, name);
+				void navigate(parent + '/' + name);
+			} catch (err) {
+				mainError = err instanceof Error ? err.message : 'could not create folder';
+			}
+			newName = '';
 		}
-		newName = '';
-	}
+
+		// --- rename: synchronous, like new folder --------------------------------
+		// `editingRename` toggles the in-place input; Enter renames the current
+		// selection (the first item to the exact name, the rest to "name (N)"),
+		// Escape/blur discards. A conflict (a target already exists) or a blank
+		// name surfaces as `mainError` without clearing the selection, so the user
+		// can adjust and retry.
+		let editingRename = $state(false);
+		let renameName = $state('');
+		let renameInputEl: HTMLInputElement | null = $state(null);
+
+		function startRename() {
+			if (!win || selected.size === 0) return;
+			renameName = '';
+			editingRename = true;
+		}
+		$effect(() => {
+			if (editingRename) renameInputEl?.focus();
+		});
+		function cancelRename() {
+			if (!editingRename) return;
+			editingRename = false;
+			renameName = '';
+		}
+		async function confirmRename() {
+			const name = renameName.trim();
+			if (!win || !editingRename || !name || selected.size === 0) return;
+			editingRename = false;
+			renameName = '';
+			const count = selected.size;
+			try {
+				await renameFile([...selected], name);
+				clearSelection();
+				void reload();
+				flash(`Renamed ${count} item${count === 1 ? '' : 's'}.`);
+			} catch (err) {
+				mainError = err instanceof Error ? err.message : 'could not rename';
+			}
+		}
 
 	// Snapshot of the reactive shape the tree row renders from. Reading `frame`
 	// (bumped on every tree mutation) makes this snapshot re-subscribe to the
@@ -546,6 +585,19 @@ import { formatSize, formatDate } from '$lib/fs/format';
 				<path d="M12 11v6M9 14h6" />
 			</svg>
 		</button>
+		<button
+			class="tool rename"
+			type="button"
+			title="Rename selected"
+			aria-label="Rename"
+			disabled={selected.size === 0 || editingNew}
+			onclick={startRename}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M3 17.25V21h3.75L17.89 9.64a1 1 0 0 0 0-1.41L15.77 6.11a1 1 0 0 0-1.41 0L3 15.82Z" />
+				<path d="M17.5 4.5l2.5 2.5L19 9l-2.5-2.5Z" />
+			</svg>
+		</button>
 		<button class="tool" type="button" title="Reload" aria-label="Reload" onclick={() => reload()}>
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
 				<path d="M21 12a9 9 0 1 1-3.2-6.9" />
@@ -626,6 +678,14 @@ import { formatSize, formatDate } from '$lib/fs/format';
 					placeholder="New folder"
 					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
 					onblur={() => cancelNewDir()} />
+			</form>
+		{/if}
+		{#if editingRename}
+			<form class="new" onsubmit={() => confirmRename()}>
+				<input class="new-input" bind:this={renameInputEl} bind:value={renameName} autocomplete="off" spellcheck="false"
+					placeholder="Rename"
+					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}
+					onblur={() => cancelRename()} />
 			</form>
 		{/if}
 	</div>
