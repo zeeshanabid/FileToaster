@@ -97,4 +97,8 @@ describe('taskLabel', () => {
 	it('describes a multi-item compress by count', () => {
 		expect(taskLabel(task({ id: '7', type: 'compress', status: 'running', meta: { format: 'zip', dest: '/a/b.zip', source: 4 } }))).toBe('Compress 4 items');
 	});
+
+	it('describes a decompress by the archive stem', () => {
+		expect(taskLabel(task({ id: '8', type: 'decompress', status: 'running', meta: { format: 'zip', archive: '/root/myfiles.zip', extractDir: '/root/myfiles', into: 'myfiles' } }))).toBe('Extract myfiles');
+	});
 });

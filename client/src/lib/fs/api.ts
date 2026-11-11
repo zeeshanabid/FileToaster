@@ -99,6 +99,16 @@ export interface CompressMeta {
 	source: number;
 }
 
+// DecompressMeta is the decompress operation's plan, carried in a task's Meta
+// field so the label can show the archive and its format. It stays opaque to the
+// client's task rendering; the engine only reads the paths.
+export interface DecompressMeta {
+	format: string;
+	archive: string;
+	extractDir: string;
+	into: string;
+}
+
 export interface TaskListResponse {
 	tasks: Task[];
 }
@@ -119,6 +129,10 @@ export interface CompressResponse {
 	taskID?: string;
 }
 
+export interface DecompressResponse {
+	taskID?: string;
+}
+
 export interface CopyTaskRequest {
 	paths: string[];
 	dest: string;
@@ -134,6 +148,11 @@ export interface MoveTaskRequest {
 export interface CompressTaskRequest {
 	paths: string[];
 	format: string;
+}
+
+export interface DecompressTaskRequest {
+	paths: string[];
+	into: string;
 }
 
 // apiError carries a UI-facing message from the server's `{"error": ...}` body.
@@ -291,6 +310,30 @@ export async function submitCompress(req: CompressTaskRequest): Promise<Compress
 		throw new ApiError(message);
 	}
 	return (await res.json()) as CompressResponse;
+}
+
+// submitDecompress enqueues a decompress task for a single archive `paths` into
+// the requested destination `into` ("", extract here, or an archive stem, extract
+// into a sibling folder). The archive is opened read-only and its contents are
+// extracted into a folder next to it; the request carries no overwrite decision
+// because an existing destination folder is renamed server-side. It resolves to
+// the server's response ({ taskID } on success) and rejects on any other error.
+export async function submitDecompress(req: DecompressTaskRequest): Promise<DecompressResponse> {
+	const res = await fetch('/api/decompress', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `decompress failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	return (await res.json()) as DecompressResponse;
 }
 
 // cancelTask asks the server to stop a queued or running task (POST
