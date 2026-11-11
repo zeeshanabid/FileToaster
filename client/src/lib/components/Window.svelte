@@ -20,13 +20,16 @@ import {
 	submitCopyTask,
 	submitDeleteTask,
 	submitMoveTask,
-	submitCompressTask
+	submitCompressTask,
+	submitDecompressTask
 } from '$lib/store/tasks';
+import { isArchiveFile } from '$lib/fs/archive';
 import FileIcon from './FileIcon.svelte';
 import InfoDialog from './InfoDialog.svelte';
 import ConfirmDelete from './ConfirmDelete.svelte';
 import ConfirmMove from './ConfirmMove.svelte';
 import ConfirmCompress from './ConfirmCompress.svelte';
+import ConfirmDecompress from './ConfirmDecompress.svelte';
 import { formatSize, formatDate } from '$lib/fs/format';
 
 	let { window: winProp }: { window: AppWindow } = $props();
@@ -378,6 +381,41 @@ import { formatSize, formatDate } from '$lib/fs/format';
 		}
 	}
 
+	// --- decompress: extract a single archive in place -----------------------
+	// `decompressOpen` toggles the extract-confirm modal; `decompressEntries` are
+	// the selected rows rendered inside it. Decompress applies to one archive
+	// file only, so the button enables solely when exactly that row is selected.
+	let decompressOpen = $state(false);
+	let decompressEntries = $derived(
+		entries.filter((it) => selected.has(it.path)).map((it) => ({ path: it.path, name: it.name, type: it.type }))
+	);
+	// Enabled only for a single selected row that is a file and is an archive
+	// (zip, tar, tar.gz); the archive-format check is the client half of the
+	// "unsupported → disabled" rule the backend backstops with a 400.
+	const canDecompress = $derived(
+		decompressEntries.length === 1 &&
+			decompressEntries[0].type === 'file' &&
+			isArchiveFile(decompressEntries[0].name)
+	);
+
+	function startDecompress() {
+		if (!canDecompress) return;
+		decompressOpen = true;
+	}
+	function cancelDecompress() {
+		decompressOpen = false;
+	}
+	async function confirmDecompress(choice: { into: string }) {
+		decompressOpen = false;
+		try {
+			const res = await submitDecompressTask([...selected], choice.into);
+			clearSelection();
+			if (res.taskID) flash(`Extracting… (task ${res.taskID}).`);
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not decompress');
+		}
+	}
+
 	// The tree is anchored at the window's root and never re-rooted on navigation.
 	// The title bar shows the currently opened folder; the store's `name` stays as
 	// the window's display name (the root label) and never changes after open.
@@ -719,6 +757,20 @@ import { formatSize, formatDate } from '$lib/fs/format';
 				<path d="M9 18h6" />
 			</svg>
 		</button>
+		<button
+			class="tool decompress"
+			type="button"
+			title="Extract selected archive"
+			aria-label="Decompress"
+			disabled={!canDecompress}
+			onclick={startDecompress}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
+				<path d="M12 14v-4m0 0-2 2m2-2 2 2" />
+				<path d="M9 18h6" />
+			</svg>
+		</button>
 		{#if editingNew}
 			<form class="new" onsubmit={() => confirmNewDir()}>
 				<input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
@@ -853,6 +905,14 @@ import { formatSize, formatDate } from '$lib/fs/format';
 			entries={compressEntries}
 			onClose={cancelCompress}
 			onConfirm={confirmCompress}
+		/>
+	{/if}
+
+	{#if decompressOpen}
+		<ConfirmDecompress
+			entries={decompressEntries}
+			onClose={cancelDecompress}
+			onConfirm={confirmDecompress}
 		/>
 	{/if}
 </div>

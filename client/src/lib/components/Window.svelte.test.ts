@@ -26,10 +26,11 @@ import {
 	clearClipboard,
 	setClipboard,
 	setCut,
-		submitCopyTask,
-		submitDeleteTask,
-		submitMoveTask,
-		submitCompressTask
+	submitCopyTask,
+	submitDeleteTask,
+	submitMoveTask,
+	submitCompressTask,
+	submitDecompressTask
 } from '$lib/store/tasks';
 
 vi.mock('$lib/fs/api', () => ({
@@ -68,7 +69,8 @@ vi.mock('$lib/store/tasks', () => {
 		submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' })),
 		submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' })),
 		submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' })),
-		submitCompressTask: vi.fn(async () => ({ taskID: 'task-7' }))
+		submitCompressTask: vi.fn(async () => ({ taskID: 'task-7' })),
+		submitDecompressTask: vi.fn(async () => ({ taskID: 'task-8' }))
 	};
 });
 
@@ -76,6 +78,7 @@ const FS: Record<string, { path: string; name: string; type: 'file' | 'dir'; siz
 	'/root': [
 		{ path: '/root/documents', name: 'documents', type: 'dir', size: 0, created: '', modified: '' },
 		{ path: '/root/photos', name: 'photos', type: 'dir', size: 0, created: '', modified: '' },
+		{ path: '/root/myfiles.zip', name: 'myfiles.zip', type: 'file', size: 512, created: '', modified: '' },
 		{ path: '/root/notes.txt', name: 'notes.txt', type: 'file', size: 3, created: '', modified: '' }
 	],
 	'/root/documents': [
@@ -687,10 +690,10 @@ describe('Window selection & information dialog', () => {
 
 	it('shift-click extends the selection across the sorted order', async () => {
 		await openAndRender();
-		// Root rows are sorted dirs-first then files: documents, photos, notes.txt.
+		// Root rows are sorted dirs-first then files: documents, photos, myfiles.zip, notes.txt.
 		await clickRow('documents');
 		await clickRow('notes.txt', 'shift');
-		expect(badgeCount()).toBe(3);
+		expect(badgeCount()).toBe(4);
 	});
 
 	it('clicking the empty background clears selection', async () => {
@@ -1064,5 +1067,102 @@ describe('Window compress', () => {
 		// The in-place input closed, but the selection survives so the user can retry.
 		await waitFor(() => expect(screen.queryByPlaceholderText('Rename')).not.toBeInTheDocument());
 		expect(renameButton()).not.toBeDisabled();
+	});
+});
+
+describe('Window decompress', () => {
+	function decompressButton(): HTMLButtonElement {
+		return screen.getByLabelText('Decompress') as HTMLButtonElement;
+	}
+	function dialog(): HTMLElement {
+		return screen.getByTestId('decompress-dialog') as HTMLElement;
+	}
+	async function clickRow(name: string, modifier?: 'ctrl' | 'shift'): Promise<void> {
+		const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+			.find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+		if (!row) throw new Error(`no row named ${name}`);
+		if (modifier === 'ctrl') {
+			fireEvent.click(row, { ctrlKey: true });
+		} else if (modifier === 'shift') {
+			fireEvent.click(row, { shiftKey: true });
+		} else {
+			fireEvent.click(row);
+		}
+		await tick();
+	}
+
+	beforeEach(() => {
+		(submitDecompressTask as Mock).mockClear();
+		(submitDecompressTask as Mock).mockResolvedValue({ taskID: 'task-8' });
+	});
+
+	it('is disabled for a non-archive file and enabled for a single archive', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		expect(decompressButton()).toBeDisabled();
+		await clickRow('myfiles.zip');
+		await waitFor(() => expect(decompressButton()).not.toBeDisabled());
+	});
+
+	it('is disabled for multiple selected directories', async () => {
+		await openAndRender();
+		await clickRow('documents', 'ctrl');
+		await clickRow('photos', 'ctrl');
+		expect(decompressButton()).toBeDisabled();
+	});
+
+	it('opens the modal showing the two extraction options', async () => {
+		await openAndRender();
+		await clickRow('myfiles.zip');
+		fireEvent.click(decompressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		expect(within(dialog()).getByText('Extract here')).toBeInTheDocument();
+		expect(within(dialog()).getByText(/Extract in .myfiles/)).toBeInTheDocument();
+	});
+
+	it('does not open the modal when nothing is selected', async () => {
+		await openAndRender();
+		fireEvent.click(decompressButton());
+		expect(screen.queryByTestId('decompress-dialog')).not.toBeInTheDocument();
+		expect(submitDecompressTask).not.toHaveBeenCalled();
+	});
+
+	it('confirms decompress, submits with an empty into, clears and flashes', async () => {
+		await openAndRender();
+		await clickRow('myfiles.zip');
+		fireEvent.click(decompressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Extract' }));
+		await tick();
+
+		await waitFor(() =>
+			expect(submitDecompressTask).toHaveBeenCalledWith(['/root/myfiles.zip'], '')
+		);
+		await waitFor(() => expect(decompressButton()).toBeDisabled());
+		await waitFor(() => expect(screen.getByText(/Extracting/i)).toBeInTheDocument());
+	});
+
+	it('submits the stem into for “Extract in …”', async () => {
+		await openAndRender();
+		await clickRow('myfiles.zip');
+		fireEvent.click(decompressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(dialog().querySelector('input[value="myfiles"]') as HTMLElement);
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Extract' }));
+
+		await waitFor(() =>
+			expect(submitDecompressTask).toHaveBeenCalledWith(['/root/myfiles.zip'], 'myfiles')
+		);
+	});
+
+	it('keeps the dialog open (no submit) when Cancel is pressed', async () => {
+		await openAndRender();
+		await clickRow('myfiles.zip');
+		fireEvent.click(decompressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Cancel' }));
+		await waitFor(() => expect(screen.queryByTestId('decompress-dialog')).not.toBeInTheDocument());
+		expect(submitDecompressTask).not.toHaveBeenCalled();
+		expect(decompressButton()).not.toBeDisabled();
 	});
 });
