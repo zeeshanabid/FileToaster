@@ -38,10 +38,11 @@ import (
 //     in auth.Middleware); the selected paths and a new name are read from the
 //     JSON request body. The first path is renamed to the exact name and the
 //     rest to "name (N)"; a clash aborts with 409 without touching anything.
-//   - POST /api/copy, POST /api/move, POST /api/delete : authenticated task
+//   - POST /api/copy, POST /api/move, POST /api/delete, POST /api/compress : authenticated task
 //     endpoints (wrapped in auth.Middleware); copy/move read `paths` and a
 //     `dest` from the body and move overwrites any same-named item at the
-//     destination; delete reads only `paths`.
+//     destination; delete reads only `paths`; compress reads `paths` and a
+//     `format` (zip, targz, tar) and writes a single archive in place.
 //   - everything else : the embedded SvelteKit SPA, served publicly so the login
 //     screen can load before any cookie exists. auth.Middleware is available to
 //     protect future data endpoints; the SPA shell itself must stay public.
@@ -83,10 +84,12 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	registerCopyOp(taskService, roots)
 	registerMoveOp(taskService, roots)
 	registerDeleteOp(taskService, roots)
+	registerCompressOp(taskService, roots)
 	taskSrv := protocol.NewServer(taskService, logger)
 	mux.Handle("POST /api/copy", guard.Middleware(http.HandlerFunc(taskSrv.ServeCopy)))
 	mux.Handle("POST /api/move", guard.Middleware(http.HandlerFunc(taskSrv.ServeMove)))
 	mux.Handle("POST /api/delete", guard.Middleware(http.HandlerFunc(taskSrv.ServeDelete)))
+	mux.Handle("POST /api/compress", guard.Middleware(http.HandlerFunc(taskSrv.ServeCompress)))
 	mux.Handle("GET /api/tasks", guard.Middleware(http.HandlerFunc(taskSrv.ServeTasksList)))
 	mux.Handle("GET /api/tasks/{id}", guard.Middleware(http.HandlerFunc(taskSrv.ServeTask)))
 	mux.Handle("POST /api/tasks/{id}/cancel", guard.Middleware(http.HandlerFunc(taskSrv.ServeCancel)))

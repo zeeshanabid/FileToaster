@@ -26,9 +26,10 @@ import {
 	clearClipboard,
 	setClipboard,
 	setCut,
-	submitCopyTask,
-	submitDeleteTask,
-	submitMoveTask
+		submitCopyTask,
+		submitDeleteTask,
+		submitMoveTask,
+		submitCompressTask
 } from '$lib/store/tasks';
 
 vi.mock('$lib/fs/api', () => ({
@@ -39,7 +40,7 @@ vi.mock('$lib/fs/api', () => ({
 	renameFile: vi.fn()
 }));
 
-// The tasks store is mocked so copy/paste/delete can be tested without a backend. The
+	// The tasks store is mocked so copy/paste/delete/compress can be tested without a backend. The
 // `clipboard` store is created inside the factory (where the imported `writable`
 // is available); the clipboard helpers mutate it to mimic the real module.
 vi.mock('$lib/store/tasks', () => {
@@ -66,7 +67,8 @@ vi.mock('$lib/store/tasks', () => {
 		}),
 		submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' })),
 		submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' })),
-		submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' }))
+		submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' })),
+		submitCompressTask: vi.fn(async () => ({ taskID: 'task-7' }))
 	};
 });
 
@@ -877,6 +879,100 @@ describe('Window delete', () => {
 		expect(submitDeleteTask).not.toHaveBeenCalled();
 		// Selection survives a cancel.
 		expect(deleteButton()).not.toBeDisabled();
+	});
+});
+
+describe('Window compress', () => {
+	function compressButton(): HTMLButtonElement {
+		return screen.getByLabelText('Compress') as HTMLButtonElement;
+	}
+	function dialog(): HTMLElement {
+		return screen.getByTestId('compress-dialog') as HTMLElement;
+	}
+	async function clickRow(name: string, modifier?: 'ctrl' | 'shift') {
+		const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+			.find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+		if (!row) throw new Error(`no row named ${name}`);
+		if (modifier === 'ctrl') {
+			fireEvent.click(row, { ctrlKey: true });
+		} else if (modifier === 'shift') {
+			fireEvent.click(row, { shiftKey: true });
+		} else {
+			fireEvent.click(row);
+		}
+		await tick();
+	}
+
+	beforeEach(() => {
+		(submitCompressTask as Mock).mockClear();
+		(submitCompressTask as Mock).mockResolvedValue({ taskID: 'task-7' });
+	});
+
+	it('is disabled until a row is selected, then enabled', async () => {
+		await openAndRender();
+		expect(compressButton()).toBeDisabled();
+		await clickRow('notes.txt');
+		await waitFor(() => expect(compressButton()).not.toBeDisabled());
+	});
+
+	it('opens the modal and shows the root-level selection count', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		await clickRow('documents', 'ctrl');
+
+		fireEvent.click(compressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		expect(within(dialog()).getByText(/Create a \.zip archive of 2 files in the current folder/)).toBeInTheDocument();
+		expect(within(dialog()).getByText('notes.txt')).toBeInTheDocument();
+		expect(within(dialog()).getByText('documents')).toBeInTheDocument();
+	});
+
+	it('does not open the modal when nothing is selected', async () => {
+		await openAndRender();
+		fireEvent.click(compressButton());
+		expect(screen.queryByTestId('compress-dialog')).not.toBeInTheDocument();
+		expect(submitCompressTask).not.toHaveBeenCalled();
+	});
+
+	it('confirms compress, submits the chosen format, clears selection, and flashes a status', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+		await clickRow('documents', 'ctrl');
+
+		fireEvent.click(compressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Compress' }));
+		await tick();
+
+		await waitFor(() =>
+			expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt', '/root/documents'], 'zip')
+		);
+
+		await waitFor(() => expect(compressButton()).toBeDisabled());
+		await waitFor(() => expect(screen.getByText(/Compressing/i)).toBeInTheDocument());
+	});
+
+	it('passes the format chosen in the dialog', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+
+		fireEvent.click(compressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByLabelText('GNU tar archive, gzip (.tar.gz)'));
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Compress' }));
+		await waitFor(() => expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt'], 'targz'));
+	});
+
+	it('keeps the dialog open (no submit) when Cancel is pressed', async () => {
+		await openAndRender();
+		await clickRow('notes.txt');
+
+		fireEvent.click(compressButton());
+		await waitFor(() => expect(dialog()).toBeInTheDocument());
+		fireEvent.click(within(dialog()).getByRole('button', { name: 'Cancel' }));
+		await waitFor(() => expect(screen.queryByTestId('compress-dialog')).not.toBeInTheDocument());
+		expect(submitCompressTask).not.toHaveBeenCalled();
+		expect(compressButton()).not.toBeDisabled();
 	});
 });
 

@@ -19,12 +19,14 @@ import {
 	setCut,
 	submitCopyTask,
 	submitDeleteTask,
-	submitMoveTask
+	submitMoveTask,
+	submitCompressTask
 } from '$lib/store/tasks';
 import FileIcon from './FileIcon.svelte';
 import InfoDialog from './InfoDialog.svelte';
 import ConfirmDelete from './ConfirmDelete.svelte';
 import ConfirmMove from './ConfirmMove.svelte';
+import ConfirmCompress from './ConfirmCompress.svelte';
 import { formatSize, formatDate } from '$lib/fs/format';
 
 	let { window: winProp }: { window: AppWindow } = $props();
@@ -342,6 +344,37 @@ import { formatSize, formatDate } from '$lib/fs/format';
 			if (res.taskID) flash(`Moving… (task ${res.taskID}).`);
 		} catch (err) {
 			flash(err instanceof Error ? err.message : 'could not move');
+		}
+	}
+
+	// --- compress: archive the current selection in place ----------------------
+	// `compressOpen` toggles the format-confirm modal; `compressEntries` (the
+	// selected rows) render inside it. Compress has no destination — the server
+	// writes the archive next to the selection and renames a colliding target, so
+	// there is nothing to prompt for beyond the chosen format.
+	let compressOpen = $state(false);
+	let compressEntries = $derived(
+		entries.filter((it) => selected.has(it.path)).map((it) => ({ path: it.path, name: it.name, type: it.type }))
+	);
+
+	function startCompress() {
+		if (selected.size === 0) {
+			flash('Select one or more items to compress.');
+			return;
+		}
+		compressOpen = true;
+	}
+	function cancelCompress() {
+		compressOpen = false;
+	}
+	async function confirmCompress(format: string) {
+		compressOpen = false;
+		try {
+			const res = await submitCompressTask([...selected], format);
+			clearSelection();
+			if (res.taskID) flash(`Compressing… (task ${res.taskID}).`);
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not compress');
 		}
 	}
 
@@ -672,6 +705,20 @@ import { formatSize, formatDate } from '$lib/fs/format';
 				<path d="M6 7l1 12h10l1-12" />
 			</svg>
 		</button>
+		<button
+			class="tool compress"
+			type="button"
+			title="Compress selected into an archive"
+			aria-label="Compress"
+			disabled={selected.size === 0}
+			onclick={startCompress}
+		>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+				<path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
+				<path d="M12 10v4m0 0-2-2m2 2 2-2" />
+				<path d="M9 18h6" />
+			</svg>
+		</button>
 		{#if editingNew}
 			<form class="new" onsubmit={() => confirmNewDir()}>
 				<input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
@@ -799,6 +846,14 @@ import { formatSize, formatDate } from '$lib/fs/format';
 
 	{#if moveOpen}
 		<ConfirmMove entries={$cutEntries} onClose={() => (moveOpen = false)} onConfirm={confirmMove} />
+	{/if}
+
+	{#if compressOpen}
+		<ConfirmCompress
+			entries={compressEntries}
+			onClose={cancelCompress}
+			onConfirm={confirmCompress}
+		/>
 	{/if}
 </div>
 

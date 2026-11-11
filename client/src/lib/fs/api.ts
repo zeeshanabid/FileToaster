@@ -90,6 +90,15 @@ export interface MoveMeta {
 	items: Array<{ src: string; dst: string }>;
 }
 
+// CompressMeta is the compress operation's plan, carried in a task's Meta field:
+// the archive format, the resolved in-place destination, and the number of
+// sources archived. It stays opaque to the client's task rendering.
+export interface CompressMeta {
+	format: string;
+	dest: string;
+	source: number;
+}
+
 export interface TaskListResponse {
 	tasks: Task[];
 }
@@ -106,6 +115,10 @@ export interface MoveResponse {
 	taskID?: string;
 }
 
+export interface CompressResponse {
+	taskID?: string;
+}
+
 export interface CopyTaskRequest {
 	paths: string[];
 	dest: string;
@@ -116,6 +129,11 @@ export interface MoveTaskRequest {
 	paths: string[];
 	dest: string;
 	conflict: string;
+}
+
+export interface CompressTaskRequest {
+	paths: string[];
+	format: string;
 }
 
 // apiError carries a UI-facing message from the server's `{"error": ...}` body.
@@ -250,6 +268,29 @@ export async function submitMove(req: MoveTaskRequest): Promise<MoveResponse> {
 		throw new ApiError(message);
 	}
 	return (await res.json()) as MoveResponse;
+}
+
+// submitCompress enqueues a compress task for `paths` into the chosen `format`
+// (zip, targz, tar). The archive is written in place by the server, renaming a
+// colliding target instead of prompting, so the request carries no overwrite
+// decision. It resolves to the server's response ({ taskID } on success) and
+// rejects on any other error.
+export async function submitCompress(req: CompressTaskRequest): Promise<CompressResponse> {
+	const res = await fetch('/api/compress', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `compress failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	return (await res.json()) as CompressResponse;
 }
 
 // cancelTask asks the server to stop a queued or running task (POST

@@ -87,6 +87,14 @@ describe('taskLabel', () => {
 	});
 
 	it('falls back to the bare operation type for unknown operations', () => {
-		expect(taskLabel(task({ id: '3', type: 'compress', status: 'running' }))).toBe('compress');
+		expect(taskLabel(task({ id: '3', type: 'foobar', status: 'running' }))).toBe('foobar');
+	});
+
+	it('describes a single-item compress by count', () => {
+		expect(taskLabel(task({ id: '6', type: 'compress', status: 'running', meta: { format: 'zip', dest: '/a/b.zip', source: 1 } }))).toBe('Compress');
+	});
+
+	it('describes a multi-item compress by count', () => {
+		expect(taskLabel(task({ id: '7', type: 'compress', status: 'running', meta: { format: 'zip', dest: '/a/b.zip', source: 4 } }))).toBe('Compress 4 items');
 	});
 });

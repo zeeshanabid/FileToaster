@@ -6,10 +6,12 @@ import {
 	submitCopy,
 	submitDelete,
 	submitMove,
+	submitCompress,
 	type Task,
 	type CopyMeta,
 	type DeleteMeta,
-	type MoveMeta
+	type MoveMeta,
+	type CompressMeta
 } from '$lib/fs/api';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
@@ -84,6 +86,13 @@ export function submitMoveTask(paths: string[], dest: string) {
 	return submitMove({ paths, dest, conflict: '' });
 }
 
+// submitCompressTask enqueues a compress task for `paths` into `format`
+// (zip, targz, tar). The archive is written in place and a colliding target is
+// renamed server-side, so no overwrite decision is passed.
+export function submitCompressTask(paths: string[], format: string) {
+	return submitCompress({ paths, format });
+}
+
 // cancelTaskAction asks the server to stop a queued or running task.
 export function cancelTaskAction(id: string) {
 	return apiCancel(id);
@@ -112,6 +121,11 @@ export function taskLabel(task: Task): string {
 			const n = meta?.items?.length ?? 1;
 			if (n === 1) return 'Move';
 			return `Move ${n} items`;
+		}
+		case 'compress': {
+			const meta = (task.meta ?? null) as CompressMeta | null;
+			const n = meta?.source ?? 1;
+			return n === 1 ? 'Compress' : `Compress ${n} items`;
 		}
 		default:
 			return task.type;

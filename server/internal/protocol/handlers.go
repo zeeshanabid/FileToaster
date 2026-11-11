@@ -24,6 +24,10 @@ import (
 // realistic selection without allowing unbounded reads.
 const maxCopyRequestSize = 4 << 20 // 4 MiB
 
+// maxCompressRequestSize bounds the compress request body (paths + format) far
+// above any realistic selection without allowing unbounded reads.
+const maxCompressRequestSize = 4 << 20 // 4 MiB
+
 // Server holds the handlers for the task engine.
 type Server struct {
 	svc    *service.Service
@@ -173,6 +177,59 @@ func moveStatus(err error) (int, string) {
 		return http.StatusInternalServerError, "the requested operation is not available"
 	default:
 		return http.StatusBadRequest, "could not move the selected items"
+	}
+}
+
+type compressRequest struct {
+	Paths  []string `json:"paths"`
+	Format string   `json:"format"`
+}
+
+// ServeCompress handles a compress request: it enqueues a compress task and
+// returns its id. The archive is written in place by the server (renaming a
+// colliding target), so no overwrite prompt or 409 is produced.
+func (s *Server) ServeCompress(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxCompressRequestSize))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+
+	var req compressRequest
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Paths) == 0 || strings.TrimSpace(req.Format) == "" {
+		writeError(w, http.StatusBadRequest, "the request requires 'paths' and a 'format'")
+		return
+	}
+
+	taskRec, err := s.svc.Submit(service.CompressOperation, body)
+	if err != nil {
+		status, message := compressStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"taskID": taskRec.ID})
+}
+
+// compressStatus maps an operation failure to an HTTP status and user-facing
+// message. An unsupported format surfaces the human "supported: ..." message
+// rather than a panic.
+func compressStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the selected path is outside the allowed folders"
+	case errors.Is(err, ops.CompressArchiveFormatUnsupported):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, ops.ErrEmptyPaths),
+		errors.Is(err, ops.CompressErrDifferentDirectories),
+		errors.Is(err, ops.CompressErrOverlappingSelection):
+		return http.StatusBadRequest, "could not compress the selected items"
+	case errors.Is(err, task.ErrShuttingDown):
+		return http.StatusServiceUnavailable, "the server is shutting down; please try again later"
+	case errors.Is(err, service.ErrUnknownOperation):
+		return http.StatusInternalServerError, "the requested operation is not available"
+	default:
+		return http.StatusBadRequest, "could not compress the selected items"
 	}
 }
 
