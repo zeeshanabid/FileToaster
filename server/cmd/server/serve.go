@@ -34,6 +34,10 @@ import (
 //   - POST /api/fs/info : authenticated information endpoint (wrapped in
 //     auth.Middleware); the selected paths are read from the JSON request body
 //     and their recursive size/file/dir counts and permissions are returned.
+//   - POST /api/fs/rename : authenticated synchronous rename endpoint (wrapped
+//     in auth.Middleware); the selected paths and a new name are read from the
+//     JSON request body. The first path is renamed to the exact name and the
+//     rest to "name (N)"; a clash aborts with 409 without touching anything.
 //   - POST /api/copy, POST /api/move, POST /api/delete : authenticated task
 //     endpoints (wrapped in auth.Middleware); copy/move read `paths` and a
 //     `dest` from the body and move overwrites any same-named item at the
@@ -62,6 +66,9 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	})))
 	mux.Handle("POST /api/fs/mkdir", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveFsMkdir(w, r, fsCfg)
+	})))
+	mux.Handle("POST /api/fs/rename", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveFsRename(w, r, fsCfg)
 	})))
 	mux.Handle("POST /api/fs/info", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveFsInfo(w, r, fsCfg)

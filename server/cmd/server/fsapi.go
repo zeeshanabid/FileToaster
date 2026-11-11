@@ -167,6 +167,56 @@ func serveFsMkdir(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
 	writeJSON(w, http.StatusCreated, map[string]any{"path": created})
 }
 
+// renameStatus maps a Rename failure to a status and message, reusing the
+// containment rule but with rename-oriented wording for the other cases.
+func renameStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the requested location is outside the allowed folders"
+	case errors.Is(err, fs.RenameExists):
+		return http.StatusConflict, "a file or folder with that name already exists"
+	case errors.Is(err, fs.RenameEmptyName):
+		return http.StatusBadRequest, "a rename name is required"
+	case errors.Is(err, fs.RenameInvalidName):
+		return http.StatusBadRequest, "the rename name is not valid"
+	case errors.Is(err, fs.RenameNoPaths):
+		return http.StatusBadRequest, "select one or more items to rename"
+	default:
+		return http.StatusBadRequest, "could not rename the selected item"
+	}
+}
+
+type fsRenameRequest struct {
+	Paths []string `json:"paths"`
+	Name  string   `json:"name"`
+}
+
+// serveFsRename renames the selected paths to `name` (the first to the exact
+// name, the rest to "name (N)"), confined to the allowed roots. It returns 200
+// on success or a typed error status. Like mkdir, this is a synchronous single
+// response, not a tracked task.
+func serveFsRename(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFsRequestSize)
+	var req fsRenameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "the 'paths' and 'name' request fields are required")
+		return
+	}
+	if len(req.Paths) == 0 || strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, "the 'paths' and 'name' request fields are required")
+		return
+	}
+
+	roots := fs.NewRoots(pathsOf(cfg)...)
+	if err := fs.Rename(roots, req.Name, req.Paths); err != nil {
+		status, message := renameStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // fsInfoRequest is the JSON body of an information POST. It carries the list of
 // selected paths (files and/or directories) to describe.
 type fsInfoRequest struct {
