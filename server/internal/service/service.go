@@ -25,6 +25,9 @@ const DeleteOperation = "delete"
 // CompressOperation is the operation key registered for compress.
 const CompressOperation = "compress"
 
+// DecompressOperation is the operation key registered for decompress.
+const DecompressOperation = "decompress"
+
 // Op is a pluggable file operation. Prepare validates and resolves the request
 // body into an opaque spec and returns its serializable meta (shown in the task
 // record); Run executes the prepared spec.

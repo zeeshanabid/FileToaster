@@ -233,6 +233,59 @@ func compressStatus(err error) (int, string) {
 	}
 }
 
+type decompressRequest struct {
+	Paths []string `json:"paths"`
+	Into  string   `json:"into"`
+}
+
+// ServeDecompress handles a decompress request: it enqueues a decompress task
+// and returns its id. The archive is read-only and extracted into a sibling of
+// the archive, so no overwrite prompt or 409 is produced.
+func (s *Server) ServeDecompress(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxCompressRequestSize))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+
+	var req decompressRequest
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Paths) != 1 {
+		writeError(w, http.StatusBadRequest, "the request requires exactly one 'path'")
+		return
+	}
+
+	taskRec, err := s.svc.Submit(service.DecompressOperation, body)
+	if err != nil {
+		status, message := decompressStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"taskID": taskRec.ID})
+}
+
+// decompressStatus maps an operation failure to an HTTP status and user-facing
+// message. An unsupported format surfaces the human "supported: ..." message
+// rather than a panic.
+func decompressStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the selected path is outside the allowed folders"
+	case errors.Is(err, ops.DecompressUnsupportedFormat):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, ops.DecompressMultiplePaths),
+		errors.Is(err, ops.DecompressArchiveTraversal),
+		errors.Is(err, ops.ErrEmptyPaths):
+		return http.StatusBadRequest, "could not decompress the selected archive"
+	case errors.Is(err, task.ErrShuttingDown):
+		return http.StatusServiceUnavailable, "the server is shutting down; please try again later"
+	case errors.Is(err, service.ErrUnknownOperation):
+		return http.StatusInternalServerError, "the requested operation is not available"
+	default:
+		return http.StatusBadRequest, "could not decompress the selected archive"
+	}
+}
+
 // ServeTasksList returns the snapshot of every tracked task, oldest first.
 func (s *Server) ServeTasksList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": s.svc.Snapshot()})
