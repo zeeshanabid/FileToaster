@@ -70,6 +70,8 @@ Milestones 0–1 (config + auth) + Frontend POC + **Directory listing** implemen
 `allowed_paths` is a list of `{name, path, env}` entries; `internal/fs` confines
 paths to the allowed roots; `/api/fs` + `/api/fs/roots` (authenticated POSTs) list directories; the
 resizable `Window.svelte` file-manager window (tree view, sortable list, status
-bar) loads from the server. Auth, the task engine, fs fileset ops, compression,
-upload, protocol, the full DnD/conflict/SSE window manager, and packaging remain.
+bar) loads from the server. Auth, the task engine, fs fileset ops, compression +
+decompression (stdlib zip / tar / tar.gz; the Decompress button applies to a single
+archive file and extracts here or into a sibling folder), upload, protocol, the full
+DnD/conflict/SSE window manager, and packaging remain.
 See `TASKS.md`.
