@@ -66,12 +66,15 @@ Required env: `FILETOASTER_SESSION_SECRET`. Optional: `FILETOASTER_ADMIN_PASSWOR
 
 ## Status
 
-Milestones 0–1 (config + auth) + Frontend POC + **Directory listing** implemented.
-`allowed_paths` is a list of `{name, path, env}` entries; `internal/fs` confines
-paths to the allowed roots; `/api/fs` + `/api/fs/roots` (authenticated POSTs) list directories; the
-resizable `Window.svelte` file-manager window (tree view, sortable list, status
-bar) loads from the server. Auth, the task engine, fs fileset ops, compression +
-decompression (stdlib zip / tar / tar.gz; the Decompress button applies to a single
-archive file and extracts here or into a sibling folder), upload, protocol, the full
-DnD/conflict/SSE window manager, and packaging remain.
+ Milestones 0–1 (config + auth) + Frontend POC + **Directory listing** implemented.
+ `allowed_paths` is a list of `{name, path, env}` entries; `internal/fs` confines
+ paths to the allowed roots; `/api/fs` + `/api/fs/roots` (authenticated POSTs) list directories; the
+ resizable `Window.svelte` file-manager window (tree view, sortable list, status
+ bar) loads from the server. Auth, the task engine, fs fileset ops, compression +
+ decompression (stdlib zip / tar / tar.gz; the Decompress button applies to a single
+ archive file and extracts here or into a sibling folder), the full protocol layer
+ (copy / move / delete / compress / decompress endpoints, cancel, SSE task stream),
+ and **chunked + resumable upload** (drag-and-drop + toolbar button, per-chunk PUT,
+ resume after refresh) are implemented. The full DnD/conflict window manager and
+ packaging remain.
 See `TASKS.md`.
