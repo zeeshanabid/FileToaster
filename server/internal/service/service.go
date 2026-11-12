@@ -28,6 +28,10 @@ const CompressOperation = "compress"
 // DecompressOperation is the operation key registered for decompress.
 const DecompressOperation = "decompress"
 
+// UploadOperation is the operation key registered for the upload finalize step
+// (a tracked copy from the staging dir into the target).
+const UploadOperation = "upload"
+
 // Op is a pluggable file operation. Prepare validates and resolves the request
 // body into an opaque spec and returns its serializable meta (shown in the task
 // record); Run executes the prepared spec.
