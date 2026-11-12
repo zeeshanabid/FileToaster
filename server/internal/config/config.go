@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"filetoaster/internal/auth"
 
@@ -63,6 +64,24 @@ type Config struct {
 	GOMAXPROCS int `yaml:"gomaxprocs"`
 	// TMPDir stages uploads. It is intentionally outside AllowedPaths.
 	TMPDir string `yaml:"tmp_dir"`
+	// UploadStaleAfter is how many hours a staged upload dir is tolerated before
+	// the background sweep removes it (and its in-memory session). Must be at
+	// least 1 hour; 0 or negative makes the sweep remove every staged upload at
+	// once, which defeats resume.
+	UploadStaleAfter int `yaml:"upload_stale_after"`
+	// UploadSweepInterval is how often the background sweep runs, in hours.
+	UploadSweepInterval int `yaml:"upload_sweep_interval"`
+	// UploadChunkSize is the fixed per-file chunk size (in bytes) the server
+	// advertises for chunked uploads. The client slices every file with this
+	// value and re-sends only missing chunks, so the client and server must agree;
+	// the client reads it from GET /api/config. Must be positive.
+	UploadChunkSize int64 `yaml:"upload_chunk_size"`
+	// UploadMaxConcurrentChunks bounds how many chunks a client uploads at once,
+	// across every file and every active session (a global limit, not per file).
+	// It caps the number of simultaneous upload requests the browser opens, which
+	// avoids resource-exhaustion failures (net::ERR_INSUFFICIENT_RESOURCES) when
+	// uploading large files. Must be at least 1.
+	UploadMaxConcurrentChunks int `yaml:"upload_max_concurrent_chunks"`
 	// SessionSecret signs the session cookie. Required.
 	SessionSecret string `yaml:"session_secret"`
 	// AdminUser is the admin username accepted at login. Empty falls back to
@@ -83,11 +102,15 @@ type Config struct {
 // DefaultConfig returns settings filled with documented defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Addr:             ":8080",
-		MaxParallelTasks: 4,
-		ShutdownTimeout:  30,
-		GOMAXPROCS:       0,
-		TMPDir:           filepath.Join(os.TempDir(), "filetoaster-uploads"),
+		Addr:                      ":8080",
+		MaxParallelTasks:          4,
+		ShutdownTimeout:           30,
+		GOMAXPROCS:                0,
+		TMPDir:                    filepath.Join(os.TempDir(), "filetoaster-uploads"),
+		UploadStaleAfter:          24,
+		UploadSweepInterval:       1,
+		UploadChunkSize:           4 << 20, // 4 MiB
+		UploadMaxConcurrentChunks: 4,
 	}
 }
 
@@ -176,6 +199,22 @@ shutdown_timeout_seconds: 30
 # Set to true to enable debug logging (defaults to info).
 debug: false
 tmp_dir: %s
+# How many hours a staged upload is tolerated before the background sweep
+# removes its staging dir and session. Must be at least 1 hour; 0 or negative
+# makes the sweep remove every staged upload at once (defeating resume).
+# Default 24.
+upload_stale_after: 24
+# How often the background upload sweep runs, in hours. Default 1.
+upload_sweep_interval: 1
+# Fixed size, in bytes, of each per-file upload chunk. The client slices files
+# with this value and re-sends only missing chunks, so the client and server
+# must agree (the client reads it from GET /api/config). Default 4 MiB.
+upload_chunk_size: 4194304
+# Maximum number of upload chunks sent at once, across every file and session
+# (a global limit, not per file). Caps simultaneous upload requests in the
+# browser to avoid resource-exhaustion failures when uploading large files.
+# Default 4.
+upload_max_concurrent_chunks: 4
 # Session secret signs the login cookie. A random value was generated here;
 # you can also override it via the FILETOASTER_SESSION_SECRET env var.
 session_secret: %s
@@ -299,6 +338,26 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("FILETOASTER_TMP_DIR"); v != "" {
 		c.TMPDir = v
+	}
+	if v := os.Getenv("FILETOASTER_UPLOAD_STALE_AFTER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.UploadStaleAfter = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_UPLOAD_SWEEP_INTERVAL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.UploadSweepInterval = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_UPLOAD_CHUNK_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.UploadChunkSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_UPLOAD_MAX_CONCURRENT_CHUNKS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.UploadMaxConcurrentChunks = n
+		}
 	}
 	if v := os.Getenv("FILETOASTER_SESSION_SECRET"); v != "" {
 		c.SessionSecret = v
@@ -427,6 +486,22 @@ func (c *Config) Validate() error {
 	}
 	if c.TMPDir == "" {
 		errs = append(errs, "tmp_dir must not be empty")
+	} else if info, err := os.Stat(c.TMPDir); err != nil {
+		errs = append(errs, fmt.Sprintf("tmp_dir %q does not exist or is not accessible: %v", c.TMPDir, err))
+	} else if !info.IsDir() {
+		errs = append(errs, fmt.Sprintf("tmp_dir %q is not a directory", c.TMPDir))
+	}
+	if c.UploadStaleAfter < 1 {
+		errs = append(errs, "upload_stale_after must be at least 1 hour")
+	}
+	if c.UploadSweepInterval < 1 {
+		errs = append(errs, "upload_sweep_interval must be at least 1 hour")
+	}
+	if c.UploadChunkSize <= 0 {
+		errs = append(errs, "upload_chunk_size must be a positive number of bytes")
+	}
+	if c.UploadMaxConcurrentChunks < 1 {
+		errs = append(errs, "upload_max_concurrent_chunks must be at least 1")
 	}
 
 	if len(errs) > 0 {
@@ -447,4 +522,16 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// UploadStaleAfterDuration converts the integer-hours UploadStaleAfter into a
+// duration (hours * time.Hour).
+func (c *Config) UploadStaleAfterDuration() time.Duration {
+	return time.Duration(c.UploadStaleAfter) * time.Hour
+}
+
+// UploadSweepIntervalDuration converts the integer-hours UploadSweepInterval
+// into a duration (hours * time.Hour).
+func (c *Config) UploadSweepIntervalDuration() time.Duration {
+	return time.Duration(c.UploadSweepInterval) * time.Hour
 }

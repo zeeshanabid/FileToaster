@@ -12,6 +12,7 @@ import (
 // boots the built-in admin/admin credentials.
 func TestWriteDefaultConfigAdminCredentials(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("FILETOASTER_TMP_DIR", t.TempDir())
 	if _, err := WriteDefaultConfig(path); err != nil {
 		t.Fatalf("WriteDefaultConfig: %v", err)
 	}

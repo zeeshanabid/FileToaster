@@ -73,11 +73,17 @@ func TestValidateAllGood(t *testing.T) {
 func TestValidateErrors(t *testing.T) {
 	root := t.TempDir()
 	cases := map[string]*Config{
-		"empty addr":           {Addr: "", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir()},
-		"bad addr":             {Addr: ":::not-an-addr", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir()},
-		"no allowed_paths":     {Addr: ":8080", SessionSecret: "x", TMPDir: t.TempDir()},
-		"missing secret":       {Addr: ":8080", AllowedPaths: allowedOne(root), TMPDir: t.TempDir()},
-		"bad tmp_dir":          {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: ""},
+		"empty addr":          {Addr: "", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir()},
+		"bad addr":            {Addr: ":::not-an-addr", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir()},
+		"no allowed_paths":    {Addr: ":8080", SessionSecret: "x", TMPDir: t.TempDir()},
+		"missing secret":      {Addr: ":8080", AllowedPaths: allowedOne(root), TMPDir: t.TempDir()},
+		"bad tmp_dir":         {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: ""},
+		"nonexistent tmp_dir": {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: filepath.Join(t.TempDir(), "nope")},
+		"tmp_dir is a file": func() *Config {
+			f := filepath.Join(t.TempDir(), "afile")
+			os.WriteFile(f, []byte("x"), 0o600)
+			return &Config{Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: f}
+		}(),
 		"zero tasks":           {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), MaxParallelTasks: 0},
 		"negative shutdown":    {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), ShutdownTimeout: -1},
 		"negative gc":          {Addr: ":8080", AllowedPaths: allowedOne(root), SessionSecret: "x", TMPDir: t.TempDir(), GOMAXPROCS: -1},
@@ -186,6 +192,7 @@ func TestResolveConfigPath_ExplicitMissing(t *testing.T) {
 
 func TestResolveConfigPath_AutoCreate(t *testing.T) {
 	t.Setenv("FILETOASTER_CONFIG", "")
+	t.Setenv("FILETOASTER_TMP_DIR", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Chdir(t.TempDir())
@@ -221,6 +228,7 @@ func TestResolveConfigPath_AutoCreate(t *testing.T) {
 func TestWriteDefaultConfig_Loads(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("FILETOASTER_TMP_DIR", t.TempDir())
 	path := filepath.Join(home, ".filetoaster", "config.yaml")
 	got, err := WriteDefaultConfig(path)
 	if err != nil {
@@ -243,7 +251,8 @@ func TestWriteDefaultConfig_Loads(t *testing.T) {
 
 func TestDebugEnvOverride(t *testing.T) {
 	t.Setenv("FILETOASTER_DEBUG", "true")
-	cfg, err := Load(writeConfig(t, "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+t.TempDir()+"\n"))
+	tmp := t.TempDir()
+	cfg, err := Load(writeConfig(t, "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+t.TempDir()+"\ntmp_dir: "+tmp+"\n"))
 	if err != nil {
 		t.Fatalf("Load = %v", err)
 	}
@@ -271,7 +280,7 @@ func TestLoadValid(t *testing.T) {
 
 func TestLoadFillsDefaults(t *testing.T) {
 	// Omits addr and max_parallel_tasks; defaults should apply.
-	yaml := "allowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\nsession_secret: x\n"
+	yaml := "allowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\nsession_secret: x\ntmp_dir: " + t.TempDir() + "\n"
 	cfg, err := Load(writeConfig(t, yaml))
 	if err != nil {
 		t.Fatalf("Load = %v", err)
@@ -325,6 +334,43 @@ func TestLoadMissingSecret(t *testing.T) {
 	}
 }
 
+func TestLoadMissingTmpDir(t *testing.T) {
+	// A non-existent tmp_dir must be rejected at startup, before the server
+	// binds or auto-creates anything.
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
+		"tmp_dir: " + filepath.Join(t.TempDir(), "nope") + "\n"
+	_, err := Load(writeConfig(t, yaml))
+	if err == nil {
+		t.Fatal("Load = nil, want validation error for missing tmp_dir")
+	}
+	if !strings.Contains(err.Error(), "tmp_dir") || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error = %q, want it to mention tmp_dir not existing", err.Error())
+	}
+}
+
+// TestValidateTmpDirMustBeDirectory verifies a tmp_dir that exists but is a file
+// (not a directory) is rejected at startup.
+func TestValidateTmpDirMustBeDirectory(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write tmp file: %v", err)
+	}
+	cfg := &Config{
+		Addr:          ":8080",
+		AllowedPaths:  allowedOne(root),
+		SessionSecret: "x",
+		TMPDir:        file,
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate = nil, want error for tmp_dir that is not a directory")
+	}
+	if !strings.Contains(err.Error(), "tmp_dir") || !strings.Contains(err.Error(), "is not a directory") {
+		t.Errorf("error = %q, want it to mention tmp_dir is not a directory", err.Error())
+	}
+}
+
 func TestApplyEnvOverrides(t *testing.T) {
 	root := t.TempDir()
 	tmp := t.TempDir()
@@ -363,7 +409,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 
 func TestShutdownTimeoutDefault(t *testing.T) {
 	// No YAML and no env: the documented default applies.
-	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\ntmp_dir: " + t.TempDir() + "\n"
 	cfg, err := Load(writeConfig(t, yaml))
 	if err != nil {
 		t.Fatalf("Load = %v", err)
@@ -376,7 +422,8 @@ func TestShutdownTimeoutDefault(t *testing.T) {
 func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
 	t.Run("from file", func(t *testing.T) {
 		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
-			"shutdown_timeout_seconds: 5\n"
+			"shutdown_timeout_seconds: 5\n" +
+			"tmp_dir: " + t.TempDir() + "\n"
 		cfg, err := Load(writeConfig(t, yaml))
 		if err != nil {
 			t.Fatalf("Load = %v", err)
@@ -389,7 +436,8 @@ func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
 	t.Run("env overrides file", func(t *testing.T) {
 		t.Setenv("FILETOASTER_SHUTDOWN_TIMEOUT", "120")
 		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
-			"shutdown_timeout_seconds: 5\n"
+			"shutdown_timeout_seconds: 5\n" +
+			"tmp_dir: " + t.TempDir() + "\n"
 		cfg, err := Load(writeConfig(t, yaml))
 		if err != nil {
 			t.Fatalf("Load = %v", err)
@@ -401,7 +449,7 @@ func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
 
 	t.Run("non-integer env ignored", func(t *testing.T) {
 		t.Setenv("FILETOASTER_SHUTDOWN_TIMEOUT", "not-a-number")
-		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
+		yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\ntmp_dir: " + t.TempDir() + "\n"
 		cfg, err := Load(writeConfig(t, yaml))
 		if err != nil {
 			t.Fatalf("Load = %v", err)

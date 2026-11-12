@@ -38,8 +38,30 @@ debug: false
 gomaxprocs: 0
 
 # Directory used to stage uploads. Deliberately OUTSIDE the served roots so
-# incomplete uploads never appear in listings.
+# incomplete uploads never appear in listings. The directory must already exist;
+# the server refuses to start if it is missing.
 tmp_dir: /tmp/filetoaster-uploads
+
+# Fixed size, in bytes, of each per-file upload chunk. The client slices files
+# with this value and re-sends only missing chunks, so the client and server
+# must agree (the client reads it from GET /api/config). Default 4 MiB.
+upload_chunk_size: 4194304
+
+# Maximum number of upload chunks sent at once, across every file and session
+# (a global limit, not per file). Caps simultaneous upload requests in the
+# browser to avoid resource-exhaustion failures when uploading large files.
+# Default 4.
+upload_max_concurrent_chunks: 4
+
+# How many hours a staged upload is tolerated before the background sweep removes
+# its staging dir and in-memory session. Must be at least 1 hour; 0 or negative
+# makes the sweep remove every staged upload at once, defeating resume.
+# Default 24.
+upload_stale_after: 24
+
+# How often the background upload sweep runs, in hours. Must be at least 1.
+# Default 1.
+upload_sweep_interval: 1
 
 # HMAC secret used to sign the session cookie. Required. Prefer setting it via
 # the FILETOASTER_SESSION_SECRET environment variable.
