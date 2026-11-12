@@ -54,6 +54,13 @@ export class FileTree {
 		return listing.entries.filter((e) => e.type === 'dir').sort(byName);
 	}
 
+	// entries returns the full listing (files and directories) of a path from
+	// cache, used to expand a directory selection into a file manifest.
+	entries(path: string): Entry[] {
+		const listing = this.cache.get(path);
+		return listing ? listing.entries : [];
+	}
+
 	isExpanded(windowId: string, path: string): boolean {
 		return this.expanded.get(windowId)?.has(path) ?? false;
 	}

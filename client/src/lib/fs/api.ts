@@ -344,3 +344,203 @@ export async function cancelTask(id: string): Promise<void> {
 		{}
 	);
 }
+
+// --- Upload (chunked + resumable) -------------------------------------------
+// Upload sends selected files and directories recursively into a destination
+// folder, chunked per file into fixed-size blobs, in a resumable session. A
+// session is created (POST /api/uploads), chunks are ingested with PUT
+// /api/uploads/{id}/chunk, the session status (GET) reports which chunks are
+// present for resume, and DELETE aborts ingestion (chunks kept). Completion
+// auto-triggers a tracked finalize op of type "upload"; the session id returned
+// by createUpload is reused as the finalize task id from then on.
+
+// UploadFile is one file in an upload manifest: its path relative to the upload
+// root, its size in bytes, and the chunk count the client sliced it into
+// (informational; the server recomputes it from size and chunk size).
+export interface UploadFile {
+	rel: string;
+	size: number;
+	chunks: number;
+	// blob is the actual file content, present when the manifest was built from
+	// live files (the picker or a drop). Uploads slice real bytes from it; it is
+	// absent for purely metadata manifests (e.g. the in-window tree cache, or a
+	// resumed session whose bytes live in localStorage), where the manager falls
+	// back to the assembled `received` buffer instead.
+	blob?: Blob;
+}
+
+// UploadManifest describes what an upload carries: the files (in manifest order)
+// and the relative directory paths (including empty ones) to recreate at the
+// destination on finalize.
+export interface UploadManifest {
+	files: UploadFile[];
+	dirs: string[];
+}
+
+// UploadStatus is the resumable snapshot the server returns per session: chunk
+// counts and totals let a client re-send only the chunks it has not yet sent.
+export interface UploadStatus {
+	chunkSize: number;
+	totalChunks: number;
+	receivedChunks: number;
+	totalBytes: number;
+	receivedBytes: number;
+}
+
+// UploadMeta is the finalize op's meta, carried in the "upload" task's Meta
+// field: the phase flag ("finalizing") drives the staged-vs-copy task label and
+// files counts the uploaded items.
+export interface UploadMeta {
+	staging: string;
+	dest: string;
+	phase: string;
+	files: number;
+}
+
+export interface UploadResponse {
+	taskID?: string;
+}
+
+// UploadChunkResponse is what a chunk ingest returns: normally the resumable
+// status (so the client can resume), but once the final chunk completes the
+// server enqueues the tracked finalize op and returns its taskID instead.
+export type UploadChunkResponse = UploadStatus & { taskID?: string };
+
+export interface CreateUploadRequest {
+	dest: string;
+	chunkSize: number;
+	files: UploadFile[];
+	dirs: string[];
+}
+
+// UploadConfig is the upload sizing the server advertises (GET /api/config):
+// the fixed per-file chunk size the client must slice with, and the maximum
+// number of chunks to upload at once across every file and session (a global
+// limit that caps simultaneous upload requests in the browser). The client
+// fetches this once at startup so the client and server agree on the chunk size
+// (the server recomputes chunk counts from it) and stay within the concurrency
+// limit that avoids resource-exhaustion upload failures.
+export interface UploadConfig {
+	uploadChunkSize: number;
+	maxConcurrentChunkUploads: number;
+}
+
+// DEFAULT_CHUNK_SIZE is the per-file chunk size the client uploads with when the
+// server does not override it (4 MiB, matching the server default).
+export const DEFAULT_CHUNK_SIZE = 4 << 20;
+
+// chunkCountForFile returns the number of fixed-size chunks a file needs at
+// `chunkSize`. A non-empty chunk size always yields at least one chunk, so even
+// a zero-byte file is uploaded as a single empty chunk.
+export function chunkCountForFile(size: number, chunkSize: number): number {
+	if (chunkSize <= 0) return 1;
+	const n = Math.ceil(size / chunkSize);
+	return Math.max(1, n);
+}
+
+// createUpload starts a resumable upload session into `dest`. It resolves to the
+// server's response ({ taskID } on success) and rejects on any other error. The
+// taskID is the session id, reused as the finalize task id once ingestion
+// completes.
+export async function createUpload(req: CreateUploadRequest): Promise<UploadResponse> {
+	const res = await fetch('/api/uploads', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `upload failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	return (await res.json()) as UploadResponse;
+}
+
+// uploadChunk ingests one chunk for the session. `blob` is the sliced chunk
+// (its byte length must equal chunkSize, or be the trailing partial chunk). It
+// resolves to the server's resumable status after the write.
+export async function uploadChunk(
+	taskID: string,
+	fileIdx: number,
+	chunkIdx: number,
+	blob: Blob
+): Promise<UploadChunkResponse> {
+	const res = await fetch(
+		`/api/uploads/${encodeURIComponent(taskID)}/chunk?file=${fileIdx}&index=${chunkIdx}`,
+		{
+			method: 'PUT',
+			credentials: 'include',
+			body: blob
+		}
+	);
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `chunk upload failed (${res.status})`;
+		throw new ApiError(message);
+	}
+	if (res.status === 200 || res.status === 202) {
+		return (await res.json()) as UploadStatus;
+	}
+	return { chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0 };
+}
+
+// getUploadStatus returns the resumable snapshot for a session so a client can
+// determine which chunks remain to be sent.
+export async function getUploadStatus(taskID: string): Promise<UploadStatus> {
+	const res = await fetch(`/api/uploads/${encodeURIComponent(taskID)}`, {
+		credentials: 'include'
+	});
+	if (!res.ok) {
+		throw new ApiError(`upload status failed (${res.status})`);
+	}
+	return (await res.json()) as UploadStatus;
+}
+
+// cancelUpload aborts ingestion for a session. Chunks already received are kept
+// (the upload stays resumable); the staging dir and session are reclaimed only
+// after the server's age threshold.
+export async function cancelUpload(taskID: string): Promise<void> {
+	const res = await fetch(`/api/uploads/${encodeURIComponent(taskID)}`, {
+		method: 'DELETE',
+		credentials: 'include'
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+		const message =
+			typeof payload.error === 'string' && payload.error
+				? payload.error
+				: `upload cancel failed (${res.status})`;
+		throw new ApiError(message);
+	}
+}
+
+// fetchUploadConfig returns the upload sizing the server wants the client to use:
+// the fixed per-file chunk size and the maximum number of chunks to upload at
+// once. Values fall back to the client defaults (DEFAULT_CHUNK_SIZE, 1) when the
+// server omits or clutters them, so a missing endpoint never breaks uploads.
+export async function fetchUploadConfig(): Promise<UploadConfig> {
+	const res = await fetch('/api/config', { credentials: 'include' });
+	if (!res.ok) {
+		throw new ApiError(`could not load upload config (${res.status})`);
+	}
+	const data = (await res.json()) as {
+		uploadChunkSize?: number;
+		maxConcurrentChunkUploads?: number;
+	};
+	const chunkSize =
+		typeof data.uploadChunkSize === 'number' && data.uploadChunkSize > 0
+			? data.uploadChunkSize
+			: DEFAULT_CHUNK_SIZE;
+	const maxConcurrent =
+		typeof data.maxConcurrentChunkUploads === 'number' && data.maxConcurrentChunkUploads > 0
+			? data.maxConcurrentChunkUploads
+			: 1;
+	return { uploadChunkSize: chunkSize, maxConcurrentChunkUploads: maxConcurrent };
+}

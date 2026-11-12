@@ -9,11 +9,17 @@ import type { Task } from '$lib/fs/api';
 // The live SSE path lives entirely inside tasks.ts and is exercised through the
 // exported store + initTasks. We mock the api module (its `listTasks` is used by
 // the initial snapshot) and stub the global `fetch` used by the SSE connector.
-vi.mock('$lib/fs/api', () => ({
-	listTasks: vi.fn(),
-	cancelTask: vi.fn(),
-	submitCopy: vi.fn()
-}));
+	vi.mock('$lib/fs/api', () => ({
+		listTasks: vi.fn(),
+		cancelTask: vi.fn(),
+		submitCopy: vi.fn(),
+		createUpload: vi.fn(),
+		uploadChunk: vi.fn(),
+		getUploadStatus: vi.fn(),
+		cancelUpload: vi.fn(),
+		chunkCountForFile: vi.fn(() => 1),
+		DEFAULT_CHUNK_SIZE: 4 << 20
+	}));
 
 const listTasksMock = listTasks as unknown as Mock;
 const enc = new TextEncoder();

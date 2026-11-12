@@ -9,6 +9,8 @@
 	import ChangePassword from '$lib/components/ChangePassword.svelte';
 	import { windows } from '$lib/store/windows';
 	import { auth, login, checkSession } from '$lib/store/auth';
+	import { uploadManager } from '$lib/fs/upload';
+	import { fetchUploadConfig } from '$lib/fs/api';
 
 	type LoginDetail = { username: string; password: string };
 	async function handleLogin(event: CustomEvent<LoginDetail>) {
@@ -29,6 +31,19 @@
 	onMount(() => {
 		if (browser) {
 			void checkSession();
+			// Read the server's upload sizing once and configure the shared
+			// UploadManager so file slicing and the global concurrency limit match
+			// the server (and stay within the limits that avoid upload failures).
+			fetchUploadConfig()
+				.then(({ uploadChunkSize, maxConcurrentChunkUploads }) => {
+					uploadManager.configure({
+						chunkSize: uploadChunkSize,
+						maxConcurrent: maxConcurrentChunkUploads
+					});
+				})
+				.catch(() => {
+					// A missing/unreachable config falls back to the manager defaults.
+				});
 		}
 	});
 </script>

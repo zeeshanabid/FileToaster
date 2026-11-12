@@ -13,9 +13,11 @@ import {
 	type DeleteMeta,
 	type MoveMeta,
 	type CompressMeta,
-	type DecompressMeta
+	type DecompressMeta,
+	type UploadMeta
 } from '$lib/fs/api';
 import { archiveStem } from '$lib/fs/archive';
+import { uploadStoreKey } from '$lib/fs/upload';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
 // by an initial snapshot from /api/tasks and then by deltas over the SSE stream
@@ -144,6 +146,18 @@ export function taskLabel(task: Task): string {
 			const stem = archiveStem(raw.split('/').filter(Boolean).pop() ?? raw);
 			return `Extract ${stem || 'archive'}`;
 		}
+		case 'upload': {
+			// The finalize op's meta carries the phase flag ("finalizing", set when
+			// the tracked copy begins) and the item count. During staging there is
+			// no task yet, so an "upload" task always means copy is in progress; a
+			// missing phase still falls back to a generic upload label.
+			const meta = (task.meta ?? null) as UploadMeta | null;
+			const n = meta?.files ?? 1;
+			if (meta?.phase === 'finalizing') {
+				return n === 1 ? 'Finalizing upload' : `Finalizing upload of ${n} items`;
+			}
+			return n === 1 ? 'Upload' : `Upload ${n} items`;
+		}
 		default:
 			return task.type;
 	}
@@ -212,6 +226,19 @@ function handleMessage(message: string) {
 	const task = parseSSEMessage(message);
 	if (!task) return;
 	tasksMap.update((map) => ({ ...map, [task.id]: task }));
+	// An upload that reached a terminal status no longer has a resumable server
+	// session; drop its remembered local handle so a stale localStorage entry
+	// never triggers a restart prompt later.
+	if (
+		task.type === 'upload' &&
+		(task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled')
+	) {
+		try {
+			localStorage.removeItem(uploadStoreKey(task.id));
+		} catch {
+			// ignore
+		}
+	}
 }
 
 // parseSSEMessage decodes one raw SSE message ("event: task\ndata: {...}") into

@@ -12,3 +12,16 @@ if (
 ) {
 	(globalThis as any).Element.prototype.scrollIntoView = () => {};
 }
+
+// jsdom's Blob lacks arrayBuffer(); polyfill it so folder-drop file cloning
+// (which reads File data into an independent ArrayBuffer) can be tested.
+if (typeof Blob.prototype.arrayBuffer === 'undefined') {
+	Blob.prototype.arrayBuffer = function arrayBuffer(): Promise<ArrayBuffer> {
+		const reader = new FileReader();
+		return new Promise<ArrayBuffer>((resolve, reject) => {
+			reader.onload = () => resolve(reader.result as ArrayBuffer);
+			reader.onerror = () => reject(reader.error);
+			reader.readAsArrayBuffer(this);
+		});
+	};
+}
