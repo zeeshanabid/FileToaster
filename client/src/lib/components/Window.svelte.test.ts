@@ -14,11 +14,12 @@ import {
 	queryByText
 } from '@testing-library/dom';
 import userEvent from '@testing-library/user-event';
-import type { Mock } from 'vitest';
+import type { Mock, MockInstance } from 'vitest';
 import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
-import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile } from '$lib/fs/api';
+import { uploadManager } from '$lib/fs/upload';
+import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile, createUpload, uploadChunk, chunkCountForFile } from '$lib/fs/api';
 import {
 	clipboard,
 	cutMode,
@@ -33,13 +34,19 @@ import {
 	submitDecompressTask
 } from '$lib/store/tasks';
 
-vi.mock('$lib/fs/api', () => ({
-	fetchListing: vi.fn(),
-	mkdirDirectory: vi.fn(),
-	fetchInfo: vi.fn(),
-	submitMove: vi.fn(),
-	renameFile: vi.fn()
-}));
+	vi.mock('$lib/fs/api', () => ({
+		fetchListing: vi.fn(),
+		mkdirDirectory: vi.fn(),
+		fetchInfo: vi.fn(),
+		submitMove: vi.fn(),
+		renameFile: vi.fn(),
+		createUpload: vi.fn(),
+		uploadChunk: vi.fn(),
+		getUploadStatus: vi.fn(),
+		cancelUpload: vi.fn(),
+		chunkCountForFile: vi.fn(() => 1),
+		DEFAULT_CHUNK_SIZE: 4 << 20
+	}));
 
 	// The tasks store is mocked so copy/paste/delete/compress can be tested without a backend. The
 // `clipboard` store is created inside the factory (where the imported `writable`
@@ -788,7 +795,6 @@ describe('Window selection & information dialog', () => {
 			fireEvent.click(infoButton());
 			expect(screen.queryByText('Information')).not.toBeInTheDocument();
 			expect(fetchInfo).not.toHaveBeenCalled();
-		});
 });
 
 describe('Window delete', () => {
@@ -1164,5 +1170,301 @@ describe('Window decompress', () => {
 		await waitFor(() => expect(screen.queryByTestId('decompress-dialog')).not.toBeInTheDocument());
 		expect(submitDecompressTask).not.toHaveBeenCalled();
 		expect(decompressButton()).not.toBeDisabled();
+	});
+});
+
+describe('Window drag-and-drop upload', () => {
+	let uploadSpy: MockInstance<typeof uploadManager.startUpload>;
+
+	beforeEach(() => {
+		uploadSpy = vi.spyOn(uploadManager, 'startUpload').mockResolvedValue('sess-dnd');
+	});
+	afterEach(() => {
+		uploadSpy.mockRestore();
+	});
+
+async function dropFiles(files: File[]): Promise<void> {
+	const root = screen.getByRole('dialog') as HTMLElement;
+	// jsdom does not implement DragEvent, so dispatch a plain drop Event and
+	// pin the DataTransfer the handler reads (its `files` list).
+	const event = new Event('drop', { bubbles: true, cancelable: true });
+	Object.defineProperty(event, 'dataTransfer', { value: { files, items: [] }, configurable: true });
+	root.dispatchEvent(event as unknown as DragEvent);
+	await tick();
+}
+
+async function dropFilesViaFastPath(files: File[]): Promise<void> {
+	const root = screen.getByRole('dialog') as HTMLElement;
+	// Simulates a browser that populates dt.files (e.g., Chrome) — the fast path.
+	const event = new Event('drop', { bubbles: true, cancelable: true });
+	Object.defineProperty(event, 'dataTransfer', { value: { files, items: [] }, configurable: true });
+	root.dispatchEvent(event as unknown as DragEvent);
+	await tick();
+}
+
+	it('starts an upload into the window folder when files are dropped', async () => {
+		await openAndRender();
+		const dropped = [new File(['hello world'], 'dropped.txt', { type: 'text/plain' })];
+		await dropFiles(dropped);
+
+		// The handler read the dropped files and started an upload into the folder.
+		expect(uploadSpy).toHaveBeenCalledTimes(1);
+		const [dest, manifest] = uploadSpy.mock.calls[0];
+		expect(dest).toBe(ROOT);
+		expect(manifest.files.map((f) => f.rel)).toEqual(['dropped.txt']);
+
+		// The footer shows the abort control and a transient upload status.
+		await waitFor(() => expect(screen.getByLabelText('Abort upload')).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/Uploading/i)).toBeInTheDocument());
+	});
+
+	it('derives nested paths from a dropped file and uploads into the folder', async () => {
+		await openAndRender();
+		const f = new File(['a'], 'a.txt');
+		// Real dropped folders carry the path under webkitRelativePath.
+		Object.defineProperty(f, 'webkitRelativePath', { value: 'photos/2023/a.txt', configurable: true });
+		await dropFiles([f]);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+
+		const manifest = uploadSpy.mock.calls[0][1];
+		expect(manifest.files.map((f) => f.rel)).toEqual(['photos/2023/a.txt']);
+		expect(manifest.dirs).toEqual(['photos', 'photos/2023']);
+	});
+
+		it('ignores a drop that carries no files', async () => {
+		await openAndRender();
+		await dropFiles([]);
+		expect(uploadSpy).not.toHaveBeenCalled();
+		expect(screen.queryByLabelText('Abort upload')).not.toBeInTheDocument();
+	});
+
+ 	it('accepts the dragover so drops from outside the browser land on the window', async () => {
+		await openAndRender();
+		const root = screen.getByRole('dialog') as HTMLElement;
+		const ev = new Event('dragover', { bubbles: true, cancelable: true });
+		root.dispatchEvent(ev as unknown as DragEvent);
+		// A drop is only honoured when a preceding dragover called preventDefault.
+		expect(ev.defaultPrevented).toBe(true);
+	});
+
+	// Simulates a dropped folder whose files are not exposed on DataTransfer.files
+	// (some browsers report an empty file list). A directory item is still reported
+	// with kind 'file', holding a WebKit entry, so the reader walks it to enumerate
+	// the folder; the fast path (non-empty files list) is intentionally skipped.
+	function dropFolderViaEntries(rels: string[]): void {
+		const root = screen.getByRole('dialog') as HTMLElement;
+		// A real FileSystemDirectoryReader returns entries in batches and an empty
+		// one when done, so count batches to stop the reader after the first.
+		let batch = 0;
+		const dirEntry = {
+			isFile: false,
+			isDirectory: true,
+			createReader: () => ({
+				readEntries: () =>
+					Promise.resolve(
+						batch++ === 0
+							? rels.map((rel) => ({
+									isFile: true,
+									isDirectory: false,
+									getFile: (onFile: (file: File) => void) => onFile(new File(['x'], rel))
+								}))
+							: []
+					)
+			}),
+			webkitGetAsEntry: () => dirEntry
+		};
+		const item = { kind: 'file', webkitGetAsEntry: () => dirEntry };
+		const event = new Event('drop', { bubbles: true, cancelable: true });
+		Object.defineProperty(event, 'dataTransfer', { value: { files: [], items: [item] }, configurable: true });
+		root.dispatchEvent(event as unknown as DragEvent);
+	}
+
+  it('enumerates a dropped folder via the WebKit entry API when dt.files is empty', async () => {
+		await openAndRender();
+		dropFolderViaEntries(['photos/2023/a.txt', 'photos/2023/b.txt']);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(expect.arrayContaining(['photos/2023/a.txt', 'photos/2023/b.txt']));
+		expect(manifest.dirs).toEqual(['photos', 'photos/2023']);
+	});
+
+	// Regression: real browsers report a dropped folder's directory item with
+	// kind 'file' (only 'file'/'string' kinds exist), and getAsFile() on it is
+	// null. readTransfer must still collect the WebKit entry and walk the folder,
+	// otherwise the folder uploads nothing / fails (net::ERR_FILE_NOT_FOUND).
+  it('enumerates a dropped folder even though its directory item is reported as kind file', async () => {
+		await openAndRender();
+		dropFolderViaEntries(['docs/notes.txt']);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(['docs/notes.txt']);
+		expect(manifest.dirs).toEqual(['docs']);
+	});
+
+// A file from a dropped folder is backed by the browser's temporary drag-and-drop
+	// blob store, which the browser can evicted shortly after the drop. readEntry clones the
+	// bytes into a long-lived Blob during the drop, so the chunk uploaded later slices
+	// from that stable blob instead of the evicted source (net::ERR_FILE_NOT_FOUND).
+	it('clones dropped-folder file bytes into a long-lived Blob during the drop', async () => {
+		await openAndRender();
+		dropFolderViaEntries(['photos/2023/a.txt']);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		const blob = manifest.files[0].blob;
+		expect(blob).toBeInstanceOf(Blob);
+		expect(blob?.size).toBe(1);
+	});
+
+	// Regression: the fast path (dt.files populated, e.g. Chrome) used to attach the
+	// raw File as blob, which is backed by the evictable drag-and-drop blob store and
+	// caused net::ERR_FILE_NOT_FOUND when a chunk was sliced later. fileItem now clones
+	// any file carrying webkitRelativePath, so a dropped folder uploads from a stable
+	// blob regardless of which enumeration path the browser took.
+	it('clones dropped-folder files when the fast path (dt.files) is used', async () => {
+		await openAndRender();
+		const f = new File(['hello'], 'a.txt');
+		Object.defineProperty(f, 'webkitRelativePath', { value: 'photos/2023/a.txt', configurable: true });
+		await dropFilesViaFastPath([f]);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(['photos/2023/a.txt']);
+		expect(manifest.dirs).toEqual(['photos', 'photos/2023']);
+		// The blob must be a stable clone, not the evictable source File.
+		const blob = manifest.files[0].blob;
+		expect(blob).toBeInstanceOf(Blob);
+		expect(blob?.size).toBe(5);
+		expect(blob).not.toBe(f);
+	});
+
+	// Files without webkitRelativePath are persistent (individually dragged files or
+	// items from the file picker), so they are passed through directly to avoid
+	// unnecessary multi-GB copies in memory.
+	it('does not clone individually-dragged files (no webkitRelativePath)', async () => {
+		await openAndRender();
+		const f = new File(['hello world'], 'dropped.txt', { type: 'text/plain' });
+		await dropFilesViaFastPath([f]);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(['dropped.txt']);
+		expect(manifest.files[0].blob).toBe(f);
+	});
+
+	// A folder dropped via the fast path is enumerated by webkitRelativePath, so the
+	// nested structure (files + intermediate dirs) is preserved without the WebKit
+	// entry walk, which some browsers do not support at all.
+	it('preserves nested structure for a folder dropped via the fast path', async () => {
+		await openAndRender();
+		const files = [
+			new File(['a'], 'a.txt'),
+			new File(['b'], 'b.jpg'),
+			new File(['c'], 'c.txt')
+		];
+		for (const f of files) {
+			Object.defineProperty(f, 'webkitRelativePath', {
+				value: f.name === 'a.txt' ? 'docs/a.txt' : f.name === 'b.jpg' ? 'docs/sub/b.jpg' : 'docs/sub/c.txt',
+				configurable: true
+			});
+		}
+		await dropFilesViaFastPath(files);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel).sort()).toEqual(['docs/a.txt', 'docs/sub/b.jpg', 'docs/sub/c.txt']);
+		expect(manifest.dirs).toEqual(['docs', 'docs/sub']);
+	});
+});
+});
+
+describe('Window toolbar upload — file picker', () => {
+	let uploadSpy: MockInstance<typeof uploadManager.startUpload>;
+
+	beforeEach(() => {
+		(createUpload as Mock).mockResolvedValue({ taskID: 'sess-picker' });
+		(uploadChunk as Mock).mockResolvedValue({
+			chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0
+		});
+		(chunkCountForFile as Mock).mockReturnValue(1);
+		uploadSpy = vi.spyOn(uploadManager, 'startUpload').mockResolvedValue('sess-picker');
+	});
+	afterEach(() => {
+		uploadSpy.mockRestore();
+	});
+
+	// jsdom keeps <input type=file>.files readonly, so pin the list the way the
+	// browser would when the user picks items, then fire the change it triggers.
+	function pickFiles(files: File[]): void {
+		const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+		Object.defineProperty(input, 'files', { value: files, configurable: true });
+		fireEvent.change(input);
+	}
+
+	it('exposes an Upload button whose picker allows files and directories', async () => {
+		await openAndRender();
+		const button = screen.getByLabelText('Upload') as HTMLButtonElement;
+		expect(button).toBeInTheDocument();
+		expect(button).not.toBeDisabled();
+		const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+		expect(input).toHaveAttribute('multiple');
+		// webkitdirectory (directory-only) is intentionally absent so single files
+		// and a mixed selection remain selectable.
+		expect(input).not.toHaveAttribute('webkitdirectory');
+	});
+
+	it('uploads a single file from the picker with no in-window selection', async () => {
+		await openAndRender();
+		// Nothing is selected in the window: the picker selection must drive it.
+		pickFiles([new File(['hello'], 'single.txt')]);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(['single.txt']);
+		await waitFor(() => expect(screen.getByLabelText('Abort upload')).toBeInTheDocument());
+	});
+
+	it('uploads a mix of files and directories chosen from the picker', async () => {
+		await openAndRender();
+		const file = new File(['a'], 'a.txt');
+		const folder = new File([], 'photos');
+		Object.defineProperty(folder, 'isDirectory', { value: true, configurable: true });
+		// A folder member carries its path under the dropped folder.
+		const member = new File(['b'], 'b.jpg');
+		Object.defineProperty(member, 'webkitRelativePath', { value: 'photos/2023/b.jpg', configurable: true });
+		pickFiles([file, folder, member]);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(expect.arrayContaining(['a.txt', 'photos/2023/b.jpg']));
+		expect(manifest.dirs).toEqual(expect.arrayContaining(['photos', 'photos/2023']));
+	});
+
+	it('uploads multiple files in a single selection', async () => {
+		await openAndRender();
+		pickFiles([new File(['1'], 'one.txt'), new File(['2'], 'two.txt')]);
+		await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+		const [, manifest] = uploadSpy.mock.calls[0];
+		expect(manifest.files.map((f) => f.rel)).toEqual(expect.arrayContaining(['one.txt', 'two.txt']));
+	});
+});
+
+describe('Window upload — ingest progress', () => {
+	beforeEach(() => {
+		(createUpload as Mock).mockResolvedValue({ taskID: 'sess-prog' });
+	});
+
+	// jsdom keeps <input type=file>.files readonly; pin the list and fire change.
+	function pickFiles(files: File[]): void {
+		const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+		Object.defineProperty(input, 'files', { value: files, configurable: true });
+		fireEvent.change(input);
+	}
+
+	it('reports ingest progress in the footer while chunks are still being sent', async () => {
+		// Two files, each one chunk. The second chunk hangs so the session stays in
+		// staging with the first chunk present → the footer reports 50%.
+		(uploadChunk as Mock).mockImplementation((_taskID, fileIdx) =>
+			fileIdx === 1
+				? new Promise<void>(() => {})
+				: Promise.resolve({ chunkSize: 0, totalChunks: 1, receivedChunks: 1, totalBytes: 0, receivedBytes: 0 })
+		);
+		await openAndRender();
+		pickFiles([new File(['one'], 'a.bin'), new File(['two'], 'b.bin')]);
+		await waitFor(() => expect(screen.getByLabelText('Upload progress')).toHaveTextContent('50%'));
 	});
 });

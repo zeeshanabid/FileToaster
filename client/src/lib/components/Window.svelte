@@ -11,6 +11,11 @@
 	import { type Entry, fetchInfo, type FileInfo, mkdirDirectory, renameFile } from '$lib/fs/api';
 	import { tree } from '$lib/fs/tree';
 import {
+	uploadManager,
+	manifestForDataTransfer,
+	type DnDItem
+} from '$lib/fs/upload';
+import {
 	clipboard,
 	cutEntries,
 	cutMode,
@@ -43,12 +48,21 @@ import { formatSize, formatDate } from '$lib/fs/format';
 	let stop: (() => void) | undefined;
 	onMount(() => {
 		tree.resetWindow(winProp.id);
+		// `directory` (plus `multiple`) lets the OS file picker expose folders
+		// alongside files where the browser supports it; it is not a standard
+		// typed attribute, so set it imperatively on the bound files picker input.
+		fileInput?.setAttribute('directory', '');
+		// `webkitdirectory` (plus `multiple`) makes the folder picker return every
+		// file in the chosen folder; it is not a standard typed attribute, so set it
+		// imperatively on the bound folder picker input.
+		folderInput?.setAttribute('webkitdirectory', '');
 		stop = selection.subscribe((w) => {
 			win = w;
 		});
 		void navigate(winProp.path);
+		document.addEventListener('click', dismissUploadMenu);
 	});
-	onDestroy(() => stop?.());
+	onDestroy(() => { stop?.(); document.removeEventListener('click', dismissUploadMenu); });
 
 	// `tree` is an external cache; Svelte only re-renders when a $state changes.
 	// Bump `frame` after every tree mutation so the fold/outlines and per-directory
@@ -416,6 +430,274 @@ import { formatSize, formatDate } from '$lib/fs/format';
 		}
 	}
 
+	// --- upload: chunked, resumable uploads into this window's open folder ------
+	// `uploadState` tracks the staging upload (task id + phase) so the footer can
+	// offer an abort control while ingest is in progress; once the tracked finalize
+	// op takes over, the taskbar handles cancellation.
+	let uploadState = $state<{ taskID: string; phase: string } | null>(null);
+	// progressPct is the ingest completion (sent chunks ÷ total) for the active
+	// staging upload, written to below so the footer bar can update live.
+	let progressPct = $state(0);
+	let fileInput: HTMLInputElement | null = $state(null);
+	let folderInput: HTMLInputElement | null = $state(null);
+	let uploadMenuOpen = $state(false);
+
+	// Close the upload menu when the user clicks anything outside it.
+	function dismissUploadMenu(e: MouseEvent) {
+		if ((e.target as HTMLElement).closest('.upload-menu-wrap') === null) {
+			uploadMenuOpen = false;
+		}
+	}
+
+	// Open the hidden file picker. It allows files and directories (single or
+	// multiple): `multiple` selects several items, and `directory` lets the OS
+	// file picker expose folders (in addition to plain files) where supported;
+	// webkitdirectory is intentionally omitted so single files remain selectable.
+	function openUploadMenu() {
+		uploadMenuOpen = true;
+	}
+
+// Files picker (`multiple`): individual files, and a mix of files where the OS
+// picker offers it. Each picked File is uploaded from its real bytes.
+async function onPickFiles() {
+	const picked = fileInput?.files;
+	if (!picked || picked.length === 0) {
+		flash('Select one or more items to upload.');
+		return;
+	}
+	const items: DnDItem[] = [];
+	for (let i = 0; i < picked.length; i++) {
+		const f = picked[i] as File & { isDirectory?: boolean };
+		if (f.isDirectory) continue; // directories from picker have no blob; they're expanded via webkitdirectory
+		items.push(await fileItem(f));
+	}
+	await startUploadFromItems(items);
+}
+
+// Folder picker (`multiple` + `webkitdirectory`): the OS returns every file in
+// the chosen folder, each carrying its path under the folder as
+// webkitRelativePath, so whole folders (and their structure) upload. This is
+// the cross-browser way to upload directories, since no native picker selects a
+// folder together with individual files in a single dialog everywhere.
+async function onPickFolder() {
+	const picked = folderInput?.files;
+	if (!picked || picked.length === 0) {
+		flash('Select a folder to upload.');
+		return;
+	}
+	const items: DnDItem[] = [];
+	for (let i = 0; i < picked.length; i++) {
+		const f = picked[i] as File;
+		items.push(await fileItem(f));
+	}
+	await startUploadFromItems(items);
+}
+
+	// startUploadFromItems builds a manifest from picked/dropped items (their real
+	// bytes carried as blobs) and starts the chunked upload into the open folder.
+	async function startUploadFromItems(items: ReadonlyArray<DnDItem>) {
+		if (!win) return;
+		if (items.length === 0) {
+			flash('No files to upload.');
+			return;
+		}
+		try {
+			const manifest = manifestForDataTransfer(items);
+			if (manifest.files.length === 0) {
+				flash('No files to upload.');
+				return;
+			}
+			const taskID = await uploadManager.startUpload(win.path, manifest);
+			uploadMenuOpen = false;
+			clearSelection();
+			if (taskID) {
+				const st = uploadManager.state(taskID);
+				uploadState = st ? { taskID: st.taskID, phase: st.phase } : { taskID, phase: 'staging' };
+				flash(`Uploading… (task ${taskID}).`);
+			}
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not upload');
+		}
+	}
+	// --- drag-and-drop directory enumeration -----------------------------------
+	// Minimal typing for the non-standard WebKit drag-and-drop directory APIs,
+	// which are not in the DOM lib. They let a dropped folder be walked even when
+	// the browser leaves DataTransfer.files empty.
+	interface DropEntry {
+		isFile: boolean;
+		isDirectory: boolean;
+		getFile: (onFile: (f: File) => void, onError?: (err?: unknown) => void) => void;
+		createReader: () => DropReader;
+		webkitGetAsEntry: () => DropEntry | null;
+	}
+	interface DropReader {
+		readEntries: () => Promise<DropEntry[]>;
+	}
+
+// fileItem adapts a picked/dropped File into the manifest item shape.
+// Files from a dropped folder carry webkitRelativePath and are backed by the
+// browser's temporary drag-and-drop blob store, which can be evicted shortly
+// after the drop. Reading the file into an ArrayBuffer and creating a new Blob
+// from it produces a fully independent copy, preventing net::ERR_FILE_NOT_FOUND
+// when upload slices are read later.
+async function fileItem(f: File): Promise<DnDItem> {
+	const rel = f.webkitRelativePath ?? '';
+	let blob: Blob = f;
+	if (rel) {
+		const ab = await f.arrayBuffer();
+		blob = new Blob([ab], { type: f.type });
+	}
+	return {
+		name: f.name,
+		size: f.size,
+		webRelativePath: rel,
+		isFile: true,
+		blob
+	};
+}
+
+	// readTransfer enumerates the dropped items into manifest items. Most drops
+	// surface their files on DataTransfer.files, but a dropped folder may not (some
+	// browsers leave it empty). Every dropped item exposes a WebKit entry, and
+	// directory items are still reported with kind 'file' (only 'file' and 'string'
+	// kinds exist), so collect each entry via webkitGetAsEntry() and route on it to
+	// enumerate folders cross-browser; a non-empty files list is the fast path.
+async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
+	const files = Array.from(dt.files ?? []);
+	const fromFiles = await Promise.all(files.map(fileItem));
+	if (fromFiles.length > 0) return fromFiles;
+		const items: DnDItem[] = [];
+		const entries: DropEntry[] = [];
+		for (let i = 0; i < dt.items.length; i++) {
+			const item = dt.items[i];
+			const asEntry = item as unknown as { webkitGetAsEntry?: () => DropEntry | null };
+			// Collect the entry regardless of kind: a directory item is still
+			// reported as kind 'file', and getAsFile() on it returns null, so a
+			// kind check would skip folders entirely.
+			if (typeof asEntry.webkitGetAsEntry === 'function') {
+				const entry = asEntry.webkitGetAsEntry();
+				if (entry) entries.push(entry);
+			}
+		}
+		await Promise.all(entries.map((entry) => readEntry(entry, items)));
+		return items;
+	}
+
+	// readEntry reads one entry into `into`, recursing into directories. A file
+	// from a dropped folder is backed by the browser's temporary drag-and-drop
+	// blob store, which can be evicted shortly after the drop: slicing a chunk from
+	// that file later makes the browser report net::ERR_FILE_NOT_FOUND. The bytes
+	// are cloned into a long-lived Blob now, while the source is still valid, so
+	// the upload slices from that stable blob; metadata comes from the original File.
+	async function readEntry(entry: DropEntry, into: DnDItem[]): Promise<void> {
+		if (entry.isDirectory) return readDirectory(entry, into);
+		await new Promise<void>((resolve, reject) =>
+			entry.getFile(async (f) => {
+				try {
+					const ab = await f.arrayBuffer();
+					const stable = new Blob([ab], { type: f.type });
+					into.push({
+						name: f.name,
+						size: f.size,
+						webRelativePath: f.webkitRelativePath ?? '',
+						isFile: true,
+						blob: stable
+					});
+					resolve();
+				} catch (err) {
+					reject(err instanceof Error ? err : new Error(String(err)));
+				}
+			}, (err) => reject(err instanceof Error ? err : new Error(String(err))))
+		);
+	}
+
+	// readDirectory reads a directory's entries in batches (readEntries returns a
+	// batch at a time) until none remain, recursing into subdirectories.
+	function readDirectory(entry: DropEntry, into: DnDItem[]): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			const reader = entry.createReader() as DropReader;
+			const drain = () =>
+				reader.readEntries().then((batch) => {
+					if (!batch || batch.length === 0) return resolve();
+					void Promise.all(
+						batch.map((child) => (child.isDirectory ? readDirectory(child, into) : readEntry(child, into)))
+					).then(drain, () => resolve());
+				});
+			drain().catch(reject);
+		});
+	}
+
+	// Drag-and-drop onto the window: derive the manifest from the dropped files
+	// (their webkitRelativePath carries a dropped folder's structure) and upload.
+	async function onDrop(e: DragEvent) {
+		e.preventDefault();
+		const dt = e.dataTransfer;
+		if (!dt) return;
+		if (!win) return;
+		let items: DnDItem[] = [];
+		try {
+			items = await readTransfer(dt);
+		} catch {
+			flash('could not read the dropped items');
+			return;
+		}
+		if (items.length === 0) {
+			flash('No files to upload.');
+			return;
+		}
+		try {
+			const manifest = manifestForDataTransfer(items);
+			if (manifest.files.length === 0) {
+				flash('No files to upload.');
+				return;
+			}
+			const taskID = await uploadManager.startUpload(win.path, manifest);
+			if (taskID) {
+				const st = uploadManager.state(taskID);
+				uploadState = st ? { taskID: st.taskID, phase: st.phase } : { taskID, phase: 'staging' };
+				flash(`Uploading… (task ${taskID}).`);
+			}
+		} catch (err) {
+			flash(err instanceof Error ? err.message : 'could not upload');
+		}
+	}
+
+	// Abort ingest while staging. Already-received chunks are kept (resumable);
+	// once the finalize copy begins, the taskbar cancel applies instead.
+	function abortUpload() {
+		const id = uploadState?.taskID;
+		if (!id) return;
+		void uploadManager.abort(id);
+		uploadState = null;
+		flash('Upload aborted.');
+	}
+
+	function uploadActive(): boolean {
+		return !!uploadState && uploadState.phase === 'staging';
+	}
+
+	// The manager's present-bitmap is plain JS, so Svelte does not track chunk
+	// completion and re-render on its own — a live upload would show a frozen bar.
+	// While a session is staging, poll the manager into `progressPct` (a $state)
+	// so the footer ingest bar updates; once the phase leaves "staging" (the
+	// finalize copy takes over) the polling stops and the taskbar drives progress.
+	$effect(() => {
+		if (!uploadState || uploadState.phase !== 'staging') {
+			progressPct = 0;
+			return;
+		}
+		const id = uploadState.taskID;
+		const read = () => {
+			const s = uploadManager.state(id);
+			if (!s) return;
+			const done = s.present.reduce((n, p) => n + (p ? 1 : 0), 0);
+			progressPct = s.present.length ? Math.round((done / s.present.length) * 100) : 0;
+		};
+		read();
+		const timer = setInterval(read, 100);
+		return () => clearInterval(timer);
+	});
+
 	// The tree is anchored at the window's root and never re-rooted on navigation.
 	// The title bar shows the currently opened folder; the store's `name` stays as
 	// the window's display name (the root label) and never changes after open.
@@ -625,15 +907,18 @@ import { formatSize, formatDate } from '$lib/fs/format';
 	});
 </script>
 
-<div
-	class="window"
-	class:minimized={winProp.minimized}
-	role="dialog"
-	tabindex="0"
-	aria-label={title}
-	style="left:{pos ? pos.x : winProp.x}px; top:{pos ? pos.y : winProp.y}px; width:{size.width}px; height:{size.height}px; z-index:{winProp.zIndex};"
-	onmousedown={() => focusWindow(winProp.id)}
->
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+	<div
+		class="window"
+		class:minimized={winProp.minimized}
+		role="dialog"
+		tabindex="0"
+		aria-label={title}
+		style="left:{pos ? pos.x : winProp.x}px; top:{pos ? pos.y : winProp.y}px; width:{size.width}px; height:{size.height}px; z-index:{winProp.zIndex};"
+		onmousedown={() => focusWindow(winProp.id)}
+		ondragover={(e) => e.preventDefault()}
+		ondrop={onDrop}
+	>
 	<header class="header" onpointerdown={onHeaderPointerDown} aria-roledescription="draggable" role="application">
 		<span class="logo" aria-hidden="true">
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
@@ -771,6 +1056,37 @@ import { formatSize, formatDate } from '$lib/fs/format';
 				<path d="M9 18h6" />
 			</svg>
 		</button>
+		<div class="upload-menu-wrap">
+			<button class="tool upload" type="button" title="Upload files or folders to this folder" aria-label="Upload" aria-haspopup="menu" aria-expanded={uploadMenuOpen} onclick={openUploadMenu}>
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+					<path d="M12 19V5" />
+					<path d="M6 9l6-6 6 6" />
+					<path d="M4 15v4h16v-4" />
+				</svg>
+			</button>
+			{#if uploadMenuOpen}
+				<div class="upload-menu" role="menu" aria-label="Upload options">
+					<button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; fileInput?.click(); }}>Upload files…</button>
+					<button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; folderInput?.click(); }}>Upload folder…</button>
+				</div>
+			{/if}
+		</div>
+		<input
+			type="file"
+			multiple
+			style="display:none"
+			bind:this={fileInput}
+			onchange={onPickFiles}
+			aria-hidden="true"
+		/>
+		<input
+			type="file"
+			multiple
+			style="display:none"
+			bind:this={folderInput}
+			onchange={onPickFolder}
+			aria-hidden="true"
+		/>
 		{#if editingNew}
 			<form class="new" onsubmit={() => confirmNewDir()}>
 				<input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
@@ -881,6 +1197,15 @@ import { formatSize, formatDate } from '$lib/fs/format';
 		<span class="spath-val" title={winProp.path}>{winProp.path}</span>
 		{#if status}
 			<span class="status-msg">{status}</span>
+		{/if}
+		{#if uploadActive()}
+			<div class="upload-progress" role="progressbar" aria-label="Upload progress" aria-valuenow={progressPct} aria-valuemin={0} aria-valuemax={100}>
+				<span class="upload-bar" style="width:{progressPct}%"></span>
+				<span class="upload-progress-label">{progressPct}%</span>
+			</div>
+			<button class="abort-upload" type="button" aria-label="Abort upload" onclick={abortUpload}>
+				Abort upload
+			</button>
 		{/if}
 		<span class="count">{rows.length} item{rows.length === 1 ? '' : 's'}</span>
 	</footer>
@@ -1283,6 +1608,89 @@ import { formatSize, formatDate } from '$lib/fs/format';
 	.count {
 		margin-left: auto;
 		white-space: nowrap;
+	}
+	.abort-upload {
+		display: grid;
+		place-items: center;
+		height: 22px;
+		padding: 0 8px;
+		background: transparent;
+		border: none;
+		border-radius: 6px;
+		color: var(--alert);
+		font-size: 11px;
+		font-weight: 600;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.abort-upload:hover {
+		background: var(--surface-inset);
+	}
+	.upload-progress {
+		position: relative;
+		display: grid;
+		grid-template-columns: auto 88px;
+		align-items: center;
+		gap: 8px;
+	}
+	.upload-bar {
+		display: block;
+		width: 0;
+		height: 8px;
+		min-width: 8px;
+		flex: 1;
+		background: var(--surface-inset);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		overflow: hidden;
+		transition: width 120ms linear;
+	}
+	.upload-bar::after {
+		content: '';
+		display: block;
+		width: 100%;
+		height: 100%;
+		background: linear-gradient(90deg, var(--accent), var(--accent-2));
+	}
+	.upload-progress-label {
+		color: var(--text-muted);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+	.upload-menu-wrap {
+		position: relative;
+	}
+	.upload-menu {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		z-index: 20;
+		display: flex;
+		flex-direction: column;
+		min-width: 172px;
+		padding: 4px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		box-shadow: var(--shadow-window);
+	}
+	.upload-menu-item {
+		display: block;
+		width: 100%;
+		text-align: left;
+		padding: 8px 10px;
+		background: transparent;
+		border: none;
+		border-radius: 6px;
+		color: var(--text);
+		font: inherit;
+		font-size: 12px;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.upload-menu-item:hover {
+		background: var(--surface-soft);
 	}
 	.status-msg {
 		margin-left: 8px;
