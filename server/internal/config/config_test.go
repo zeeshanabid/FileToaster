@@ -53,8 +53,8 @@ func TestDefaultConfigDefaults(t *testing.T) {
 	if c.GOMAXPROCS != 0 {
 		t.Errorf("GOMAXPROCS = %d, want 0", c.GOMAXPROCS)
 	}
-	if !strings.HasSuffix(c.TMPDir, "filetoaster-uploads") {
-		t.Errorf("TMPDir = %q, want suffix filetoaster-uploads", c.TMPDir)
+	if !strings.HasSuffix(c.TMPDir, filepath.Join(".filetoaster", "tmp_uploads")) {
+		t.Errorf("TMPDir = %q, want suffix %q", c.TMPDir, filepath.Join(".filetoaster", "tmp_uploads"))
 	}
 }
 
@@ -368,6 +368,52 @@ func TestValidateTmpDirMustBeDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "tmp_dir") || !strings.Contains(err.Error(), "is not a directory") {
 		t.Errorf("error = %q, want it to mention tmp_dir is not a directory", err.Error())
+	}
+}
+
+func TestLoadCreatesDefaultTmpDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("FILETOASTER_TMP_DIR", "")
+
+	tmpDir := filepath.Join(home, ".filetoaster", "tmp_uploads")
+	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
+		t.Fatalf("precondition: default tmp_dir should not exist yet: %v", err)
+	}
+
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
+	cfg, err := Load(writeConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("Load = %v, want nil", err)
+	}
+	if !cfg.tmpDirIsDefault() {
+		t.Fatalf("tmp_dir should be the default %q", tmpDir)
+	}
+	info, err := os.Stat(tmpDir)
+	if err != nil {
+		t.Fatalf("default tmp_dir not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("default tmp_dir %q is not a directory", tmpDir)
+	}
+}
+
+// TestLoadRejectsMissingCustomTmpDir verifies a non-default tmp_dir is not created
+// and fails startup when missing.
+func TestLoadRejectsMissingCustomTmpDir(t *testing.T) {
+	tmpDir := filepath.Join(t.TempDir(), "nope")
+
+	yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
+		"tmp_dir: " + tmpDir + "\n"
+	_, err := Load(writeConfig(t, yaml))
+	if err == nil {
+		t.Fatal("Load = nil, want validation error for missing custom tmp_dir")
+	}
+	if !strings.Contains(err.Error(), "tmp_dir") || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error = %q, want it to mention tmp_dir not existing", err.Error())
+	}
+	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
+		t.Errorf("custom tmp_dir must not be auto-created; stat err = %v", err)
 	}
 }
 

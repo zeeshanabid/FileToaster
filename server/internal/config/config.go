@@ -62,7 +62,10 @@ type Config struct {
 	ShutdownTimeout int `yaml:"shutdown_timeout_seconds"`
 	// GOMAXPROCS pins runtime.GOMAXPROCS. 0 means use the Go runtime default.
 	GOMAXPROCS int `yaml:"gomaxprocs"`
-	// TMPDir stages uploads. It is intentionally outside AllowedPaths.
+	// TMPDir stages uploads. It is intentionally outside AllowedPaths. It
+	// defaults to <home>/.filetoaster/tmp_uploads, which is created on start if
+	// absent; a value set in the config or via FILETOASTER_TMP_DIR is never
+	// auto-created and must already exist (enforced at startup).
 	TMPDir string `yaml:"tmp_dir"`
 	// UploadStaleAfter is how many hours a staged upload dir is tolerated before
 	// the background sweep removes it (and its in-memory session). Must be at
@@ -106,12 +109,24 @@ func DefaultConfig() *Config {
 		MaxParallelTasks:          4,
 		ShutdownTimeout:           30,
 		GOMAXPROCS:                0,
-		TMPDir:                    filepath.Join(os.TempDir(), "filetoaster-uploads"),
+		TMPDir:                    defaultTmpDir(),
 		UploadStaleAfter:          24,
 		UploadSweepInterval:       1,
 		UploadChunkSize:           4 << 20, // 4 MiB
 		UploadMaxConcurrentChunks: 4,
 	}
+}
+
+// defaultTmpDir is the built-in upload staging directory: <home>/.filetoaster/tmp_uploads.
+// It is only used when the operator does not set tmp_dir in the config or via the
+// FILETOASTER_TMP_DIR env var; that default location is auto-created on start if
+// absent, unlike a user-provided tmp_dir which must already exist.
+func defaultTmpDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "filetoaster-uploads")
+	}
+	return filepath.Join(home, ".filetoaster", "tmp_uploads")
 }
 
 // ResolveConfigPath returns the config file to use and whether it was created.
@@ -175,7 +190,7 @@ func WriteDefaultConfig(path string) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", fmt.Errorf("create allowed path %q: %w", dataDir, err)
 	}
-	tmpDir := filepath.Join(os.TempDir(), "filetoaster-uploads")
+	tmpDir := defaultTmpDir()
 	secret, err := generateSecret()
 	if err != nil {
 		return "", fmt.Errorf("generate session secret: %w", err)
@@ -259,6 +274,12 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration in %q: %w", path, err)
 	}
 	cfg.resolveAllowedPaths()
+	// The built-in tmp_dir default may be created on start; a user-specified
+	// tmp_dir was already required to exist by Validate, so only ensure the
+	// default location exists here.
+	if err := ensureTmpDir(cfg); err != nil {
+		return nil, fmt.Errorf("setup tmp_dir %q: %w", cfg.TMPDir, err)
+	}
 	return cfg, nil
 }
 
@@ -421,6 +442,26 @@ func displayName(path string) string {
 	return base
 }
 
+// tmpDirIsDefault reports whether TMPDir is the built-in default location rather
+// than a value the operator chose. Only the default is eligible for on-start
+// creation; any other value is operator-provided and must already exist (checked
+// by Validate). Comparison is path-cleaned so a redundant "." or trailing
+// separator does not make an equal path look custom.
+func (c *Config) tmpDirIsDefault() bool {
+	return filepath.Clean(c.TMPDir) == filepath.Clean(defaultTmpDir())
+}
+
+// ensureTmpDir creates TMPDir when it is the built-in default location. A
+// user-provided tmp_dir is left untouched: Validate already rejected a missing
+// or non-directory value, so the server fails to start instead of creating an
+// arbitrary path.
+func ensureTmpDir(c *Config) error {
+	if c.tmpDirIsDefault() {
+		return os.MkdirAll(c.TMPDir, 0o755)
+	}
+	return nil
+}
+
 // Validate checks that all required settings are present and sane. The returned
 // error lists every problem found, joined with "; ".
 func (c *Config) Validate() error {
@@ -486,10 +527,17 @@ func (c *Config) Validate() error {
 	}
 	if c.TMPDir == "" {
 		errs = append(errs, "tmp_dir must not be empty")
-	} else if info, err := os.Stat(c.TMPDir); err != nil {
-		errs = append(errs, fmt.Sprintf("tmp_dir %q does not exist or is not accessible: %v", c.TMPDir, err))
-	} else if !info.IsDir() {
-		errs = append(errs, fmt.Sprintf("tmp_dir %q is not a directory", c.TMPDir))
+	} else if !c.tmpDirIsDefault() {
+		// A user-provided tmp_dir is never auto-created: it must already exist.
+		// Only the built-in default location may be missing and get created at
+		// startup (see Load).
+		info, err := os.Stat(c.TMPDir)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Sprintf("tmp_dir %q does not exist or is not accessible: %v", c.TMPDir, err))
+		case !info.IsDir():
+			errs = append(errs, fmt.Sprintf("tmp_dir %q is not a directory", c.TMPDir))
+		}
 	}
 	if c.UploadStaleAfter < 1 {
 		errs = append(errs, "upload_stale_after must be at least 1 hour")
