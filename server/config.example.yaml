@@ -38,8 +38,10 @@ debug: false
 gomaxprocs: 0
 
 # Directory used to stage uploads. Deliberately OUTSIDE the served roots so
-# incomplete uploads never appear in listings. The directory must already exist;
-# the server refuses to start if it is missing.
+# incomplete uploads never appear in listings. When left at the built-in default
+# (<home>/.filetoaster/tmp_uploads) it is created on start if missing. If you set
+# a custom path here it must already exist: the server refuses to start if it is
+# missing or not a directory, and never auto-creates it.
 tmp_dir: /tmp/filetoaster-uploads
 
 # Fixed size, in bytes, of each per-file upload chunk. The client slices files
