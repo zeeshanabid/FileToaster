@@ -1219,17 +1219,15 @@ async function dropFilesViaFastPath(files: File[]): Promise<void> {
     await waitFor(() => expect(screen.getByText(/Uploading/i)).toBeInTheDocument());
   });
 
-  it('derives nested paths from a dropped file and uploads into the folder', async () => {
+  it('rejects a drop that carries a folder path (webkitRelativePath)', async () => {
     await openAndRender();
     const f = new File(['a'], 'a.txt');
-    // Real dropped folders carry the path under webkitRelativePath.
+    // A file carrying webkitRelativePath came from a dropped folder; only single
+    // or multiple individual files are accepted on drag-and-drop.
     Object.defineProperty(f, 'webkitRelativePath', { value: 'photos/2023/a.txt', configurable: true });
     await dropFiles([f]);
-    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-
-    const manifest = uploadSpy.mock.calls[0][1];
-    expect(manifest.files.map((f) => f.rel)).toEqual(['photos/2023/a.txt']);
-    expect(manifest.dirs).toEqual(['photos', 'photos/2023']);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/Drop files only/i)).toBeInTheDocument());
   });
 
     it('ignores a drop that carries no files', async () => {
@@ -1280,61 +1278,46 @@ async function dropFilesViaFastPath(files: File[]): Promise<void> {
     root.dispatchEvent(event as unknown as DragEvent);
   }
 
-  it('enumerates a dropped folder via the WebKit entry API when dt.files is empty', async () => {
+  it('rejects a dropped folder via the WebKit entry API when dt.files is empty', async () => {
     await openAndRender();
     dropFolderViaEntries(['photos/2023/a.txt', 'photos/2023/b.txt']);
-    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-    const [, manifest] = uploadSpy.mock.calls[0];
-    expect(manifest.files.map((f) => f.rel)).toEqual(expect.arrayContaining(['photos/2023/a.txt', 'photos/2023/b.txt']));
-    expect(manifest.dirs).toEqual(['photos', 'photos/2023']);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/Drop files only/i)).toBeInTheDocument());
   });
 
   // Regression: real browsers report a dropped folder's directory item with
   // kind 'file' (only 'file'/'string' kinds exist), and getAsFile() on it is
-  // null. readTransfer must still collect the WebKit entry and walk the folder,
-  // otherwise the folder uploads nothing / fails (net::ERR_FILE_NOT_FOUND).
-  it('enumerates a dropped folder even though its directory item is reported as kind file', async () => {
+  // null. isDirectoryDrop still detects the directory entry and rejects the drop,
+  // so folders never upload through drag-and-drop (only via the toolbar picker).
+  it('rejects a dropped folder even though its directory item is reported as kind file', async () => {
     await openAndRender();
     dropFolderViaEntries(['docs/notes.txt']);
-    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-    const [, manifest] = uploadSpy.mock.calls[0];
-    expect(manifest.files.map((f) => f.rel)).toEqual(['docs/notes.txt']);
-    expect(manifest.dirs).toEqual(['docs']);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/Drop files only/i)).toBeInTheDocument());
   });
 
-// A file from a dropped folder is backed by the browser's temporary drag-and-drop
-  // blob store, which the browser can evicted shortly after the drop. readEntry clones the
-  // bytes into a long-lived Blob during the drop, so the chunk uploaded later slices
-  // from that stable blob instead of the evicted source (net::ERR_FILE_NOT_FOUND).
-  it('clones dropped-folder file bytes into a long-lived Blob during the drop', async () => {
+  // A folder drop must be rejected before any file bytes are read, so no manifest
+  // is produced and nothing is cloned (there is nothing to upload).
+  it('rejects a dropped folder and clones no files', async () => {
     await openAndRender();
     dropFolderViaEntries(['photos/2023/a.txt']);
-    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-    const [, manifest] = uploadSpy.mock.calls[0];
-    const blob = manifest.files[0].blob;
-    expect(blob).toBeInstanceOf(Blob);
-    expect(blob?.size).toBe(1);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/Drop files only/i)).toBeInTheDocument());
   });
 
   // Regression: the fast path (dt.files populated, e.g. Chrome) used to attach the
   // raw File as blob, which is backed by the evictable drag-and-drop blob store and
   // caused net::ERR_FILE_NOT_FOUND when a chunk was sliced later. fileItem now clones
   // any file carrying webkitRelativePath, so a dropped folder uploads from a stable
-  // blob regardless of which enumeration path the browser took.
-  it('clones dropped-folder files when the fast path (dt.files) is used', async () => {
+  // blob regardless of which enumeration path the browser took. A folder drop is
+  // rejected before any file is read, so nothing is cloned or uploaded.
+  it('rejects a dropped folder when the fast path (dt.files) is used', async () => {
     await openAndRender();
     const f = new File(['hello'], 'a.txt');
     Object.defineProperty(f, 'webkitRelativePath', { value: 'photos/2023/a.txt', configurable: true });
     await dropFilesViaFastPath([f]);
-    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-    const [, manifest] = uploadSpy.mock.calls[0];
-    expect(manifest.files.map((f) => f.rel)).toEqual(['photos/2023/a.txt']);
-    expect(manifest.dirs).toEqual(['photos', 'photos/2023']);
-    // The blob must be a stable clone, not the evictable source File.
-    const blob = manifest.files[0].blob;
-    expect(blob).toBeInstanceOf(Blob);
-    expect(blob?.size).toBe(5);
-    expect(blob).not.toBe(f);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/Drop files only/i)).toBeInTheDocument());
   });
 
   // Files without webkitRelativePath are persistent (individually dragged files or
@@ -1350,10 +1333,11 @@ async function dropFilesViaFastPath(files: File[]): Promise<void> {
     expect(manifest.files[0].blob).toBe(f);
   });
 
-  // A folder dropped via the fast path is enumerated by webkitRelativePath, so the
-  // nested structure (files + intermediate dirs) is preserved without the WebKit
-  // entry walk, which some browsers do not support at all.
-  it('preserves nested structure for a folder dropped via the fast path', async () => {
+  // A folder dropped via the fast path is enumerated by webkitRelativePath, so
+  // the nested structure (files + intermediate dirs) would be preserved without
+  // the WebKit entry walk, which some browsers do not support at all. Such a
+  // folder drop is rejected though; only individual files land on drag-and-drop.
+  it('rejects a folder dropped via the fast path even with nested structure', async () => {
     await openAndRender();
     const files = [
       new File(['a'], 'a.txt'),
@@ -1367,10 +1351,8 @@ async function dropFilesViaFastPath(files: File[]): Promise<void> {
       });
     }
     await dropFilesViaFastPath(files);
-    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
-    const [, manifest] = uploadSpy.mock.calls[0];
-    expect(manifest.files.map((f) => f.rel).sort()).toEqual(['docs/a.txt', 'docs/sub/b.jpg', 'docs/sub/c.txt']);
-    expect(manifest.dirs).toEqual(['docs', 'docs/sub']);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/Drop files only/i)).toBeInTheDocument());
   });
 });
 });
