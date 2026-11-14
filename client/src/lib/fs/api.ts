@@ -133,6 +133,15 @@ export interface DecompressResponse {
   taskID?: string;
 }
 
+// DownloadResponse is the one-token download issued by POST /api/downloads.
+// The token is unguessable and single-use; the client then loads
+// /downloads/{token}, which streams the bound file and consumes the token.
+// The source path is only ever sent in the POST body, never in that URL, so
+// the download endpoint can be confined server-side to its bound file.
+export interface DownloadResponse {
+  token?: string;
+}
+
 export interface CopyTaskRequest {
   paths: string[];
   dest: string;
@@ -334,6 +343,19 @@ export async function submitDecompress(req: DecompressTaskRequest): Promise<Deco
     throw new ApiError(message);
   }
   return (await res.json()) as DecompressResponse;
+}
+
+// downloadFile requests a one-token download of a single source path (POST
+// /api/downloads), returning the token. The caller then loads
+// /downloads/{token}, which streams the file and consumes the token; the source
+// path is only ever sent in this POST body, never in the download URL, so the
+// streaming request can be confined server-side to the bound file.
+export async function downloadFile(path: string): Promise<string> {
+  const res = await postJSON<DownloadResponse>('/api/downloads', { paths: [path] });
+  if (!res.token) {
+    throw new ApiError('the server did not issue a download token');
+  }
+  return res.token;
 }
 
 // cancelTask asks the server to stop a queued or running task (POST

@@ -19,7 +19,7 @@ import Window from './Window.svelte';
 import { openWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
 import { uploadManager } from '$lib/fs/upload';
-import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile, createUpload, uploadChunk, chunkCountForFile } from '$lib/fs/api';
+import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile, createUpload, uploadChunk, chunkCountForFile, downloadFile } from '$lib/fs/api';
 import {
   clipboard,
   cutMode,
@@ -36,6 +36,7 @@ import {
 
   vi.mock('$lib/fs/api', () => ({
     fetchListing: vi.fn(),
+    downloadFile: vi.fn(),
     mkdirDirectory: vi.fn(),
     fetchInfo: vi.fn(),
     submitMove: vi.fn(),
@@ -1466,5 +1467,78 @@ describe('Window upload — ingest progress', () => {
     await openAndRender();
     pickFiles([new File(['one'], 'a.bin'), new File(['two'], 'b.bin')]);
     await waitFor(() => expect(screen.getByLabelText('Upload progress')).toHaveTextContent('50%'));
+  });
+});
+
+describe('Window download — single-file streaming download', () => {
+  let locationSpy: MockInstance;
+  let realLocation: Location;
+
+  function downloadButton(): HTMLButtonElement {
+    return screen.getByLabelText('Download') as HTMLButtonElement;
+  }
+  async function clickRow(name: string, modifier?: 'ctrl' | 'shift'): Promise<void> {
+    const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+      .find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+    if (!row) throw new Error(`no row named ${name}`);
+    if (modifier === 'ctrl') {
+      fireEvent.click(row, { ctrlKey: true });
+    } else if (modifier === 'shift') {
+      fireEvent.click(row, { shiftKey: true });
+    } else {
+      fireEvent.click(row);
+    }
+    await tick();
+  }
+
+  beforeEach(() => {
+    (downloadFile as Mock).mockReset();
+    (downloadFile as Mock).mockResolvedValue('tok-abc');
+    // jsdom pins window.location.assign to a non-configurable constant, so
+    // replace window.location with a prototype-preserving fake whose `assign`
+    // is the spy — navigation behavior (href/protocol/…) still resolves via the
+    // real Location.prototype.
+    realLocation = window.location;
+    const fake = Object.create(Object.getPrototypeOf(realLocation)) as Location & { assign: MockInstance; replace: MockInstance };
+    fake.assign = vi.fn();
+    fake.replace = vi.fn();
+    Object.defineProperty(window, 'location', { value: fake, configurable: true });
+    locationSpy = fake.assign;
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { value: realLocation, configurable: true });
+  });
+
+  it('is disabled with nothing selected and enabled for a single file', async () => {
+    await openAndRender();
+    expect(downloadButton()).toBeDisabled();
+    await clickRow('notes.txt');
+    await waitFor(() => expect(downloadButton()).not.toBeDisabled());
+  });
+
+  it('is disabled for a directory and for a multi-path selection', async () => {
+    await openAndRender();
+    await clickRow('notes.txt');
+    await waitFor(() => expect(downloadButton()).not.toBeDisabled());
+    await clickRow('documents', 'ctrl');
+    expect(downloadButton()).toBeDisabled();
+  });
+
+  it('requests a download token then loads /downloads/{token}', async () => {
+    await openAndRender();
+    await clickRow('notes.txt');
+    fireEvent.click(downloadButton());
+    await waitFor(() => expect(downloadFile).toHaveBeenCalledWith('/root/notes.txt'));
+    expect(locationSpy).toHaveBeenCalledWith('/downloads/tok-abc');
+  });
+
+  it('does not navigate when the endpoint fails', async () => {
+    await openAndRender();
+    (downloadFile as Mock).mockRejectedValue(new Error('could not download'));
+    await clickRow('notes.txt');
+    fireEvent.click(downloadButton());
+    await waitFor(() => expect(downloadFile).toHaveBeenCalled());
+    expect(locationSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText(/could not download/i)).toBeInTheDocument());
   });
 });

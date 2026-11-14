@@ -8,7 +8,7 @@
     windows,
     type AppWindow
   } from '$lib/store/windows';
-  import { type Entry, fetchInfo, type FileInfo, mkdirDirectory, renameFile } from '$lib/fs/api';
+  import { downloadFile, type Entry, fetchInfo, type FileInfo, mkdirDirectory, renameFile } from '$lib/fs/api';
   import { tree } from '$lib/fs/tree';
 import {
   uploadManager,
@@ -427,6 +427,32 @@ import { formatSize, formatDate } from '$lib/fs/format';
       if (res.taskID) flash(`Extracting… (task ${res.taskID}).`);
     } catch (err) {
       flash(err instanceof Error ? err.message : 'could not decompress');
+    }
+  }
+
+  // --- download: stream a single selected file to the browser --------------
+  // `downloadFile` POSTs the selected path to /api/downloads, which returns a
+  // one-time token; the caller then loads /downloads/{token}, which streams the
+  // bound file and consumes the token. The source path never appears in that URL
+  // — only the unguessable token does — so the streaming request is confined
+  // server-side. Download applies to exactly one file, so the button enables
+  // solely when that single file row is selected (a folder or a multi-path
+  // selection is rejected by the server).
+  let downloadEntries = $derived(
+    entries.filter((it) => selected.has(it.path)).map((it) => ({ path: it.path, name: it.name, type: it.type }))
+  );
+  const canDownload = $derived(
+    downloadEntries.length === 1 && downloadEntries[0].type === 'file'
+  );
+
+  async function confirmDownload() {
+    if (!canDownload) return;
+    try {
+      const token = await downloadFile(downloadEntries[0].path);
+      clearSelection();
+      if (token) window.location.assign('/downloads/' + token);
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'could not download');
     }
   }
 
@@ -1054,6 +1080,20 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
         <path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
         <path d="M12 14v-4m0 0-2 2m2-2 2 2" />
         <path d="M9 18h6" />
+      </svg>
+    </button>
+    <button
+      class="tool download"
+      type="button"
+      title="Download this file"
+      aria-label="Download"
+      disabled={!canDownload}
+      onclick={confirmDownload}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+        <path d="M12 3v11" />
+        <path d="M7 12l5 5 5-5" />
+        <path d="M5 20v1h14v-1" />
       </svg>
     </button>
     <div class="upload-menu-wrap">
