@@ -1,71 +1,71 @@
 :root {
-	/* Light surfaces (windows, popovers) */
-	--surface: #ffffff;
-	--surface-soft: #f8fafc;
-	--surface-inset: #f1f5f9;
-	--border: #e2e8f0;
-	--border-strong: #cbd5e1;
+  /* Light surfaces (windows, popovers) */
+  --surface: #ffffff;
+  --surface-soft: #f8fafc;
+  --surface-inset: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
 
-	/* Text on light surfaces */
-	--text: #0f172a;
-	--text-muted: #475569;
-	--text-faint: #94a3b8;
+  /* Text on light surfaces */
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #94a3b8;
 
-	/* Desktop background */
-	--desktop-1: #0b1120;
-	--desktop-2: #161a3a;
-	--desktop-3: #241b4d;
+  /* Desktop background */
+  --desktop-1: #0b1120;
+  --desktop-2: #161a3a;
+  --desktop-3: #241b4d;
 
-	/* Taskbar (frosted dark glass) */
-	--taskbar-bg: rgba(15, 23, 42, 0.55);
-	--taskbar-border: rgba(255, 255, 255, 0.12);
-	--taskbar-text: #e2e8f0;
-	--taskbar-muted: #94a3b8;
-	--taskbar-hover: rgba(255, 255, 255, 0.1);
-	--taskbar-active: rgba(129, 140, 248, 0.22);
+  /* Taskbar (frosted dark glass) */
+  --taskbar-bg: rgba(15, 23, 42, 0.55);
+  --taskbar-border: rgba(255, 255, 255, 0.12);
+  --taskbar-text: #e2e8f0;
+  --taskbar-muted: #94a3b8;
+  --taskbar-hover: rgba(255, 255, 255, 0.1);
+  --taskbar-active: rgba(129, 140, 248, 0.22);
 
-	/* Accent */
-	--accent: #818cf8;
-	--accent-strong: #6366f1;
-	--accent-2: #a78bfa;
+  /* Accent */
+  --accent: #818cf8;
+  --accent-strong: #6366f1;
+  --accent-2: #a78bfa;
 
-	/* Status */
-	--ok: #34d399;
-	--ok-strong: #10b981;
-	--warn: #fbbf24;
-	--alert: #fb7185;
+  /* Status */
+  --ok: #34d399;
+  --ok-strong: #10b981;
+  --warn: #fbbf24;
+  --alert: #fb7185;
 
-	/* Elevation */
-	--shadow-window: 0 24px 70px rgba(0, 0, 0, 0.45);
-	--shadow-popover: 0 16px 44px rgba(0, 0, 0, 0.35);
-	--shadow-glyph: 0 8px 22px rgba(99, 102, 241, 0.4);
+  /* Elevation */
+  --shadow-window: 0 24px 70px rgba(0, 0, 0, 0.45);
+  --shadow-popover: 0 16px 44px rgba(0, 0, 0, 0.35);
+  --shadow-glyph: 0 8px 22px rgba(99, 102, 241, 0.4);
 
-	font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 *,
 *::before,
 *::after {
-	box-sizing: border-box;
+  box-sizing: border-box;
 }
 
 html,
 body {
-	margin: 0;
-	padding: 0;
-	height: 100%;
-	overflow: hidden;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
-	color: var(--text);
-	background:
-		radial-gradient(1150px 780px at 16% 12%, rgba(129, 140, 248, 0.26), transparent 60%),
-		radial-gradient(950px 720px at 86% 92%, rgba(167, 139, 250, 0.22), transparent 55%),
-		linear-gradient(150deg, var(--desktop-1), var(--desktop-2) 52%, var(--desktop-3));
-	user-select: none;
+  color: var(--text);
+  background:
+    radial-gradient(1150px 780px at 16% 12%, rgba(129, 140, 248, 0.26), transparent 60%),
+    radial-gradient(950px 720px at 86% 92%, rgba(167, 139, 250, 0.22), transparent 55%),
+    linear-gradient(150deg, var(--desktop-1), var(--desktop-2) 52%, var(--desktop-3));
+  user-select: none;
 }
 
 button {
-	font-family: inherit;
+  font-family: inherit;
 }

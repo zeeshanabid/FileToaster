@@ -19,27 +19,27 @@ export type ArchiveFormat = 'zip' | 'targz' | 'tar' | '';
 // not a supported archive. Matching is case-insensitive and follows the
 // precedence order above.
 export function archiveFormat(name: string): ArchiveFormat {
-	const lower = name.toLowerCase();
-	if (lower.endsWith('.tar.gz')) return 'targz';
-	if (lower.endsWith('.tgz')) return 'targz';
-	if (lower.endsWith('.zip')) return 'zip';
-	if (lower.endsWith('.tar')) return 'tar';
-	return '';
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.tar.gz')) return 'targz';
+  if (lower.endsWith('.tgz')) return 'targz';
+  if (lower.endsWith('.zip')) return 'zip';
+  if (lower.endsWith('.tar')) return 'tar';
+  return '';
 }
 
 // isArchiveFile reports whether name denotes a supported archive. The Decompress
 // button uses it to enable itself only for archive files.
 export function isArchiveFile(name: string): boolean {
-	return archiveFormat(name) !== '';
+  return archiveFormat(name) !== '';
 }
 
 // archiveStem returns name without its archive extension — `myfiles.zip` →
 // `myfiles`, `myfiles.tar.gz` → `myfiles` — the name the "Extract in …" folder
 // is derived from. A name with no archive extension is returned unchanged.
 export function archiveStem(name: string): string {
-	if (name.endsWith('.tar.gz')) return name.slice(0, -'.tar.gz'.length);
-	if (name.endsWith('.tgz')) return name.slice(0, -'.tgz'.length);
-	if (name.endsWith('.zip')) return name.slice(0, -'.zip'.length);
-	if (name.endsWith('.tar')) return name.slice(0, -'.tar'.length);
-	return name;
+  if (name.endsWith('.tar.gz')) return name.slice(0, -'.tar.gz'.length);
+  if (name.endsWith('.tgz')) return name.slice(0, -'.tgz'.length);
+  if (name.endsWith('.zip')) return name.slice(0, -'.zip'.length);
+  if (name.endsWith('.tar')) return name.slice(0, -'.tar'.length);
+  return name;
 }

@@ -5,12 +5,12 @@ import adapter from '@sveltejs/adapter-static';
 // because it is incompatible with vite 6's preprocessCSS in the vitest path.
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
-	kit: {
-		adapter: adapter({
-			// Output goes here at build time; embedded into the Go binary.
-			pages: 'frontend-build'
-		})
-	}
+  kit: {
+    adapter: adapter({
+      // Output goes here at build time; embedded into the Go binary.
+      pages: 'frontend-build'
+    })
+  }
 };
 
 export default config;
