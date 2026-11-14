@@ -6,28 +6,28 @@
 package ops
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/gzip"
-	"context"
-	"errors"
-	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
+  "archive/tar"
+  "archive/zip"
+  "compress/gzip"
+  "context"
+  "errors"
+  "fmt"
+  "io"
+  "os"
+  "path/filepath"
+  "strconv"
+  "strings"
 
-	"filetoaster/internal/fs"
-	"filetoaster/internal/task"
+  "filetoaster/internal/fs"
+  "filetoaster/internal/task"
 )
 
 // supportedArchiveFormats are the stdlib archive formats compress offers. An
 // unsupported or unknown format is rejected with ErrUnsupportedFormat.
 const (
-	formatZip   = "zip"
-	formatTargz = "targz"
-	formatTar   = "tar"
+  formatZip   = "zip"
+  formatTargz = "targz"
+  formatTar   = "tar"
 )
 
 // compressBufferSize is the per-file stream buffer for the archive writer. It
@@ -54,9 +54,9 @@ var CompressErrOverlappingSelection = errors.New("selection includes a path insi
 // record and label. Dest is the resolved, non-colliding archive path; Format is
 // the selected archive format; Source is the number of selected sources.
 type CompressMeta struct {
-	Format string `json:"format"`
-	Dest   string `json:"dest"`
-	Source int    `json:"source"`
+  Format string `json:"format"`
+  Dest   string `json:"dest"`
+  Source int    `json:"source"`
 }
 
 // ResolvedSource is one source selected for compression: its canonical path,
@@ -64,17 +64,17 @@ type CompressMeta struct {
 // archive ("" for a file, the directory's basename plus a slash for a directory,
 // so an extract restores the structure in place).
 type ResolvedSource struct {
-	Path   string `json:"path"`
-	IsDir  bool   `json:"isDir"`
-	Prefix string `json:"prefix"`
+  Path   string `json:"path"`
+  IsDir  bool   `json:"isDir"`
+  Prefix string `json:"prefix"`
 }
 
 // CompressPlan is a validated, resolved set of sources and the single archive to
 // write for them. It is the opaque spec passed to Run.
 type CompressPlan struct {
-	Sources []ResolvedSource `json:"sources"`
-	Dest    string           `json:"dest"`
-	Format  string           `json:"format"`
+  Sources []ResolvedSource `json:"sources"`
+  Dest    string           `json:"dest"`
+  Format  string           `json:"format"`
 }
 
 // CompressResolve validates the request, resolves every source against the
@@ -98,57 +98,57 @@ type CompressPlan struct {
 // Sources are opened read-only by CompressRun; Resolve never writes or mutates
 // anything. A source nested inside another selected source is rejected.
 func CompressResolve(roots *fs.Roots, paths []string, format string) (*CompressPlan, error) {
-	paths = uniqueTrim(paths)
-	if len(paths) == 0 {
-		return nil, ErrEmptyPaths
-	}
-	format = strings.TrimSpace(format)
-	if !isSupportedArchiveFormat(format) {
-		return nil, CompressArchiveFormatUnsupported
-	}
+  paths = uniqueTrim(paths)
+  if len(paths) == 0 {
+    return nil, ErrEmptyPaths
+  }
+  format = strings.TrimSpace(format)
+  if !isSupportedArchiveFormat(format) {
+    return nil, CompressArchiveFormatUnsupported
+  }
 
-	resolved := make([]ResolvedSource, 0, len(paths))
-	resolvedPaths := make([]string, 0, len(paths))
-	for _, p := range paths {
-		src, err := roots.Resolve(p)
-		if err != nil {
-			return nil, err
-		}
-		info, statErr := os.Lstat(src)
-		if statErr != nil {
-			return nil, statErr
-		}
-		prefix := ""
-		if info.IsDir() {
-			prefix = filepath.Base(src) + string(filepath.Separator)
-		}
-		resolved = append(resolved, ResolvedSource{Path: src, IsDir: info.IsDir(), Prefix: prefix})
-		resolvedPaths = append(resolvedPaths, src)
-	}
+  resolved := make([]ResolvedSource, 0, len(paths))
+  resolvedPaths := make([]string, 0, len(paths))
+  for _, p := range paths {
+    src, err := roots.Resolve(p)
+    if err != nil {
+      return nil, err
+    }
+    info, statErr := os.Lstat(src)
+    if statErr != nil {
+      return nil, statErr
+    }
+    prefix := ""
+    if info.IsDir() {
+      prefix = filepath.Base(src) + string(filepath.Separator)
+    }
+    resolved = append(resolved, ResolvedSource{Path: src, IsDir: info.IsDir(), Prefix: prefix})
+    resolvedPaths = append(resolvedPaths, src)
+  }
 
-	// Reject a selection that contains a path inside another selected path:
-	// archiving the outer source would stream the inner one's bytes twice.
-	for i := 0; i < len(resolved); i++ {
-		for j := 0; j < len(resolved); j++ {
-			if i == j {
-				continue
-			}
-			if isInside(resolved[i].Path, resolved[j].Path) {
-				return nil, fmt.Errorf("%w", CompressErrOverlappingSelection)
-			}
-		}
-	}
+  // Reject a selection that contains a path inside another selected path:
+  // archiving the outer source would stream the inner one's bytes twice.
+  for i := 0; i < len(resolved); i++ {
+    for j := 0; j < len(resolved); j++ {
+      if i == j {
+        continue
+      }
+      if isInside(resolved[i].Path, resolved[j].Path) {
+        return nil, fmt.Errorf("%w", CompressErrOverlappingSelection)
+      }
+    }
+  }
 
-	dest, err := computeArchiveName(roots, resolvedPaths, format)
-	if err != nil {
-		return nil, err
-	}
+  dest, err := computeArchiveName(roots, resolvedPaths, format)
+  if err != nil {
+    return nil, err
+  }
 
-	plan := &CompressPlan{Dest: dest, Format: format}
-	for _, src := range resolved {
-		plan.Sources = append(plan.Sources, src)
-	}
-	return plan, nil
+  plan := &CompressPlan{Dest: dest, Format: format}
+  for _, src := range resolved {
+    plan.Sources = append(plan.Sources, src)
+  }
+  return plan, nil
 }
 
 // computeArchiveName derives the single in-place archive path for the resolved
@@ -157,98 +157,98 @@ func CompressResolve(roots *fs.Roots, paths []string, format string) (*CompressP
 // roots and, if it already exists, is renumbered (" (1)", …) so it never
 // overwrites an existing archive.
 func computeArchiveName(roots *fs.Roots, sources []string, format string) (string, error) {
-	ext := archiveExt(format)
-	var base string
-	if len(sources) == 1 {
-		src := sources[0]
-		base = filepath.Join(filepath.Dir(src), stripExt(filepath.Base(src))+ext)
-	} else {
-		common := commonParentDir(sources)
-		// Several sources share no single containing folder (e.g. they sit in
-		// different allowed roots, or only under the filesystem root). Naming an
-		// archive after such a parent is nonsensical, so reject rather than write
-		// a root-named archive.
-		if common == "" || common == string(filepath.Separator) || !roots.Contained(common) {
-			return "", fmt.Errorf("%w", CompressErrDifferentDirectories)
-		}
-		base = filepath.Join(common, stripExt(filepath.Base(common))+ext)
-	}
-	return uniqueArchiveName(base, stripExt(filepath.Base(base)), ext), nil
+  ext := archiveExt(format)
+  var base string
+  if len(sources) == 1 {
+    src := sources[0]
+    base = filepath.Join(filepath.Dir(src), stripExt(filepath.Base(src))+ext)
+  } else {
+    common := commonParentDir(sources)
+    // Several sources share no single containing folder (e.g. they sit in
+    // different allowed roots, or only under the filesystem root). Naming an
+    // archive after such a parent is nonsensical, so reject rather than write
+    // a root-named archive.
+    if common == "" || common == string(filepath.Separator) || !roots.Contained(common) {
+      return "", fmt.Errorf("%w", CompressErrDifferentDirectories)
+    }
+    base = filepath.Join(common, stripExt(filepath.Base(common))+ext)
+  }
+  return uniqueArchiveName(base, stripExt(filepath.Base(base)), ext), nil
 }
 
 // uniqueArchiveName returns base if it does not exist, otherwise base's stem
 // renumbered " (1)", " (2)", … before its extension until a free name is found,
 // so an archive is never overwritten.
 func uniqueArchiveName(base, stem, ext string) string {
-	if _, err := os.Stat(base); err != nil {
-		return base
-	}
-	n := 1
-	for {
-		candidate := filepath.Join(filepath.Dir(base), stem+" ("+strconv.Itoa(n)+")"+ext)
-		if _, serr := os.Stat(candidate); serr != nil {
-			return candidate
-		}
-		n++
-	}
+  if _, err := os.Stat(base); err != nil {
+    return base
+  }
+  n := 1
+  for {
+    candidate := filepath.Join(filepath.Dir(base), stem+" ("+strconv.Itoa(n)+")"+ext)
+    if _, serr := os.Stat(candidate); serr != nil {
+      return candidate
+    }
+    n++
+  }
 }
 
 // archiveExt maps a supported format name to the archive file extension.
 func archiveExt(format string) string {
-	switch format {
-	case formatZip:
-		return ".zip"
-	case formatTargz:
-		return ".tar.gz"
-	case formatTar:
-		return ".tar"
-	}
-	return ""
+  switch format {
+  case formatZip:
+    return ".zip"
+  case formatTargz:
+    return ".tar.gz"
+  case formatTar:
+    return ".tar"
+  }
+  return ""
 }
 
 // isSupportedArchiveFormat reports whether format is one the stdlib can write.
 func isSupportedArchiveFormat(format string) bool {
-	switch format {
-	case formatZip, formatTargz, formatTar:
-		return true
-	default:
-		return false
-	}
+  switch format {
+  case formatZip, formatTargz, formatTar:
+    return true
+  default:
+    return false
+  }
 }
 
 // stripExt removes a single file extension from name via filepath.Ext.
 func stripExt(name string) string {
-	if name == "" {
-		return ""
-	}
-	return name[:len(name)-len(filepath.Ext(name))]
+  if name == "" {
+    return ""
+  }
+  return name[:len(name)-len(filepath.Ext(name))]
 }
 
 // commonParentDir returns the deepest directory that contains every path (the
 // longest common path prefix). For sources in different top-level folders it
 // returns the filesystem root ("/"), which the caller rejects.
 func commonParentDir(paths []string) string {
-	abs := strings.HasPrefix(filepath.Clean(paths[0]), string(filepath.Separator))
-	parts := strings.Split(filepath.Clean(paths[0]), string(filepath.Separator))
-	for _, p := range paths[1:] {
-		cur := strings.Split(filepath.Clean(p), string(filepath.Separator))
-		limit := len(cur)
-		if len(parts) < limit {
-			limit = len(parts)
-		}
-		k := 0
-		for k < limit && parts[k] == cur[k] {
-			k++
-		}
-		parts = parts[:k]
-	}
-	joined := filepath.Join(parts...)
-	// filepath.Join drops a leading empty component, collapsing an absolute path
-	// to a relative one; reattach the root separator so containment checks work.
-	if abs && joined != string(filepath.Separator) {
-		joined = string(filepath.Separator) + joined
-	}
-	return joined
+  abs := strings.HasPrefix(filepath.Clean(paths[0]), string(filepath.Separator))
+  parts := strings.Split(filepath.Clean(paths[0]), string(filepath.Separator))
+  for _, p := range paths[1:] {
+    cur := strings.Split(filepath.Clean(p), string(filepath.Separator))
+    limit := len(cur)
+    if len(parts) < limit {
+      limit = len(parts)
+    }
+    k := 0
+    for k < limit && parts[k] == cur[k] {
+      k++
+    }
+    parts = parts[:k]
+  }
+  joined := filepath.Join(parts...)
+  // filepath.Join drops a leading empty component, collapsing an absolute path
+  // to a relative one; reattach the root separator so containment checks work.
+  if abs && joined != string(filepath.Separator) {
+    joined = string(filepath.Separator) + joined
+  }
+  return joined
 }
 
 // CompressRun executes the plan, writing a single archive at plan.Dest from the
@@ -258,200 +258,200 @@ func commonParentDir(paths []string) string {
 // and a cancelled context is returned directly so the pool marks the task
 // cancelled.
 func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression) error {
-	var totalBytes int64
-	var filesTotal int
-	for _, src := range plan.Sources {
-		size, files, err := statTarget(src.Path)
-		if err != nil {
-			return err
-		}
-		totalBytes += size
-		filesTotal += files
-	}
-	prog.SetTotal(totalBytes, filesTotal)
+  var totalBytes int64
+  var filesTotal int
+  for _, src := range plan.Sources {
+    size, files, err := statTarget(src.Path)
+    if err != nil {
+      return err
+    }
+    totalBytes += size
+    filesTotal += files
+  }
+  prog.SetTotal(totalBytes, filesTotal)
 
-	f, err := os.OpenFile(plan.Dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	archive := newArchive(plan, f)
-	defer f.Close()
+  f, err := os.OpenFile(plan.Dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+  if err != nil {
+    return err
+  }
+  archive := newArchive(plan, f)
+  defer f.Close()
 
-	buf := make([]byte, compressBufferSize)
-	for _, src := range plan.Sources {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := archive.walk(ctx, src.Path, src.Prefix, plan.Dest, prog, buf); err != nil {
-			return err
-		}
-	}
+  buf := make([]byte, compressBufferSize)
+  for _, src := range plan.Sources {
+    if err := ctx.Err(); err != nil {
+      return err
+    }
+    if err := archive.walk(ctx, src.Path, src.Prefix, plan.Dest, prog, buf); err != nil {
+      return err
+    }
+  }
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return archive.close()
+  if err := ctx.Err(); err != nil {
+    return err
+  }
+  return archive.close()
 }
 
 // archive wraps the writer for one plan.Format and streams regular files into it.
 type archive struct {
-	format string
-	f      *os.File
-	zw     *zip.Writer
-	gw     *gzip.Writer
-	tw     *tar.Writer
+  format string
+  f      *os.File
+  zw     *zip.Writer
+  gw     *gzip.Writer
+  tw     *tar.Writer
 }
 
 // newArchive opens the writer for plan.Format: a zip writer, a gzip-wrapped tar
 // writer, or a plain tar writer.
 func newArchive(plan *CompressPlan, f *os.File) *archive {
-	a := &archive{format: plan.Format, f: f}
-	switch plan.Format {
-	case formatZip:
-		a.zw = zip.NewWriter(f)
-	case formatTargz:
-		a.gw = gzip.NewWriter(f)
-		a.tw = tar.NewWriter(a.gw)
-	case formatTar:
-		a.tw = tar.NewWriter(f)
-	}
-	return a
+  a := &archive{format: plan.Format, f: f}
+  switch plan.Format {
+  case formatZip:
+    a.zw = zip.NewWriter(f)
+  case formatTargz:
+    a.gw = gzip.NewWriter(f)
+    a.tw = tar.NewWriter(a.gw)
+  case formatTar:
+    a.tw = tar.NewWriter(f)
+  }
+  return a
 }
 
 // walk archives src and, for directories, recurses into each child rooted at the
 // supplied prefix (so entries are relative to the source's basename). It skips
 // the destination archive itself and returns a context error on cancellation.
 func (a *archive) walk(ctx context.Context, src, prefix, dest string, prog *task.Progression, buf []byte) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return a.archiveFile(ctx, prefix+filepath.Base(src), info, src, prog, buf)
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, de := range entries {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		child := filepath.Join(src, de.Name())
-		if child == dest {
-			// The archive is being written in place; excluding it stops a
-			// directory from archiving its own output.
-			continue
-		}
-		i2, err := de.Info()
-		if err != nil {
-			continue
-		}
-		if de.IsDir() {
-			// A directory contributes a basename-rooted prefix for its children.
-			childPrefix := prefix + de.Name() + string(filepath.Separator)
-			if err := a.walk(ctx, child, childPrefix, dest, prog, buf); err != nil {
-				return err
-			}
-			continue
-		}
-		// A regular file contributes a flat entry rooted at the source's prefix.
-		if err := a.archiveFile(ctx, prefix+de.Name(), i2, child, prog, buf); err != nil {
-			return err
-		}
-	}
-	return nil
+  info, err := os.Lstat(src)
+  if err != nil {
+    return err
+  }
+  if !info.IsDir() {
+    return a.archiveFile(ctx, prefix+filepath.Base(src), info, src, prog, buf)
+  }
+  entries, err := os.ReadDir(src)
+  if err != nil {
+    return err
+  }
+  for _, de := range entries {
+    if err := ctx.Err(); err != nil {
+      return err
+    }
+    child := filepath.Join(src, de.Name())
+    if child == dest {
+      // The archive is being written in place; excluding it stops a
+      // directory from archiving its own output.
+      continue
+    }
+    i2, err := de.Info()
+    if err != nil {
+      continue
+    }
+    if de.IsDir() {
+      // A directory contributes a basename-rooted prefix for its children.
+      childPrefix := prefix + de.Name() + string(filepath.Separator)
+      if err := a.walk(ctx, child, childPrefix, dest, prog, buf); err != nil {
+        return err
+      }
+      continue
+    }
+    // A regular file contributes a flat entry rooted at the source's prefix.
+    if err := a.archiveFile(ctx, prefix+de.Name(), i2, child, prog, buf); err != nil {
+      return err
+    }
+  }
+  return nil
 }
 
 // archiveFile records one regular file — its header (with mode, mod time, size)
 // and its bytes — into the archive, reporting bytes as each chunk streams. The
 // file is opened read-only and never altered.
 func (a *archive) archiveFile(ctx context.Context, name string, info os.FileInfo, src string, prog *task.Progression, buf []byte) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
+  in, err := os.Open(src)
+  if err != nil {
+    return err
+  }
+  defer in.Close()
 
-	switch a.format {
-	case formatZip:
-		fh, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
-		fh.Name = name
-		fh.Method = zip.Deflate
-		w, err := a.zw.CreateHeader(fh)
-		if err != nil {
-			return err
-		}
-		if err := streamTo(ctx, w, in, prog, buf); err != nil {
-			return err
-		}
-		prog.AddFile()
-		return nil
-	default: // tar and tar.gz
-		hdr := &tar.Header{
-			Name:    name,
-			Mode:    int64(info.Mode().Perm()),
-			ModTime: info.ModTime(),
-			Size:    info.Size(),
-			Format:  tar.FormatGNU,
-		}
-		if err := a.tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if err := streamTo(ctx, a.tw, in, prog, buf); err != nil {
-			return err
-		}
-		prog.AddFile()
-		return nil
-	}
+  switch a.format {
+  case formatZip:
+    fh, err := zip.FileInfoHeader(info)
+    if err != nil {
+      return err
+    }
+    fh.Name = name
+    fh.Method = zip.Deflate
+    w, err := a.zw.CreateHeader(fh)
+    if err != nil {
+      return err
+    }
+    if err := streamTo(ctx, w, in, prog, buf); err != nil {
+      return err
+    }
+    prog.AddFile()
+    return nil
+  default: // tar and tar.gz
+    hdr := &tar.Header{
+      Name:    name,
+      Mode:    int64(info.Mode().Perm()),
+      ModTime: info.ModTime(),
+      Size:    info.Size(),
+      Format:  tar.FormatGNU,
+    }
+    if err := a.tw.WriteHeader(hdr); err != nil {
+      return err
+    }
+    if err := streamTo(ctx, a.tw, in, prog, buf); err != nil {
+      return err
+    }
+    prog.AddFile()
+    return nil
+  }
 }
 
 // close finalizes the archive: it closes the tar writer before the gzip writer
 // (gzip/tar.gz) so the trailer is written, then syncs and closes the file.
 func (a *archive) close() error {
-	var firstErr error
-	switch a.format {
-	case formatZip:
-		firstErr = a.zw.Close()
-	case formatTargz:
-		if err := a.tw.Close(); err != nil {
-			return err
-		}
-		firstErr = a.gw.Close()
-	case formatTar:
-		firstErr = a.tw.Close()
-	}
-	if firstErr != nil {
-		return firstErr
-	}
-	if err := a.f.Sync(); err != nil {
-		return err
-	}
-	return a.f.Close()
+  var firstErr error
+  switch a.format {
+  case formatZip:
+    firstErr = a.zw.Close()
+  case formatTargz:
+    if err := a.tw.Close(); err != nil {
+      return err
+    }
+    firstErr = a.gw.Close()
+  case formatTar:
+    firstErr = a.tw.Close()
+  }
+  if firstErr != nil {
+    return firstErr
+  }
+  if err := a.f.Sync(); err != nil {
+    return err
+  }
+  return a.f.Close()
 }
 
 // streamTo copies r to w in chunks, reporting bytes as each chunk is written,
 // and returns a context error if the context is cancelled mid-stream.
 func streamTo(ctx context.Context, w io.Writer, r io.Reader, prog *task.Progression, buf []byte) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		n, rerr := r.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-			prog.AddBytes(int64(n))
-		}
-		if rerr != nil {
-			if rerr == io.EOF {
-				return nil
-			}
-			return rerr
-		}
-	}
+  for {
+    if err := ctx.Err(); err != nil {
+      return err
+    }
+    n, rerr := r.Read(buf)
+    if n > 0 {
+      if _, werr := w.Write(buf[:n]); werr != nil {
+        return werr
+      }
+      prog.AddBytes(int64(n))
+    }
+    if rerr != nil {
+      if rerr == io.EOF {
+        return nil
+      }
+      return rerr
+    }
+  }
 }

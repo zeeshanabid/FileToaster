@@ -6,10 +6,10 @@
 package fs
 
 import (
-	"errors"
-	"fmt"
-	"path/filepath"
-	"strings"
+  "errors"
+  "fmt"
+  "path/filepath"
+  "strings"
 )
 
 // ErrOutsideRoots signals that a requested path is not contained within any of
@@ -19,32 +19,32 @@ var ErrOutsideRoots = errors.New("path is outside the allowed roots")
 // Roots is the set of directories the server may serve. Every path handed to an
 // fs function must be canonicalized and contained within one of these roots.
 type Roots struct {
-	roots []string
+  roots []string
 }
 
 // NewRoots builds a Roots from already-resolved absolute directory paths. The
 // paths are cleaned; empty entries are dropped.
 func NewRoots(paths ...string) *Roots {
-	normalized := make([]string, 0, len(paths))
-	seen := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		clean := filepath.Clean(p)
-		if clean == "" || clean == "." {
-			continue
-		}
-		// Canonicalize the root the same way requests are (EvalSymlinks + Clean)
-		// so a symlinked allowed root (e.g. /bin -> /usr/bin) is compared against
-		// the resolved requested path rather than its un-resolved config form.
-		if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-			clean = resolved
-		}
-		if _, dup := seen[clean]; dup {
-			continue
-		}
-		seen[clean] = struct{}{}
-		normalized = append(normalized, clean)
-	}
-	return &Roots{roots: normalized}
+  normalized := make([]string, 0, len(paths))
+  seen := make(map[string]struct{}, len(paths))
+  for _, p := range paths {
+    clean := filepath.Clean(p)
+    if clean == "" || clean == "." {
+      continue
+    }
+    // Canonicalize the root the same way requests are (EvalSymlinks + Clean)
+    // so a symlinked allowed root (e.g. /bin -> /usr/bin) is compared against
+    // the resolved requested path rather than its un-resolved config form.
+    if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+      clean = resolved
+    }
+    if _, dup := seen[clean]; dup {
+      continue
+    }
+    seen[clean] = struct{}{}
+    normalized = append(normalized, clean)
+  }
+  return &Roots{roots: normalized}
 }
 
 // Allowed returns the resolved absolute roots, in order.
@@ -54,41 +54,41 @@ func (r *Roots) Allowed() []string { return r.roots }
 // either equal to it or nested under it. The filesystem root ("/") is treated
 // as containing everything beneath it.
 func (r *Roots) Contained(canonPath string) bool {
-	canonPath = filepath.Clean(canonPath)
-	for _, root := range r.roots {
-		root = filepath.Clean(root)
-		if canonPath == root {
-			return true
-		}
-		// A child starts with root + separator. For the filesystem root that
-		// would be "//"; treat "/" as containing everything beneath it.
-		prefix := root + string(filepath.Separator)
-		if root == string(filepath.Separator) {
-			prefix = string(filepath.Separator)
-		}
-		if strings.HasPrefix(canonPath, prefix) {
-			return true
-		}
-	}
-	return false
+  canonPath = filepath.Clean(canonPath)
+  for _, root := range r.roots {
+    root = filepath.Clean(root)
+    if canonPath == root {
+      return true
+    }
+    // A child starts with root + separator. For the filesystem root that
+    // would be "//"; treat "/" as containing everything beneath it.
+    prefix := root + string(filepath.Separator)
+    if root == string(filepath.Separator) {
+      prefix = string(filepath.Separator)
+    }
+    if strings.HasPrefix(canonPath, prefix) {
+      return true
+    }
+  }
+  return false
 }
 
 // Resolve canonicalizes rawPath (following symlinks) and verifies it lies within
 // a root. It returns the canonical path, or an error for a missing path, a
 // symlink escape, or an absolute escape.
 func (r *Roots) Resolve(rawPath string) (string, error) {
-	if rawPath == "" {
-		return "", errors.New("path is required")
-	}
-	if rawPath == string(filepath.Separator) {
-		return "", errors.New("cannot list the filesystem root")
-	}
-	canonical, err := filepath.EvalSymlinks(rawPath)
-	if err != nil {
-		return "", fmt.Errorf("path is not accessible: %w", err)
-	}
-	if !r.Contained(canonical) {
-		return "", ErrOutsideRoots
-	}
-	return canonical, nil
+  if rawPath == "" {
+    return "", errors.New("path is required")
+  }
+  if rawPath == string(filepath.Separator) {
+    return "", errors.New("cannot list the filesystem root")
+  }
+  canonical, err := filepath.EvalSymlinks(rawPath)
+  if err != nil {
+    return "", fmt.Errorf("path is not accessible: %w", err)
+  }
+  if !r.Contained(canonical) {
+    return "", ErrOutsideRoots
+  }
+  return canonical, nil
 }
