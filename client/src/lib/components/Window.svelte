@@ -653,13 +653,44 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     });
   }
 
-  // Drag-and-drop onto the window: derive the manifest from the dropped files
-  // (their webkitRelativePath carries a dropped folder's structure) and upload.
+  // isDirectoryDrop reports whether a drop represents a folder/directory. We
+  // only accept files on drag-and-drop (folders upload through the toolbar
+  // "Upload folder…" picker), so onDrop rejects a directory drop. Two browser
+  // behaviors are covered: Blink (Chrome/Edge) flattens a dropped folder into
+  // DataTransfer.files, each file carrying a non-empty webkitRelativePath, while
+  // Gecko (Firefox) leaves DataTransfer.files empty and exposes the folder as a
+  // directory entry in DataTransfer.items. Individually dragged files carry no
+  // webkitRelativePath and resolve to a file entry, so they are allowed.
+  function isDirectoryDrop(dt: DataTransfer): boolean {
+    if (dt.items && dt.items.length > 0) {
+      for (let i = 0; i < dt.items.length; i++) {
+        const item = dt.items[i];
+        const asEntry = item as unknown as { webkitGetAsEntry?: () => DropEntry | null };
+        if (typeof asEntry.webkitGetAsEntry === 'function') {
+          const entry = asEntry.webkitGetAsEntry();
+          if (entry && entry.isDirectory) return true;
+        }
+      }
+    }
+    if (dt.files) {
+      for (let i = 0; i < dt.files.length; i++) {
+        if (dt.files[i].webkitRelativePath) return true;
+      }
+    }
+    return false;
+  }
+
+  // Drag-and-drop onto the window: accept files only, never folders. Folder
+  // upload is offered through the toolbar "Upload folder…" picker.
   async function onDrop(e: DragEvent) {
     e.preventDefault();
     const dt = e.dataTransfer;
     if (!dt) return;
     if (!win) return;
+    if (isDirectoryDrop(dt)) {
+      flash('Drop files only; upload a folder from the toolbar.');
+      return;
+    }
     let items: DnDItem[] = [];
     try {
       items = await readTransfer(dt);
