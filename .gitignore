@@ -46,3 +46,5 @@ client/.svelte-kit/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+.vite
