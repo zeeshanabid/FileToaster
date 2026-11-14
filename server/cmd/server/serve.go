@@ -13,6 +13,7 @@ import (
 
   "filetoaster/internal/auth"
   "filetoaster/internal/config"
+  "filetoaster/internal/download"
   "filetoaster/internal/fs"
   "filetoaster/internal/protocol"
   "filetoaster/internal/service"
@@ -77,6 +78,20 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
   mux.Handle("POST /api/fs/info", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     serveFsInfo(w, r, fsCfg)
   })))
+
+  // Single-file download (tokenized): POST /api/downloads confines the selected
+  // path to the allowed roots, issues a one-time fixed-length token, and returns
+  // it; GET /downloads/{token} streams the file and consumes the token. Both are
+  // authenticated like the fs endpoints, and the streaming URL carries only the
+  // token, so no client path can reach it (traversal is impossible).
+  downloadCfg := newDownloadConfig(func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }, download.NewRegistry())
+  mux.Handle("POST /api/downloads", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    serveDownloads(w, r, downloadCfg)
+  })))
+  mux.Handle("GET /downloads/{token}", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    serveDownloadToken(w, r, downloadCfg)
+  })))
+  downloadCleanup := startDownloadCleanup(downloadCfg.registry, downloadStaleAfter, downloadSweepInterval)
 
   // Task engine. The pool runs at most cfg.MaxParallelTasks tasks at once;
   // overflow queues. Copy is the first operation; more register the same way.
@@ -162,6 +177,9 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
   // then stop the HTTP server once the task pool has drained.
   cleanup.cancel()
   <-cleanup.done
+  // Stop the download token sweep and wait for its final scan to finish.
+  downloadCleanup.cancel()
+  <-downloadCleanup.done
   // Stop the HTTP server once the task pool has drained (or been force-cancelled).
   httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second)
   defer httpCancel()
