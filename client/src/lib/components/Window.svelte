@@ -80,7 +80,7 @@ import { formatSize, formatDate } from '$lib/fs/format';
   let resizingTree = $state(false);
   // Width of the folder-tree pane, set once at creation and adjustable with the
   // vertical divider handle between the tree and the listing.
-  let treeWidth = $state(260);
+  let treeWidth = $state(300);
   // svelte-ignore state_referenced_locally
   let size = $state({ width: winProp.width, height: winProp.height });
 
@@ -1323,7 +1323,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
           class="trow"
           class:active={win && win.path === dir}
           data-tree-active={win && win.path === dir ? dir : undefined}
-          style="padding-left:{8 + depth * 14}px"
+          style="padding-left:{8 + depth * 12}px"
         >
           <button type="button" class="tnode" title={dir} onclick={() => navigate(dir)}>
             <span class="twisty" aria-hidden="true" onclick={(e) => { e.stopPropagation(); void tree.toggleExpand(winProp.id, dir).then(() => frame += 1).catch(() => frame += 1); frame += 1; }}>{arrow(dir)}</span>
@@ -1632,7 +1632,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   }
   .tree {
     flex: none;
-    width: 260px;
+    width: 300px;
     border-right: 1px solid var(--border);
     background: var(--surface-soft);
     overflow: auto;
@@ -1720,6 +1720,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
      color: var(--accent-strong);
    }
    .tname {
+    min-width: 60px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
