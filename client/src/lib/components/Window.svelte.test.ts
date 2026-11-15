@@ -1524,3 +1524,232 @@ describe('Window download — single-file streaming download', () => {
     await waitFor(() => expect(screen.getByText(/could not download/i)).toBeInTheDocument());
   });
 });
+
+describe('Window drag-and-drop between windows', () => {
+  const MIME = 'application/x-filetoaster-drop';
+  let uploadSpy: MockInstance<typeof uploadManager.startUpload>;
+
+  function getRow(name: string): HTMLElement {
+    const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+      .find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+    if (!row) throw new Error(`no row named ${name}`);
+    return row;
+  }
+  async function selectRow(name: string): Promise<void> {
+    fireEvent.click(getRow(name));
+    await tick();
+  }
+  function makeTransfer(opts?: { files?: File[]; items?: unknown[]; payload?: unknown }) {
+    const data: Record<string, string> = {};
+    const dt = {
+      effectAllowed: 'all',
+      dropEffect: 'none',
+      files: opts?.files ?? [],
+      items: opts?.items ?? [],
+      setData(type: string, val: string) { data[type] = val; },
+      getData(type: string) { return data[type] ?? ''; },
+      setDragImage: vi.fn(),
+      types: [] as string[]
+    };
+    if (opts?.payload !== undefined) dt.setData(MIME, JSON.stringify(opts.payload));
+    dt.types = Object.keys(data);
+    return dt;
+  }
+  function startDrag(row: HTMLElement) {
+    const dt = makeTransfer();
+    const ev = new Event('dragstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: dt, configurable: true });
+    row.dispatchEvent(ev as unknown as DragEvent);
+    return dt;
+  }
+  function dropOnWindow(dt: any) {
+    const root = screen.getByRole('dialog') as HTMLElement;
+    const ev = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: dt, configurable: true });
+    root.dispatchEvent(ev as unknown as DragEvent);
+  }
+  function dragOverOnWindow(dt: any) {
+    const root = screen.getByRole('dialog') as HTMLElement;
+    const ev = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: dt, configurable: true });
+    root.dispatchEvent(ev as unknown as DragEvent);
+  }
+  // Pick Move or Copy in the drop chooser that opens when an intra-filetoaster
+  // drag lands on the window.
+  function chooseDrop(mode: 'move' | 'copy') {
+    fireEvent.click(
+      within(screen.getByTestId('drop-choice-dialog')).getByRole('button', {
+        name: mode === 'move' ? 'Move' : 'Copy'
+      })
+    );
+  }
+
+  beforeEach(() => {
+    uploadSpy = vi.spyOn(uploadManager, 'startUpload').mockResolvedValue('sess-dnd');
+  });
+  afterEach(() => {
+    uploadSpy.mockRestore();
+  });
+
+  beforeEach(() => {
+    (submitCopyTask as Mock).mockClear();
+    (submitCopyTask as Mock).mockResolvedValue({ taskID: 'task-1' });
+    (submitMoveTask as Mock).mockClear();
+    (submitMoveTask as Mock).mockResolvedValue({ taskID: 'task-5' });
+  });
+
+  it('a drag starts a payload listing the selected items (no mode)', async () => {
+    await openAndRender();
+    await selectRow('notes.txt');
+    const dt = startDrag(getRow('notes.txt'));
+    // The move/copy choice is deferred to the drop dialog, so the payload only
+    // carries the items; without a modifier the drag effect is "move".
+    expect(dt.effectAllowed).toBe('move');
+    expect(dt.dropEffect).toBe('move');
+    const parsed = JSON.parse(dt.getData(MIME)) as {
+      mode?: string;
+      items: { path: string; name: string; type: string }[];
+    };
+    expect(parsed.mode).toBeUndefined();
+    expect(parsed.items).toEqual([{ path: '/root/notes.txt', name: 'notes.txt', type: 'file' }]);
+  });
+
+  it('does not start a drag from an unselected row', async () => {
+    await openAndRender();
+    const dt = startDrag(getRow('notes.txt'));
+    expect(dt.getData(MIME)).toBe('');
+  });
+
+  it('opens a copy-or-move chooser when an intra-filetoaster drag lands', async () => {
+    await openAndRender();
+    // Cross-directory drop so the chooser opens (a drop into the items' own
+    // folder is ignored instead).
+    const dt = makeTransfer({
+      payload: {
+        items: [{ path: '/root/photos/2023/vacation.jpg', name: 'vacation.jpg', type: 'file' }]
+      }
+    });
+    dropOnWindow(dt);
+    await waitFor(() => expect(screen.getByTestId('drop-choice-dialog')).toBeInTheDocument());
+    expect(
+      within(screen.getByTestId('drop-choice-dialog')).getByText('vacation.jpg')
+    ).toBeInTheDocument();
+    // Neither operation is submitted until the user picks one.
+    expect(submitCopyTask).not.toHaveBeenCalled();
+    expect(submitMoveTask).not.toHaveBeenCalled();
+  });
+
+  it('submits a copy task when Copy is chosen from the drop chooser', async () => {
+    await openAndRender();
+    // Cross-directory drop so the chooser opens.
+    const dt = makeTransfer({
+      payload: {
+        items: [{ path: '/root/photos/2023/vacation.jpg', name: 'vacation.jpg', type: 'file' }]
+      }
+    });
+    dropOnWindow(dt);
+    await waitFor(() => expect(screen.getByTestId('drop-choice-dialog')).toBeInTheDocument());
+    chooseDrop('copy');
+    await waitFor(() =>
+      expect(submitCopyTask).toHaveBeenCalledWith(['/root/photos/2023/vacation.jpg'], ROOT)
+    );
+    expect(submitMoveTask).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('move-dialog')).not.toBeInTheDocument();
+  });
+
+  it('opens the move confirm dialog when Move is chosen from the chooser, without submitting', async () => {
+    await openAndRender();
+    // Cross-directory move: item lives in /root/photos/2023, dropped into /root.
+    const dt = makeTransfer({
+      payload: {
+        items: [{ path: '/root/photos/2023/vacation.jpg', name: 'vacation.jpg', type: 'file' }]
+      }
+    });
+    dropOnWindow(dt);
+    await waitFor(() => expect(screen.getByTestId('drop-choice-dialog')).toBeInTheDocument());
+    chooseDrop('move');
+
+    // Move mirrors the toolbar Cut→Paste: the confirm dialog opens and nothing
+    // is submitted until the user confirms. The dragged item is listed in it.
+    await waitFor(() => expect(screen.getByTestId('move-dialog')).toBeInTheDocument());
+    expect(
+      within(screen.getByTestId('move-dialog')).getByText('vacation.jpg')
+    ).toBeInTheDocument();
+    expect(submitMoveTask).not.toHaveBeenCalled();
+
+    // Confirming submits the tracked move into the open folder; copy is not used.
+    fireEvent.click(
+      within(screen.getByTestId('move-dialog')).getByRole('button', { name: 'Move' })
+    );
+    await waitFor(() =>
+      expect(submitMoveTask).toHaveBeenCalledWith(['/root/photos/2023/vacation.jpg'], ROOT)
+    );
+    expect(submitCopyTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps the chooser open (no submit) when Cancel is pressed on a drop', async () => {
+    await openAndRender();
+    const dt = makeTransfer({
+      payload: {
+        items: [{ path: '/root/photos/2023/vacation.jpg', name: 'vacation.jpg', type: 'file' }]
+      }
+    });
+    dropOnWindow(dt);
+    await waitFor(() => expect(screen.getByTestId('drop-choice-dialog')).toBeInTheDocument());
+
+    fireEvent.click(within(screen.getByTestId('drop-choice-dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('drop-choice-dialog')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('move-dialog')).not.toBeInTheDocument();
+    expect(submitMoveTask).not.toHaveBeenCalled();
+    expect(submitCopyTask).not.toHaveBeenCalled();
+  });
+
+  it('ignores a drop into the items own folder (no dialog, no task)', async () => {
+    await openAndRender();
+    // Item lives in /root and is dropped into /root → same folder. Ignored
+    // entirely: no chooser, no copy, no move.
+    const dt = makeTransfer({
+      payload: { items: [{ path: '/root/notes.txt', name: 'notes.txt', type: 'file' }] }
+    });
+    dropOnWindow(dt);
+    await waitFor(() => expect(screen.queryByTestId('drop-choice-dialog')).not.toBeInTheDocument());
+    expect(submitMoveTask).not.toHaveBeenCalled();
+    expect(submitCopyTask).not.toHaveBeenCalled();
+  });
+
+  it('renders the drop dialog in a top-level portal so it sits above all windows', async () => {
+    await openAndRender();
+    const dt = makeTransfer({
+      payload: {
+        items: [{ path: '/root/photos/2023/vacation.jpg', name: 'vacation.jpg', type: 'file' }]
+      }
+    });
+    dropOnWindow(dt);
+    await waitFor(() => expect(screen.getByTestId('drop-choice-dialog')).toBeInTheDocument());
+    // The dialog is lifted out of the destination window into a body-level layer,
+    // so it is not trapped under any other window's stacking context.
+    const portal = (screen.getByTestId('drop-choice-dialog') as HTMLElement)
+      .closest('.window-portal') as HTMLElement;
+    expect(portal).toBeInTheDocument();
+    expect(portal.parentElement).toBe(document.body);
+  });
+
+  it('sets a copy drop effect on dragover for an internal drag', async () => {
+    await openAndRender();
+    const dt = makeTransfer({
+      payload: { items: [{ path: '/root/x', name: 'x', type: 'file' }] }
+    });
+    dragOverOnWindow(dt);
+    expect(dt.dropEffect).toBe('copy');
+  });
+
+  it('treats a drop without the internal type as a file upload', async () => {
+    await openAndRender();
+    const dt = makeTransfer({ files: [new File(['a'], 'a.txt')] });
+    dropOnWindow(dt);
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
+    const [, manifest] = uploadSpy.mock.calls[0] as unknown as [string, { files: { rel: string }[] }];
+    expect(manifest.files.map((f) => f.rel)).toEqual(['a.txt']);
+  });
+});
+

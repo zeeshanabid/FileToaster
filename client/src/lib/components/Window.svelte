@@ -33,6 +33,8 @@ import FileIcon from './FileIcon.svelte';
 import InfoDialog from './InfoDialog.svelte';
 import ConfirmDelete from './ConfirmDelete.svelte';
 import ConfirmMove from './ConfirmMove.svelte';
+import ConfirmDropMode from './ConfirmDropMode.svelte';
+import Portal from './Portal.svelte';
 import ConfirmCompress from './ConfirmCompress.svelte';
 import ConfirmDecompress from './ConfirmDecompress.svelte';
 import { formatSize, formatDate } from '$lib/fs/format';
@@ -335,7 +337,11 @@ import { formatSize, formatDate } from '$lib/fs/format';
   // `moveOpen` toggles the confirm modal; `cutEntries` (the store) holds the cut
   // rows rendered inside it. Cut also stores the entries in the clipboard, so the
   // same Paste button works for both copy and move.
-  let moveOpen = $state(false);
+   let moveOpen = $state(false);
+   // pendingDrop / dropChoiceOpen hold the items dropped onto another window so a
+   // dialog can let the user pick Move or Copy (see onWindowDrop).
+   let pendingDrop = $state<{ items: InternalDropItem[]; dest: string } | null>(null);
+   let dropChoiceOpen = $state(false);
 
   function cutSelection() {
     if (selected.size === 0) {
@@ -363,6 +369,114 @@ import { formatSize, formatDate } from '$lib/fs/format';
       flash(err instanceof Error ? err.message : 'could not move');
     }
   }
+
+  // --- intra-filetoaster drag-and-drop between windows -----------------------
+  // Files can be dragged from one opened window to another. The drag carries an
+  // intra-app payload on a custom MIME type so only our own drags are honoured;
+  // any other drop (OS/browser files) falls through to the upload path. The drag
+  // carries no mode — the actual copy-vs-move choice is offered in a dialog when
+  // the drag lands. Copy/move reuse the same server
+  // tasks and rules as the toolbar buttons, so collisions and overwrites behave
+  // identically.
+    type InternalDropItem = { path: string; name: string; type: 'file' | 'dir' };
+    interface InternalDrop {
+      items: InternalDropItem[];
+    }
+    const DND_MIME = 'application/x-filetoaster-drop';
+
+    // onRowDragStart records the current selection as an intra-filetoaster drag
+    // payload. The move/copy choice is decided by a dialog when the drag lands,
+    // not by a modifier key, so the payload only carries the items. Draggable is
+    // only set on selected rows, so the payload is always the full multi-
+    // selection, matching the toolbar.
+    function onRowDragStart(e: DragEvent, row: Entry) {
+     if (!selected.has(row.path)) return;
+     const dt = e.dataTransfer;
+     if (!dt) return;
+     const items = entries
+       .filter((it) => selected.has(it.path))
+       .map((it) => ({ path: it.path, name: it.name, type: it.type }));
+      const payload: InternalDrop = { items };
+      // No modifier key decides the operation: the copy-vs-move choice is made in
+      // the drop dialog. The effect is simply "move"; dragover may override the
+      // drop effect to "copy" for an internal drag.
+      dt.effectAllowed = 'move';
+      dt.dropEffect = 'move';
+      // text/plain keeps the drag live where required; DND_MIME is how the
+      // destination recognises our drags and distinguishes them from a file upload.
+      dt.setData('text/plain', JSON.stringify(payload));
+      dt.setData(DND_MIME, JSON.stringify(payload));
+     }
+
+   // readInternalTransfer returns the intra-filetoaster payload when the transfer
+  // carries DND_MIME, else null. A guard on getData keeps it safe for the plain
+  // dataTransfer objects the upload tests use.
+  function readInternalTransfer(dt: DataTransfer | null | undefined): InternalDrop | null {
+    if (!dt || typeof dt.getData !== 'function') return null;
+    const raw = dt.getData(DND_MIME);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<InternalDrop>;
+      const items = Array.isArray(parsed.items)
+        ? parsed.items.filter((it): it is InternalDropItem => !!it && typeof it.path === 'string')
+        : [];
+       if (items.length > 0) {
+        return { items };
+      }
+    } catch {
+      // malformed payload: treat as a non-internal drop
+    }
+    return null;
+  }
+
+   // onWindowDrop routes a drop on the window: an intra-filetoaster drag opens a
+   // dialog letting the user pick Move or Copy into the folder the window has
+   // open; anything else is a file upload. No modifier key is required.
+    async function onWindowDrop(e: DragEvent) {
+      e.preventDefault();
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      const internal = readInternalTransfer(dt);
+      if (internal && internal.items.length > 0 && win) {
+        const dest = win.path;
+        // Dropping onto the folder the items already live in is pointless — you'd
+        // copy or move items onto themselves. Ignore it entirely, with no dialog
+        // and no task, rather than offering the choice.
+        if (internal.items.every((it) => dirname(it.path) === dest)) {
+          return;
+        }
+        pendingDrop = { items: internal.items, dest };
+        dropChoiceOpen = true;
+        return;
+      }
+      await onDrop(e);
+    }
+
+    // executeDrop runs the dragged items into `dest` following the user's choice
+    // from the drop dialog. Copy goes straight to the destination (server renames
+    // collisions, like toolbar copy→paste). Move mirrors the toolbar Cut→Paste: it
+    // stages the items as a cut and opens the confirm dialog; the tracked move task
+    // is submitted from the dialog's confirm (overwrite rule identical to the
+    // toolbar move).
+    async function executeDrop(items: InternalDropItem[], dest: string, mode: 'move' | 'copy') {
+      const clean = items.filter((it) => it.path);
+      if (clean.length === 0 || !dest) {
+        flash('Nothing to move or copy.');
+        return;
+      }
+      const paths = clean.map((it) => it.path);
+      try {
+        if (mode === 'copy') {
+         const res = await submitCopyTask(paths, dest);
+         if (res.taskID) flash(`Copying… (task ${res.taskID}).`);
+       } else {
+         setCut(clean);
+         moveOpen = true;
+       }
+     } catch (err) {
+       flash(err instanceof Error ? err.message : 'could not move');
+     }
+   }
 
   // --- compress: archive the current selection in place ----------------------
   // `compressOpen` toggles the format-confirm modal; `compressEntries` (the
@@ -973,8 +1087,15 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     aria-label={title}
     style="left:{pos ? pos.x : winProp.x}px; top:{pos ? pos.y : winProp.y}px; width:{size.width}px; height:{size.height}px; z-index:{winProp.zIndex};"
     onmousedown={() => focusWindow(winProp.id)}
-    ondragover={(e) => e.preventDefault()}
-    ondrop={onDrop}
+    ondragover={(e) => {
+      e.preventDefault();
+      const dt = e.dataTransfer;
+      if (dt) {
+         const dnd = readInternalTransfer(dt);
+         if (dnd) dt.dropEffect = 'copy';
+      }
+    }}
+    ondrop={onWindowDrop}
   >
   <header class="header" onpointerdown={onHeaderPointerDown} aria-roledescription="draggable" role="application">
     <span class="logo" aria-hidden="true">
@@ -1239,9 +1360,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
               <tr
                 class="row"
                 class:selected={selected.has(row.path)}
-                onclick={(e) => onRowClick(e, row)}
-                ondblclick={() => (row.type === 'dir' && navigate(row.path))}
-              >
+                draggable={selected.has(row.path)}
+                 onclick={(e) => onRowClick(e, row)}
+                 ondblclick={() => (row.type === 'dir' && navigate(row.path))}
+                 ondragstart={(e) => onRowDragStart(e, row)}
+               >
                 <td class="name">
                   <span class="fg" aria-hidden="true">
                     <FileIcon type={row.type === 'dir' ? 'folder' : 'doc'} />
@@ -1292,9 +1415,20 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     <ConfirmDelete entries={deleteEntries} onClose={cancelDelete} onConfirm={confirmDelete} />
   {/if}
 
-  {#if moveOpen}
-    <ConfirmMove entries={$cutEntries} onClose={() => (moveOpen = false)} onConfirm={confirmMove} />
-  {/if}
+   {#if moveOpen}
+     <ConfirmMove entries={$cutEntries} onClose={() => (moveOpen = false)} onConfirm={confirmMove} />
+   {/if}
+
+    {#if dropChoiceOpen && pendingDrop}
+    <Portal>
+      <ConfirmDropMode
+        entries={pendingDrop.items}
+        dest={pendingDrop.dest}
+        onClose={() => (dropChoiceOpen = false)}
+        onChoose={(mode) => { executeDrop(pendingDrop!.items, pendingDrop!.dest, mode); dropChoiceOpen = false; }}
+      />
+    </Portal>
+    {/if}
 
   {#if compressOpen}
     <ConfirmCompress
