@@ -1126,192 +1126,192 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     </button>
   </header>
 
-  <div class="toolbar">
-    <button class="tool" type="button" title="New folder" aria-label="New folder" onclick={() => startNewDir()} disabled={editingNew}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" />
-        <path d="M12 11v6M9 14h6" />
-      </svg>
-    </button>
-    <button
-      class="tool rename"
-      type="button"
-      title="Rename selected"
-      aria-label="Rename"
-      disabled={selected.size === 0 || editingNew}
-      onclick={startRename}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M3 17.25V21h3.75L17.89 9.64a1 1 0 0 0 0-1.41L15.77 6.11a1 1 0 0 0-1.41 0L3 15.82Z" />
-        <path d="M17.5 4.5l2.5 2.5L19 9l-2.5-2.5Z" />
-      </svg>
-    </button>
-    <button class="tool" type="button" title="Reload" aria-label="Reload" onclick={() => reload()}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M21 12a9 9 0 1 1-3.2-6.9" />
-        <path d="M21 4v5h-5" />
-      </svg>
-    </button>
-    <button class="up" type="button" title="Up one directory" aria-label="Up one directory" disabled={isAtRoot} onclick={() => goUp()}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M12 19V5M5 12l7-7 7 7" />
-      </svg>
-    </button>
-    <button
-      class="tool cut"
-      class:cut-active={$cutMode}
-      type="button"
-      title="Cut selected to clipboard"
-      aria-label="Cut"
-      disabled={selected.size === 0}
-      onclick={cutSelection}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <circle cx="6" cy="6" r="2.75" />
-        <circle cx="6" cy="18" r="2.75" />
-        <line x1="8.5" y1="8.5" x2="19" y2="19" />
-        <line x1="8.5" y1="15.5" x2="19" y2="5" />
-      </svg>
-    </button>
-    <button
-      class="tool copy"
-      type="button"
-      title="Copy selected to clipboard"
-      aria-label="Copy"
-      disabled={selected.size === 0}
-      onclick={copySelection}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M9 9h10v10H9Z" />
-        <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-      </svg>
-    </button>
-    <button
-      class="tool paste"
-      type="button"
-      title="Paste clipboard into this folder"
-      aria-label="Paste"
-      disabled={$clipboard.length === 0}
-      onclick={paste}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M8 5h8v3H8Z" />
-        <path d="M5 8h14v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z" />
-      </svg>
-    </button>
-    <button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
-        <path d="M12 16v-4M12 8h.01" />
-      </svg>
-      {#if selected.size > 0}
-        <span class="badge" aria-hidden="true">{selected.size}</span>
-      {/if}
-    </button>
-    <button
-      class="tool delete"
-      type="button"
-      title="Delete selected"
-      aria-label="Delete"
-      disabled={selected.size === 0}
-      onclick={startDelete}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M5 7h14" />
-        <path d="M8 7V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-        <path d="M6 7l1 12h10l1-12" />
-      </svg>
-    </button>
-    <button
-      class="tool compress"
-      type="button"
-      title="Compress selected into an archive"
-      aria-label="Compress"
-      disabled={selected.size === 0}
-      onclick={startCompress}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
-        <path d="M12 10v4m0 0-2-2m2 2 2-2" />
-        <path d="M9 18h6" />
-      </svg>
-    </button>
-    <button
-      class="tool decompress"
-      type="button"
-      title="Extract selected archive"
-      aria-label="Decompress"
-      disabled={!canDecompress}
-      onclick={startDecompress}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
-        <path d="M12 14v-4m0 0-2 2m2-2 2 2" />
-        <path d="M9 18h6" />
-      </svg>
-    </button>
-    <button
-      class="tool download"
-      type="button"
-      title="Download this file"
-      aria-label="Download"
-      disabled={!canDownload}
-      onclick={confirmDownload}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M12 3v11" />
-        <path d="M7 12l5 5 5-5" />
-        <path d="M5 20v1h14v-1" />
-      </svg>
-    </button>
-    <div class="upload-menu-wrap">
-      <button class="tool upload" type="button" title="Upload files or folders to this folder" aria-label="Upload" aria-haspopup="menu" aria-expanded={uploadMenuOpen} onclick={openUploadMenu}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-          <path d="M12 19V5" />
-          <path d="M6 9l6-6 6 6" />
-          <path d="M4 15v4h16v-4" />
-        </svg>
-      </button>
-      {#if uploadMenuOpen}
-        <div class="upload-menu" role="menu" aria-label="Upload options">
-          <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; fileInput?.click(); }}>Upload files…</button>
-          <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; folderInput?.click(); }}>Upload folder…</button>
-        </div>
-      {/if}
-    </div>
-    <input
-      type="file"
-      multiple
-      style="display:none"
-      bind:this={fileInput}
-      onchange={onPickFiles}
-      aria-hidden="true"
-    />
-    <input
-      type="file"
-      multiple
-      style="display:none"
-      bind:this={folderInput}
-      onchange={onPickFolder}
-      aria-hidden="true"
-    />
-    {#if editingNew}
-      <form class="new" onsubmit={() => confirmNewDir()}>
-        <input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
-          placeholder="New folder"
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
-          onblur={() => cancelNewDir()} />
-      </form>
-    {/if}
-    {#if editingRename}
-      <form class="new" onsubmit={() => confirmRename()}>
-        <input class="new-input" bind:this={renameInputEl} bind:value={renameName} autocomplete="off" spellcheck="false"
-          placeholder="Rename"
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}
-          onblur={() => cancelRename()} />
-      </form>
-    {/if}
-  </div>
+   <div class="toolbar">
+     <button class="up" type="button" title="Up one directory" aria-label="Up one directory" disabled={isAtRoot} onclick={() => goUp()}>
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M12 19V5M5 12l7-7 7 7" />
+       </svg>
+     </button>
+     <button class="tool" type="button" title="Reload" aria-label="Reload" onclick={() => reload()}>
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M21 12a9 9 0 1 1-3.2-6.9" />
+         <path d="M21 4v5h-5" />
+       </svg>
+     </button>
+     <button class="tool" type="button" title="New folder" aria-label="New folder" onclick={() => startNewDir()} disabled={editingNew}>
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" />
+         <path d="M12 11v6M9 14h6" />
+       </svg>
+     </button>
+     <button
+       class="tool rename"
+       type="button"
+       title="Rename selected"
+       aria-label="Rename"
+       disabled={selected.size === 0 || editingNew}
+       onclick={startRename}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M3 17.25V21h3.75L17.89 9.64a1 1 0 0 0 0-1.41L15.77 6.11a1 1 0 0 0-1.41 0L3 15.82Z" />
+         <path d="M17.5 4.5l2.5 2.5L19 9l-2.5-2.5Z" />
+       </svg>
+     </button>
+     <button
+       class="tool cut"
+       class:cut-active={$cutMode}
+       type="button"
+       title="Cut selected to clipboard"
+       aria-label="Cut"
+       disabled={selected.size === 0}
+       onclick={cutSelection}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <circle cx="6" cy="6" r="2.75" />
+         <circle cx="6" cy="18" r="2.75" />
+         <line x1="8.5" y1="8.5" x2="19" y2="19" />
+         <line x1="8.5" y1="15.5" x2="19" y2="5" />
+       </svg>
+     </button>
+     <button
+       class="tool copy"
+       type="button"
+       title="Copy selected to clipboard"
+       aria-label="Copy"
+       disabled={selected.size === 0}
+       onclick={copySelection}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M9 9h10v10H9Z" />
+         <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+       </svg>
+     </button>
+     <button
+       class="tool paste"
+       type="button"
+       title="Paste clipboard into this folder"
+       aria-label="Paste"
+       disabled={$clipboard.length === 0}
+       onclick={paste}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M8 5h8v3H8Z" />
+         <path d="M5 8h14v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z" />
+       </svg>
+     </button>
+     <button
+       class="tool delete"
+       type="button"
+       title="Delete selected"
+       aria-label="Delete"
+       disabled={selected.size === 0}
+       onclick={startDelete}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M5 7h14" />
+         <path d="M8 7V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+         <path d="M6 7l1 12h10l1-12" />
+       </svg>
+     </button>
+     <button
+       class="tool compress"
+       type="button"
+       title="Compress selected into an archive"
+       aria-label="Compress"
+       disabled={selected.size === 0}
+       onclick={startCompress}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
+         <path d="M12 10v4m0 0-2-2m2 2 2-2" />
+         <path d="M9 18h6" />
+       </svg>
+     </button>
+     <button
+       class="tool decompress"
+       type="button"
+       title="Extract selected archive"
+       aria-label="Decompress"
+       disabled={!canDecompress}
+       onclick={startDecompress}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M4 7a2 2 0 0 1 2-2h8l2 2h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" />
+         <path d="M12 14v-4m0 0-2 2m2-2 2 2" />
+         <path d="M9 18h6" />
+       </svg>
+     </button>
+     <button
+       class="tool download"
+       type="button"
+       title="Download this file"
+       aria-label="Download"
+       disabled={!canDownload}
+       onclick={confirmDownload}
+     >
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M12 3v11" />
+         <path d="M7 12l5 5 5-5" />
+         <path d="M5 20v1h14v-1" />
+       </svg>
+     </button>
+     <div class="upload-menu-wrap">
+       <button class="tool upload" type="button" title="Upload files or folders to this folder" aria-label="Upload" aria-haspopup="menu" aria-expanded={uploadMenuOpen} onclick={openUploadMenu}>
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+           <path d="M12 19V5" />
+           <path d="M6 9l6-6 6 6" />
+           <path d="M4 15v4h16v-4" />
+         </svg>
+       </button>
+       {#if uploadMenuOpen}
+         <div class="upload-menu" role="menu" aria-label="Upload options">
+           <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; fileInput?.click(); }}>Upload files…</button>
+           <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; folderInput?.click(); }}>Upload folder…</button>
+         </div>
+       {/if}
+     </div>
+     <input
+       type="file"
+       multiple
+       style="display:none"
+       bind:this={fileInput}
+       onchange={onPickFiles}
+       aria-hidden="true"
+     />
+     <input
+       type="file"
+       multiple
+       style="display:none"
+       bind:this={folderInput}
+       onchange={onPickFolder}
+       aria-hidden="true"
+     />
+     {#if editingNew}
+       <form class="new" onsubmit={() => confirmNewDir()}>
+         <input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
+           placeholder="New folder"
+           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
+           onblur={() => cancelNewDir()} />
+       </form>
+     {/if}
+     {#if editingRename}
+       <form class="new" onsubmit={() => confirmRename()}>
+         <input class="new-input" bind:this={renameInputEl} bind:value={renameName} autocomplete="off" spellcheck="false"
+           placeholder="Rename"
+           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}
+           onblur={() => cancelRename()} />
+       </form>
+     {/if}
+     <button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+         <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
+         <path d="M12 16v-4M12 8h.01" />
+       </svg>
+       {#if selected.size > 0}
+         <span class="badge" aria-hidden="true">{selected.size}</span>
+       {/if}
+     </button>
+   </div>
 
   <main class="body">
     <aside class="tree" aria-label="Folder tree" style="width:{treeWidth}px">
