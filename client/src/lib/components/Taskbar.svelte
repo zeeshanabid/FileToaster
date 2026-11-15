@@ -23,13 +23,11 @@
 
 <div class="taskbar">
   <button class="launcher" type="button" title="FileToaster">
-    <span class="launcher-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" />
-        <path d="M9 12h6M9 15h4" />
-      </svg>
-    </span>
-    <span>FileToaster</span>
+    <img
+      class="launcher-logo"
+      src="/filetoaster-logo.svg"
+      alt="FileToaster"
+    />
   </button>
 
   <div class="windows">
@@ -66,8 +64,8 @@
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 12px;
-    height: 54px;
+     bottom: 12px;
+     height: 56px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -84,30 +82,18 @@
   .launcher {
     display: inline-flex;
     align-items: center;
-    gap: 9px;
-    padding: 7px 13px 7px 11px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    border: none;
+    padding: 6px 6px;
+    background: #fff;
+    border: 1px solid rgba(113, 56, 245, 0.15);
     border-radius: 11px;
-    color: #fff;
-    font-weight: 700;
-    font-size: 14px;
     cursor: pointer;
+    box-shadow: 0 2px 10px rgba(113, 56, 245, 0.16);
   }
-  .launcher-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    background: rgba(255, 255, 255, 0.18);
-    border-radius: 7px;
-  }
-  .launcher-mark svg {
-    width: 14px;
-    height: 14px;
-    color: #fff;
-  }
+.launcher-logo {
+  display: block;
+  height: 37px;
+  width: auto;
+}
   .windows {
     display: flex;
     align-items: center;
