@@ -1,11 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title">
+  <title id="title">FileToaster app icon</title>
   <defs>
       <linearGradient id="violet" x1="18" y1="18" x2="96" y2="94" gradientUnits="userSpaceOnUse">
         <stop stop-color="#9333EA"/>
         <stop offset="1" stop-color="#5B21B6"/>
       </linearGradient>
     </defs>
-  <rect width="120" height="120" rx="26" fill="#7138F5"/>
+  <rect x="3" y="3" width="114" height="114" rx="27" fill="#171044"/>
   <g transform="translate(5 7) scale(1.08)">
 <g id="filetoaster-mark">
   <!-- Folder body -->
