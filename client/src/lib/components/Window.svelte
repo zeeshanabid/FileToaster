@@ -1713,10 +1713,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   }
   .trow.active > .tnode {
     color: var(--accent-strong);
-    font-weight: 600;
+    font-weight: 700;
     background: var(--surface-inset);
     border-radius: 6px;
-    box-shadow: inset 2px 0 0 var(--accent-strong);
+    box-shadow: inset 3px 0 0 var(--accent-strong);
   }
   .twisty {
     display: grid;
