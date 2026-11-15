@@ -1378,6 +1378,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
               <tr
                 class="row"
                 class:selected={selected.has(row.path)}
+                class:dir={row.type === 'dir'}
                 draggable={selected.has(row.path)}
                  onclick={(e) => onRowClick(e, row)}
                  ondblclick={() => (row.type === 'dir' && navigate(row.path))}
@@ -1828,6 +1829,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .row.dir:not(.selected) .rname {
+    color: var(--accent-strong);
+    font-weight: 600;
   }
   .size {
     width: 1%;
