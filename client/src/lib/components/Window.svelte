@@ -1719,15 +1719,26 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     box-shadow: inset 2px 0 0 var(--accent-strong);
   }
   .twisty {
-    width: 12px;
-    text-align: center;
-    font-size: 11px;
-    color: var(--text-faint);
+    display: grid;
+    place-items: center;
     flex: none;
+    width: 26px;
+    height: 24px;
+    margin-top: -1px;
+    font-size: 14.3px;
+    line-height: 1;
+    font-weight: 700;
+    color: var(--text-muted);
+    border-radius: 6px;
     cursor: pointer;
+    transition: background 100ms ease, color 100ms ease;
   }
   .twisty:hover {
     color: var(--text);
+    background: var(--surface-inset);
+  }
+  .twisty:active {
+    background: var(--border);
   }
    .ticon {
      flex: none;
