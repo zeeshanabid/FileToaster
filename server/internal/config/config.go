@@ -102,6 +102,21 @@ type Config struct {
   SourcePath string `yaml:"-"`
 }
 
+// EnsureTmpDirMode is the permission used when the server creates its built-in
+// default upload staging directory: owner read/write/execute only, so a local
+// non-owner process cannot list, read, or write staged uploads.
+const EnsureTmpDirMode = 0o700
+
+// SecureModes holds the permission bits the server requires for its sensitive
+// on-disk state. The config file holds the session secret and admin hash and is
+// owner read/write only; group and other must have no access.
+const (
+  // ConfigFileMode is the required permission for the config file.
+  ConfigFileMode = 0o600
+  // TmpDirMode is the required permission for the upload staging directory.
+  TmpDirMode = 0o700
+)
+
 // DefaultConfig returns settings filled with documented defaults.
 func DefaultConfig() *Config {
   return &Config{
@@ -243,7 +258,7 @@ admin_password_hash: %s
   if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
     return "", fmt.Errorf("create config dir %q: %w", filepath.Dir(path), err)
   }
-  if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+  if err := os.WriteFile(path, []byte(content), ConfigFileMode); err != nil {
     return "", err
   }
   return path, nil
@@ -262,6 +277,12 @@ func generateSecret() (string, error) {
 // It returns a human-readable error if the file is missing, malformed, or
 // semantically invalid.
 func Load(path string) (*Config, error) {
+  // The config file holds the session secret and admin hash. Refuse to start
+  // when it is readable or writable by anyone but the owner, before doing any
+  // further work, so a loosened config file is caught first.
+  if err := requireOwnerOnly(path, ConfigFileMode, "config file"); err != nil {
+    return nil, err
+  }
   cfg, err := parseConfig(path)
   if err != nil {
     return nil, err
@@ -279,6 +300,11 @@ func Load(path string) (*Config, error) {
   // default location exists here.
   if err := ensureTmpDir(cfg); err != nil {
     return nil, fmt.Errorf("setup tmp_dir %q: %w", cfg.TMPDir, err)
+  }
+  // The upload staging dir must also be private to the owner: staged uploads
+  // may contain file bytes, so reject a tmp_dir that group or other can access.
+  if err := requireOwnerOnly(cfg.TMPDir, TmpDirMode, "tmp_dir"); err != nil {
+    return nil, err
   }
   return cfg, nil
 }
@@ -454,10 +480,28 @@ func (c *Config) tmpDirIsDefault() bool {
 // ensureTmpDir creates TMPDir when it is the built-in default location. A
 // user-provided tmp_dir is left untouched: Validate already rejected a missing
 // or non-directory value, so the server fails to start instead of creating an
-// arbitrary path.
+// arbitrary path. It is created owner-only so staged uploads are private.
 func ensureTmpDir(c *Config) error {
   if c.tmpDirIsDefault() {
-    return os.MkdirAll(c.TMPDir, 0o755)
+    return os.MkdirAll(c.TMPDir, EnsureTmpDirMode)
+  }
+  return nil
+}
+
+// requireOwnerOnly verifies that path is private to its owner: group and other
+// must have no permissions, and the owner must hold the required perm bits. It
+// is used for the config file (session secret + admin hash) and the upload
+// staging dir (file bytes), both of which must not be readable or writable by
+// another local user. On failure it returns an actionable error that names the
+// chmod command to fix the permissions.
+func requireOwnerOnly(path string, wantPerm os.FileMode, label string) error {
+  info, err := os.Stat(path)
+  if err != nil {
+    return err
+  }
+  perm := info.Mode().Perm()
+  if perm&0o077 != 0 || perm&wantPerm != wantPerm {
+    return fmt.Errorf("%s %q has permissions %o, but only the owner should access it (expected %o). Fix it with: chmod %o %q", label, path, perm, wantPerm, wantPerm, path)
   }
   return nil
 }
@@ -566,7 +610,7 @@ func (c *Config) Save(path string) error {
     return fmt.Errorf("marshal config: %w", err)
   }
   tmp := path + ".tmp"
-  if err := os.WriteFile(tmp, data, 0o600); err != nil {
+  if err := os.WriteFile(tmp, data, ConfigFileMode); err != nil {
     return err
   }
   return os.Rename(tmp, path)
