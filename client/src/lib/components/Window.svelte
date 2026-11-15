@@ -1071,10 +1071,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   }
 
   function arrow(dir: string): string {
-    if (!win) return '·';
-    if (tree.isLoading(dir)) return '▾';
-    const kids = tree.childEntries(dir);
-    if (kids.length === 0) return '·';
+    // The arrow tracks expansion state immediately, so it points down the
+    // moment a directory is expanded — even while its children are still
+    // loading — and points right while the directory is collapsed.
+    if (!win) return '▸';
     return tree.isExpanded(win.id, dir) ? '▾' : '▸';
   }
 
