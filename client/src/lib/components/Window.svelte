@@ -3,6 +3,7 @@
   import { derived } from 'svelte/store';
   import {
     closeWindow,
+    displayName,
     focusWindow,
     updateWindow,
     windows,
@@ -872,9 +873,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   // The tree is anchored at the window's root and never re-rooted on navigation.
   // The title bar shows the currently opened folder; the store's `name` stays as
   // the window's display name (the root label) and never changes after open.
-  let title = $derived(
-    win ? (win.path === win.rootPath ? win.name : basename(win.path)) : winProp.name
-  );
+  let title = $derived(win ? displayName(win) : winProp.name);
 
   // Navigate to `path`: it becomes the active folder (store `path`), the tree
   // expands root..path (lazy child-load, cached), and the main listing reloads.

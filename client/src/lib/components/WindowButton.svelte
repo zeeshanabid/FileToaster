@@ -1,18 +1,19 @@
 <script lang="ts">
-  import { focusWindow, toggleMinimize, type AppWindow } from '$lib/store/windows';
+  import { displayName, focusWindow, toggleMinimize, type AppWindow } from '$lib/store/windows';
 
   let { window: win, active }: { window: AppWindow; active: boolean } = $props();
+  let label = $derived(displayName(win));
 </script>
 
 <button
   class="window-button"
   class:active={active}
   class:minimized={win.minimized}
-  title={win.minimized ? `${win.name} (minimized)` : win.name}
+  title={win.minimized ? `${label} (minimized)` : label}
   onclick={() => (win.minimized ? toggleMinimize(win.id) : focusWindow(win.id))}
 >
   <span class="indicator" aria-hidden="true"></span>
-  <span class="name">{win.name}</span>
+  <span class="name">{label}</span>
 </button>
 
 <style>

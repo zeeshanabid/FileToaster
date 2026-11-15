@@ -23,6 +23,19 @@ export const windows: Writable<AppWindow[]> = writable([]);
 
 let nextZ = 10;
 
+function basename(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i <= 0 ? p : p.slice(i + 1);
+}
+
+// The label for a window's taskbar button and title bar: the root label while
+// the root is open, otherwise the basename of the currently opened directory.
+// Both the title bar and the taskbar derive from this so they stay in sync as
+// the user navigates (navigation updates `path` in the store).
+export function displayName(win: AppWindow): string {
+  return win.path === win.rootPath ? win.name : basename(win.path);
+}
+
 function bringToFront(id: string) {
   nextZ += 1;
   windows.update((list) =>
