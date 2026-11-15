@@ -48,3 +48,4 @@ client/.svelte-kit/
 # .vscode/
 
 .vite
+.DS_Store
