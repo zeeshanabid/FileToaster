@@ -16,7 +16,8 @@ import {
 import userEvent from '@testing-library/user-event';
 import type { Mock, MockInstance } from 'vitest';
 import Window from './Window.svelte';
-import { openWindow, windows } from '$lib/store/windows';
+import Taskbar from './Taskbar.svelte';
+import { openWindow, updateWindow, windows } from '$lib/store/windows';
 import { tree as fileTree } from '$lib/fs/tree';
 import { uploadManager } from '$lib/fs/upload';
 import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile, createUpload, uploadChunk, chunkCountForFile, downloadFile } from '$lib/fs/api';
@@ -59,6 +60,9 @@ vi.mock('$lib/store/tasks', () => {
   return {
     clipboard: store,
     cutMode,
+    initTasks: vi.fn(),
+    shutdownTasks: vi.fn(),
+    activeCount: writable(0),
     cutEntries,
     setClipboard: vi.fn((paths: string[]) => {
       store.set(paths);
@@ -1750,6 +1754,79 @@ describe('Window drag-and-drop between windows', () => {
     await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
     const [, manifest] = uploadSpy.mock.calls[0] as unknown as [string, { files: { rel: string }[] }];
     expect(manifest.files.map((f) => f.rel)).toEqual(['a.txt']);
+  });
+});
+
+describe('Window title + taskbar — directory sync', () => {
+  // The title bar label and the taskbar button label both derive from the
+  // shared store, so they must move together as the opened folder changes.
+  function windowTitleText(): string {
+    const el = document.querySelector('.header .title') as HTMLElement;
+    return el ? el.textContent ?? '' : '';
+  }
+  function taskbarButtonText(): string {
+    const el = document.querySelector('.window-button .name') as HTMLElement;
+    return el ? el.textContent ?? '' : '';
+  }
+
+  function renderApp(): void {
+    openWindow({ name: NAME, path: ROOT });
+    const list = get(windows);
+    id = list[list.length - 1].id;
+    renderComp(Window, { window: list[list.length - 1] });
+    // Mount the taskbar alongside the window so its WindowButton reads the
+    // same store entry the window derives its title from.
+    renderComp(Taskbar, { onChangePassword: () => {} });
+  }
+
+  it('shows the root label in both the title bar and the taskbar at root', async () => {
+    renderApp();
+    await waitFor(() => expect(within(tree()).getByText('documents')).toBeInTheDocument());
+    expect(windowTitleText()).toBe(NAME);
+    expect(taskbarButtonText()).toBe(NAME);
+  });
+
+  it('updates both the title bar and the taskbar when navigating into a folder', async () => {
+    renderApp();
+    await waitFor(() => expect(within(tree()).getByText('documents')).toBeInTheDocument());
+
+    await clickNode('/root/documents');
+    await waitFor(() => expect(windowTitleText()).toBe('documents'));
+    await waitFor(() => expect(taskbarButtonText()).toBe('documents'));
+
+    await clickNode('/root/documents/work');
+    await waitFor(() => expect(windowTitleText()).toBe('work'));
+    await waitFor(() => expect(taskbarButtonText()).toBe('work'));
+  });
+
+  it('reverts both labels to the root label when navigating back to root', async () => {
+    renderApp();
+    await waitFor(() => expect(within(tree()).getByText('documents')).toBeInTheDocument());
+
+    await clickNode('/root/documents');
+    await waitFor(() => expect(windowTitleText()).toBe('documents'));
+
+    await clickNode(ROOT);
+    await waitFor(() => expect(windowTitleText()).toBe(NAME));
+    await waitFor(() => expect(taskbarButtonText()).toBe(NAME));
+  });
+
+  it('derives the label from the store path alone, without re-mounting', async () => {
+    openWindow({ name: NAME, path: ROOT });
+    const list = get(windows);
+    const win = list[list.length - 1];
+    renderComp(Window, { window: win });
+    renderComp(Taskbar, { onChangePassword: () => {} });
+    await waitFor(() => expect(within(tree()).getByText('documents')).toBeInTheDocument());
+
+    expect(windowTitleText()).toBe(NAME);
+    expect(taskbarButtonText()).toBe(NAME);
+
+    // Drive the change through the store, as navigate() does, without
+    // re-mounting either component.
+    updateWindow(win.id, { path: '/root/photos' });
+    await waitFor(() => expect(windowTitleText()).toBe('photos'));
+    await waitFor(() => expect(taskbarButtonText()).toBe('photos'));
   });
 });
 
