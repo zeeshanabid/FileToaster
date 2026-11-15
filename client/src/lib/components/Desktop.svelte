@@ -4,7 +4,7 @@
   import { openWindow } from '$lib/store/windows';
   import FolderIcon from './FolderIcon.svelte';
 
-  let roots = $state<Root[]>(ROOTS);
+  let roots = $state<Root[]>([]);
   let error = $state<string | null>(null);
 
   onMount(async () => {
@@ -12,8 +12,10 @@
       roots = await fetchRoots();
       error = null;
     } catch {
-      // Keep the demo folders so the desktop is not empty if the server is
-      // unreachable.
+      // Only fall back to the demo folders after the server has responded, so
+      // the real roots never flash in first. Marks the state loaded regardless.
+      roots = ROOTS;
+      error = 'Could not load folders from the server; showing default folders.';
     }
   });
 </script>
