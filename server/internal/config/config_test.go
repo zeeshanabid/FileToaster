@@ -20,12 +20,28 @@ func writeConfig(t *testing.T, content string) string {
   return path
 }
 
+// secureTmpDir returns a temp directory with 0700 permissions, the mode the
+// server requires for the upload staging dir. t.TempDir() may be created with
+// 0755 depending on the platform umask, so we set 0700 explicitly to model a
+// correctly-permissioned tmp_dir.
+func secureTmpDir(t *testing.T) string {
+  t.Helper()
+  d, err := os.MkdirTemp(t.TempDir(), "tmp")
+  if err != nil {
+    t.Fatalf("create temp dir: %v", err)
+  }
+  if err := os.Chmod(d, 0o700); err != nil {
+    t.Fatalf("chmod temp dir: %v", err)
+  }
+  return d
+}
+
 // validYAML returns a YAML document guaranteed to pass Validate, using real
 // directories for allowed_paths and tmp_dir.
 func validYAML(t *testing.T) string {
   t.Helper()
   root := t.TempDir()
-  tmp := t.TempDir()
+  tmp := secureTmpDir(t)
   return "addr: \"127.0.0.1:0\"\n" +
     "allowed_paths:\n  - name: Files\n    path: " + root + "\n" +
     "max_parallel_tasks: 2\n" +
@@ -192,7 +208,7 @@ func TestResolveConfigPath_ExplicitMissing(t *testing.T) {
 
 func TestResolveConfigPath_AutoCreate(t *testing.T) {
   t.Setenv("FILETOASTER_CONFIG", "")
-  t.Setenv("FILETOASTER_TMP_DIR", t.TempDir())
+  t.Setenv("FILETOASTER_TMP_DIR", secureTmpDir(t))
   home := t.TempDir()
   t.Setenv("HOME", home)
   t.Chdir(t.TempDir())
@@ -228,7 +244,7 @@ func TestResolveConfigPath_AutoCreate(t *testing.T) {
 func TestWriteDefaultConfig_Loads(t *testing.T) {
   home := t.TempDir()
   t.Setenv("HOME", home)
-  t.Setenv("FILETOASTER_TMP_DIR", t.TempDir())
+  t.Setenv("FILETOASTER_TMP_DIR", secureTmpDir(t))
   path := filepath.Join(home, ".filetoaster", "config.yaml")
   got, err := WriteDefaultConfig(path)
   if err != nil {
@@ -251,7 +267,7 @@ func TestWriteDefaultConfig_Loads(t *testing.T) {
 
 func TestDebugEnvOverride(t *testing.T) {
   t.Setenv("FILETOASTER_DEBUG", "true")
-  tmp := t.TempDir()
+  tmp := secureTmpDir(t)
   cfg, err := Load(writeConfig(t, "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+t.TempDir()+"\ntmp_dir: "+tmp+"\n"))
   if err != nil {
     t.Fatalf("Load = %v", err)
@@ -280,7 +296,7 @@ func TestLoadValid(t *testing.T) {
 
 func TestLoadFillsDefaults(t *testing.T) {
   // Omits addr and max_parallel_tasks; defaults should apply.
-  yaml := "allowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\nsession_secret: x\ntmp_dir: " + t.TempDir() + "\n"
+  yaml := "allowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\nsession_secret: x\ntmp_dir: " + secureTmpDir(t) + "\n"
   cfg, err := Load(writeConfig(t, yaml))
   if err != nil {
     t.Fatalf("Load = %v", err)
@@ -419,7 +435,7 @@ func TestLoadRejectsMissingCustomTmpDir(t *testing.T) {
 
 func TestApplyEnvOverrides(t *testing.T) {
   root := t.TempDir()
-  tmp := t.TempDir()
+  tmp := secureTmpDir(t)
   t.Setenv("FILETOASTER_ADDR", "127.0.0.1:9090")
   t.Setenv("FILETOASTER_MAX_TASKS", "8")
   t.Setenv("FILETOASTER_GOMAXPROCS", "2")
@@ -455,7 +471,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 
 func TestShutdownTimeoutDefault(t *testing.T) {
   // No YAML and no env: the documented default applies.
-  yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\ntmp_dir: " + t.TempDir() + "\n"
+  yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\ntmp_dir: " + secureTmpDir(t) + "\n"
   cfg, err := Load(writeConfig(t, yaml))
   if err != nil {
     t.Fatalf("Load = %v", err)
@@ -469,7 +485,7 @@ func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
   t.Run("from file", func(t *testing.T) {
     yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
       "shutdown_timeout_seconds: 5\n" +
-      "tmp_dir: " + t.TempDir() + "\n"
+      "tmp_dir: " + secureTmpDir(t) + "\n"
     cfg, err := Load(writeConfig(t, yaml))
     if err != nil {
       t.Fatalf("Load = %v", err)
@@ -483,7 +499,7 @@ func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
     t.Setenv("FILETOASTER_SHUTDOWN_TIMEOUT", "120")
     yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n" +
       "shutdown_timeout_seconds: 5\n" +
-      "tmp_dir: " + t.TempDir() + "\n"
+      "tmp_dir: " + secureTmpDir(t) + "\n"
     cfg, err := Load(writeConfig(t, yaml))
     if err != nil {
       t.Fatalf("Load = %v", err)
@@ -495,7 +511,7 @@ func TestShutdownTimeoutFromFileAndEnv(t *testing.T) {
 
   t.Run("non-integer env ignored", func(t *testing.T) {
     t.Setenv("FILETOASTER_SHUTDOWN_TIMEOUT", "not-a-number")
-    yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\ntmp_dir: " + t.TempDir() + "\n"
+    yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\ntmp_dir: " + secureTmpDir(t) + "\n"
     cfg, err := Load(writeConfig(t, yaml))
     if err != nil {
       t.Fatalf("Load = %v", err)
@@ -513,7 +529,7 @@ func TestSaveRoundTrip(t *testing.T) {
   cfg.AllowedPaths = []AllowedPath{{Name: "root", Path: t.TempDir()}}
   cfg.MaxParallelTasks = 3
   cfg.SessionSecret = "roundtrip"
-  cfg.TMPDir = t.TempDir()
+  cfg.TMPDir = secureTmpDir(t)
   if err := cfg.Save(path); err != nil {
     t.Fatalf("Save = %v", err)
   }
@@ -621,5 +637,169 @@ func TestChangeAdminPasswordUsesFileValuesNotEnv(t *testing.T) {
   // The hash was still applied.
   if !auth.VerifyPassword(reloaded.AdminPasswordHash, "new") {
     t.Fatal("hash should have been persisted")
+  }
+}
+
+// TestWriteDefaultConfigCreatesOwnerOnlyConfigFile verifies an auto-created
+// config file is written with 0600 so the session secret and admin hash are
+// private to the owner, not readable by other local users.
+func TestWriteDefaultConfigCreatesOwnerOnlyConfigFile(t *testing.T) {
+  path := filepath.Join(t.TempDir(), "config.yaml")
+  if _, err := WriteDefaultConfig(path); err != nil {
+    t.Fatalf("WriteDefaultConfig: %v", err)
+  }
+  info, err := os.Stat(path)
+  if err != nil {
+    t.Fatalf("stat config: %v", err)
+  }
+  if got := info.Mode().Perm(); got != ConfigFileMode {
+    t.Errorf("config file mode = %o, want %o", got, ConfigFileMode)
+  }
+}
+
+// TestSaveWritesOwnerOnlyConfigFile verifies a rotated/saved config is written
+// with 0600 (the Save writes atomically via a temp file).
+func TestSaveWritesOwnerOnlyConfigFile(t *testing.T) {
+  path := filepath.Join(t.TempDir(), "saved.yaml")
+  cfg := DefaultConfig()
+  cfg.Addr = ":8080"
+  cfg.AllowedPaths = []AllowedPath{{Name: "root", Path: t.TempDir()}}
+  cfg.SessionSecret = "keep-me-secret"
+  cfg.TMPDir = secureTmpDir(t)
+  if err := cfg.Save(path); err != nil {
+    t.Fatalf("Save: %v", err)
+  }
+  info, err := os.Stat(path)
+  if err != nil {
+    t.Fatalf("stat config: %v", err)
+  }
+  if got := info.Mode().Perm(); got != ConfigFileMode {
+    t.Errorf("saved config file mode = %o, want %o", got, ConfigFileMode)
+  }
+}
+
+// TestLoadRejectsInsecureConfigFile verifies startup fails when the config file
+// is readable or writable by anyone but the owner, and that the error tells the
+// operator how to fix it.
+func TestLoadRejectsInsecureConfigFile(t *testing.T) {
+  root := t.TempDir()
+  path := writeConfig(t, "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+root+"\ntmp_dir: "+secureTmpDir(t)+"\n")
+  for _, mode := range []os.FileMode{0o644, 0o646, 0o666, 0o640} {
+    if err := os.Chmod(path, mode); err != nil {
+      t.Fatalf("chmod %o: %v", mode, err)
+    }
+    _, err := Load(path)
+    if err == nil {
+      t.Fatalf("Load = nil, want error for config file with %o", mode)
+    }
+    msg := err.Error()
+    if !strings.Contains(msg, "config file") || !strings.Contains(msg, "chmod 600") {
+      t.Errorf("error = %q, want it to name 'config file' and the 'chmod 600' fix", msg)
+    }
+  }
+  if err := os.Chmod(path, ConfigFileMode); err != nil {
+    t.Fatalf("restore config perms: %v", err)
+  }
+}
+
+// TestLoadRejectsConfigFileWithoutOwnerPermissions verifies startup fails when
+// the config file is locked down so far that even the owner cannot read it.
+func TestLoadRejectsConfigFileWithoutOwnerPermissions(t *testing.T) {
+  root := t.TempDir()
+  path := writeConfig(t, "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+root+"\ntmp_dir: "+secureTmpDir(t)+"\n")
+  if err := os.Chmod(path, 0o000); err != nil {
+    t.Fatalf("chmod: %v", err)
+  }
+  defer func() { _ = os.Chmod(path, ConfigFileMode) }()
+  _, err := Load(path)
+  if err == nil {
+    t.Fatal("Load = nil, want error for config file with no owner permissions")
+  }
+  if !strings.Contains(err.Error(), "config file") {
+    t.Errorf("error = %q, want it to name 'config file'", err.Error())
+  }
+}
+
+// TestLoadRejectsInsecureTmpDir verifies startup fails when the configured
+// tmp_dir is accessible to group or other, and that the error tells the
+// operator how to fix it.
+func TestLoadRejectsInsecureTmpDir(t *testing.T) {
+  root := t.TempDir()
+  tmp := secureTmpDir(t)
+  for _, mode := range []os.FileMode{0o755, 0o757, 0o777, 0o711} {
+    if err := os.Chmod(tmp, mode); err != nil {
+      t.Fatalf("chmod %o: %v", mode, err)
+    }
+    yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: "+root+"\ntmp_dir: "+tmp+"\n"
+    _, err := Load(writeConfig(t, yaml))
+    if err == nil {
+      t.Fatalf("Load = nil, want error for tmp_dir with %o", mode)
+    }
+    msg := err.Error()
+    if !strings.Contains(msg, "tmp_dir") || !strings.Contains(msg, "chmod 700") {
+      t.Errorf("error = %q, want it to name 'tmp_dir' and the 'chmod 700' fix", msg)
+    }
+  }
+  if err := os.Chmod(tmp, TmpDirMode); err != nil {
+    t.Fatalf("restore tmp_dir perms: %v", err)
+  }
+}
+
+// TestLoadCreatesDefaultTmpDirOwnerOnly verifies the built-in default tmp_dir is
+// created with 0700 so staged uploads are private to the owner.
+func TestLoadCreatesDefaultTmpDirOwnerOnly(t *testing.T) {
+  home := t.TempDir()
+  t.Setenv("HOME", home)
+  t.Setenv("FILETOASTER_TMP_DIR", "")
+  tmpDir := filepath.Join(home, ".filetoaster", "tmp_uploads")
+
+  yaml := "session_secret: x\nallowed_paths:\n  - name: Files\n    path: " + t.TempDir() + "\n"
+  if _, err := Load(writeConfig(t, yaml)); err != nil {
+    t.Fatalf("Load = %v, want nil", err)
+  }
+  info, err := os.Stat(tmpDir)
+  if err != nil {
+    t.Fatalf("default tmp_dir not created: %v", err)
+  }
+  if got := info.Mode().Perm(); got != TmpDirMode {
+    t.Errorf("default tmp_dir mode = %o, want %o", got, TmpDirMode)
+  }
+}
+
+// TestRequireOwnerOnly exercises the permission check directly for a range of
+// file and directory modes.
+func TestRequireOwnerOnly(t *testing.T) {
+  // A correctly-permissioned file and directory pass.
+  f := filepath.Join(t.TempDir(), "f")
+  if err := os.WriteFile(f, []byte("x"), ConfigFileMode); err != nil {
+    t.Fatalf("write file: %v", err)
+  }
+  if err := requireOwnerOnly(f, ConfigFileMode, "config file"); err != nil {
+    t.Errorf("requireOwnerOnly(good file) = %v, want nil", err)
+  }
+  d := filepath.Join(t.TempDir(), "d")
+  if err := os.Mkdir(d, TmpDirMode); err != nil {
+    t.Fatalf("mkdir: %v", err)
+  }
+  if err := requireOwnerOnly(d, TmpDirMode, "tmp_dir"); err != nil {
+    t.Errorf("requireOwnerOnly(good dir) = %v, want nil", err)
+  }
+
+  // Group or other access is rejected for both files and directories.
+  for _, mode := range []os.FileMode{0o644, 0o646} {
+    if err := os.Chmod(f, mode); err != nil {
+      t.Fatalf("chmod: %v", err)
+    }
+    if err := requireOwnerOnly(f, ConfigFileMode, "config file"); err == nil {
+      t.Errorf("requireOwnerOnly(file %o) = nil, want error", mode)
+    }
+  }
+  for _, mode := range []os.FileMode{0o755, 0o757, 0o777} {
+    if err := os.Chmod(d, mode); err != nil {
+      t.Fatalf("chmod: %v", err)
+    }
+    if err := requireOwnerOnly(d, TmpDirMode, "tmp_dir"); err == nil {
+      t.Errorf("requireOwnerOnly(dir %o) = nil, want error", mode)
+    }
   }
 }

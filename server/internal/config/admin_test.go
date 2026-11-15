@@ -12,7 +12,7 @@ import (
 // boots the built-in admin/admin credentials.
 func TestWriteDefaultConfigAdminCredentials(t *testing.T) {
   path := filepath.Join(t.TempDir(), "config.yaml")
-  t.Setenv("FILETOASTER_TMP_DIR", t.TempDir())
+  t.Setenv("FILETOASTER_TMP_DIR", secureTmpDir(t))
   if _, err := WriteDefaultConfig(path); err != nil {
     t.Fatalf("WriteDefaultConfig: %v", err)
   }
@@ -35,7 +35,7 @@ func TestWriteDefaultConfigAdminCredentials(t *testing.T) {
 // user and password hash, and that the loaded hash verifies that password.
 func TestLoadCustomAdminCredentials(t *testing.T) {
   root := t.TempDir()
-  tmp := t.TempDir()
+  tmp := secureTmpDir(t)
   custom, err := auth.HashPassword("s3cret-custom")
   if err != nil {
     t.Fatal(err)
