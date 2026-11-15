@@ -5,7 +5,7 @@
   type LoginDetail = { username: string; password: string };
   const dispatch = createEventDispatcher<{ submit: LoginDetail }>();
 
-  let username = $state('admin');
+  let username = $state('');
   let password = $state('');
   let usernameInput = $state<HTMLInputElement | undefined>();
 
@@ -34,11 +34,11 @@
 
   <div class="field">
     <label for="username">Username</label>
-    <input id="username" bind:this={usernameInput} type="text" bind:value={username} autocomplete="username" />
+    <input id="username" bind:this={usernameInput} type="text" bind:value={username} placeholder="Username" autocomplete="username" />
   </div>
   <div class="field">
     <label for="password">Password</label>
-    <input id="password" type="password" bind:value={password} autocomplete="current-password" />
+    <input id="password" type="password" bind:value={password} placeholder="Password" autocomplete="current-password" />
   </div>
 
   <button type="submit" disabled={$auth.submitting} class="submit">
