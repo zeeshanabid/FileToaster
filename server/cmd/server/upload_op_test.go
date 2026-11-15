@@ -34,7 +34,7 @@ type uploadEndpoint struct {
 
 func newUploadEndpoint(t *testing.T, root, tmpDir string) uploadEndpoint {
   t.Helper()
-  if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+  if err := os.MkdirAll(tmpDir, 0o700); err != nil {
     t.Fatalf("create tmp_dir: %v", err)
   }
   cfg := &config.Config{
