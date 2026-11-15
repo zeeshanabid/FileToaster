@@ -65,17 +65,17 @@
   .crest {
     display: grid;
     place-items: center;
-    width: 56px;
-    height: 56px;
+    width: 96px;
+    height: 96px;
     border-radius: 16px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: var(--shadow-glyph);
-    margin: 2px auto 6px;
+    padding: 8px;
+    background: #fff;
+    margin: 2px auto 8px;
   }
 
   .mark {
-    width: 30px;
-    height: 30px;
+    width: 80px;
+    height: 80px;
   }
 
   .title {
