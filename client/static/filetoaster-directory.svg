@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title">
+  <title id="title">FileToaster monochrome mark</title>
+  <g color="#7138F5">
+<g fill="currentColor">
+  <path d="M18 35C18 27.82 23.82 22 31 22h24.5c3.18 0 6.23 1.35 8.36 3.72l5.12 5.7H89c7.18 0 13 5.82 13 13v33.5c0 7.18-5.82 13-13 13H31c-7.18 0-13-5.82-13-13V35Z"/>
+  <path d="M33.5 49.5c1.05-7.15 7.2-12.45 14.43-12.45h30.2c7.45 0 13.65 5.62 14.5 13.02l3.35 28.9c.55 4.72-3.15 8.88-7.9 8.88H37.8c-4.82 0-8.53-4.28-7.82-9.05l3.52-29.3Z" fill="#fff"/>
+  <circle cx="79.5" cy="70.5" r="5.6" fill="#fff"/>
+  <path d="M50 13v9M34.5 18.5l5.7 6.2M65.5 18.5l-5.7 6.2" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
+</g>
+</g>
+</svg>
