@@ -4,9 +4,7 @@
 
 <span class="fg" style="color:{color}" aria-hidden="true">
   {#if type === 'folder'}
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-      <path d="M3 6a1 1 0 0 1 1-1h3l1.5 1.5H16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z" />
-    </svg>
+    <img class="folder-logo" src="/filetoaster-directory.svg" alt="" />
   {:else if type === 'image'}
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
       <rect x="3" y="4" width="14" height="13" rx="1.5" />
@@ -35,7 +33,8 @@
     border-radius: 8px;
     background: var(--surface-inset);
   }
-  .fg svg {
+  .fg svg,
+  .folder-logo {
     width: 16px;
     height: 16px;
   }
