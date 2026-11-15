@@ -21,7 +21,7 @@
 
 <form class="login" onsubmit={submit}>
   <div class="crest" aria-hidden="true">
-    <span class="mark">F</span>
+    <img class="mark" src="/favicon.svg" alt="" />
   </div>
   <h1 class="title">FileToaster</h1>
   <p class="subtitle">Sign in to your account</p>
@@ -74,9 +74,8 @@
   }
 
   .mark {
-    color: #fff;
-    font-size: 26px;
-    font-weight: 700;
+    width: 30px;
+    height: 30px;
   }
 
   .title {
