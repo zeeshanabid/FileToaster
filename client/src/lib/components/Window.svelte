@@ -1309,11 +1309,9 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
         >
           <button type="button" class="tnode" title={dir} onclick={() => navigate(dir)}>
             <span class="twisty" aria-hidden="true" onclick={(e) => { e.stopPropagation(); void tree.toggleExpand(winProp.id, dir).then(() => frame += 1).catch(() => frame += 1); frame += 1; }}>{arrow(dir)}</span>
-            <span class="ticon" aria-hidden="true">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-                <path d="M3 6a1 1 0 0 1 1-1h3l1.5 1.5H16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z" />
-              </svg>
-            </span>
+             <span class="ticon" aria-hidden="true">
+               <FileIcon type="folder" />
+             </span>
             <span class="tname" title={label(dir)}>{label(dir)}</span>
           </button>
           {#if s.expanded}
@@ -1658,15 +1656,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   .twisty:hover {
     color: var(--text);
   }
-  .ticon {
-    flex: none;
-    color: var(--accent-strong);
-  }
-  .ticon svg {
-    width: 15px;
-    height: 15px;
-  }
-  .tname {
+   .ticon {
+     flex: none;
+     color: var(--accent-strong);
+   }
+   .tname {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
