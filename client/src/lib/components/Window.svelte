@@ -1098,10 +1098,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   >
   <header class="header" onpointerdown={onHeaderPointerDown} aria-roledescription="draggable" role="application">
     <span class="logo" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" />
-        <path d="M9 12h6M9 15h4" />
-      </svg>
+      <img src="/filetoaster-directory.svg" alt="" />
     </span>
     <span class="title" title={`${title} — ${winProp.path}`}>{title}</span>
     <button class="close" type="button" onclick={() => closeWindow(winProp.id)} aria-label="Close window">
@@ -1477,19 +1474,19 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   .header:active {
     cursor: grabbing;
   }
-  .logo {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #fff;
-  }
-  .logo svg {
-    width: 15px;
-    height: 15px;
-  }
+   .logo {
+     display: grid;
+     place-items: center;
+     width: 36px;
+     height: 36px;
+     border-radius: 10px;
+     background: linear-gradient(135deg, var(--accent), var(--accent-2));
+     color: #fff;
+   }
+   .logo img {
+     width: 27px;
+     height: 27px;
+   }
   .title {
     font-size: 14px;
     font-weight: 600;
