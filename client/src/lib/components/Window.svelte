@@ -1167,8 +1167,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       onclick={cutSelection}
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-        <path d="M6 10a4 4 0 1 1 5.6 3.6L4.4 19.6a2 2 0 1 1-2.8-2.8L9.6 10A4 4 0 0 1 6 10Z" />
-        <path d="M18 14a4 4 0 1 1-5.6-3.6l7.2-7.2a2 2 0 1 1 2.8 2.8L14.4 14A4 4 0 0 1 18 14Z" />
+        <circle cx="6" cy="6" r="2.75" />
+        <circle cx="6" cy="18" r="2.75" />
+        <line x1="8.5" y1="8.5" x2="19" y2="19" />
+        <line x1="8.5" y1="15.5" x2="19" y2="5" />
       </svg>
     </button>
     <button
@@ -1537,8 +1539,8 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   .toolbar {
     display: flex;
     align-items: center;
-    height: 40px;
-    padding: 0 10px;
+    height: 44px;
+    padding: 0 11px;
     background: var(--surface-soft);
     border-bottom: 1px solid var(--border);
     flex: none;
@@ -1546,8 +1548,8 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   .up {
     display: grid;
     place-items: center;
-    height: 30px;
-    width: 30px;
+    height: 33px;
+    width: 33px;
     background: transparent;
     border: none;
     border-radius: 8px;
@@ -1564,14 +1566,14 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     outline-offset: -2px;
   }
   .up svg {
-    width: 16px;
-    height: 16px;
+    width: 17.6px;
+    height: 17.6px;
   }
   .tool {
     display: grid;
     place-items: center;
-    height: 30px;
-    width: 30px;
+    height: 33px;
+    width: 33px;
     background: transparent;
     border: none;
     border-radius: 8px;
@@ -1588,8 +1590,8 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     cursor: default;
   }
   .tool svg {
-    width: 16px;
-    height: 16px;
+    width: 17.6px;
+    height: 17.6px;
   }
   .tool.cut.cut-active {
     color: var(--accent-strong);
