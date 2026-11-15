@@ -3,8 +3,14 @@ import { writable, type Writable } from 'svelte/store';
 
 // Auth state kept in a store so every route can subscribe to it. `error` carries
 // only a generic message; it never distinguishes a wrong username from a wrong
-// password so login failures cannot be probed.
+// password so login failures cannot be probed. `status` tracks the initial
+// session check so the page can hide the login form until the server has
+// answered — without it, the form paints on the first frame before checkSession
+// resolves and a logged-in user sees a login flash.
+type AuthStatus = 'unknown' | 'loading' | 'authenticated' | 'unauthenticated';
+
 interface AuthState {
+  status: AuthStatus;
   authenticated: boolean;
   username: string | null;
   error: string;
@@ -12,6 +18,7 @@ interface AuthState {
 }
 
 const initial: AuthState = {
+  status: 'unknown',
   authenticated: false,
   username: null,
   error: '',
@@ -31,11 +38,13 @@ export async function checkSession(): Promise<boolean> {
   if (!browser) {
     return false;
   }
+  set({ status: 'loading', error: '' });
   try {
     const response = await fetch('/api/auth/status', { credentials: 'include' });
     if (response.ok) {
       const data = (await response.json().catch(() => ({}))) as { username?: unknown };
       set({
+        status: 'authenticated',
         authenticated: true,
         username: typeof data.username === 'string' && data.username ? data.username : 'admin',
         error: '',
@@ -46,7 +55,13 @@ export async function checkSession(): Promise<boolean> {
   } catch {
     // Network error: treat as unauthenticated and let the UI show the login form.
   }
-  set({ authenticated: false, username: null, error: '', submitting: false });
+  set({
+    status: 'unauthenticated',
+    authenticated: false,
+    username: null,
+    error: '',
+    submitting: false,
+  });
   return false;
 }
 
@@ -64,6 +79,7 @@ export async function login(username: string, password: string): Promise<boolean
     });
     if (response.ok) {
       set({
+        status: 'authenticated',
         authenticated: true,
         username: username || 'admin',
         error: '',
@@ -74,10 +90,22 @@ export async function login(username: string, password: string): Promise<boolean
     const data = (await response.json().catch(() => ({}))) as { error?: unknown };
     const message =
       typeof data.error === 'string' && data.error ? data.error : 'username or password is incorrect';
-    set({ authenticated: false, username: null, error: message, submitting: false });
+    set({
+      status: 'unauthenticated',
+      authenticated: false,
+      username: null,
+      error: message,
+      submitting: false,
+    });
     return false;
   } catch {
-    set({ authenticated: false, username: null, error: 'username or password is incorrect', submitting: false });
+    set({
+      status: 'unauthenticated',
+      authenticated: false,
+      username: null,
+      error: 'username or password is incorrect',
+      submitting: false,
+    });
     return false;
   }
 }
@@ -89,7 +117,7 @@ export async function logout(): Promise<void> {
   } catch {
     // Ignore network errors; local state is cleared regardless.
   }
-  set(initial);
+  set({ ...initial, status: 'unauthenticated' });
 }
 
 // changePassword sends the current and new password to the server. On success
