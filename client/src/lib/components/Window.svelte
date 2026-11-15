@@ -1557,6 +1557,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     background: var(--surface-inset);
     color: var(--text);
   }
+  .up:focus-visible,
+  .tool:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: -2px;
+  }
   .up svg {
     width: 16px;
     height: 16px;
@@ -1571,6 +1576,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     border-radius: 8px;
     color: var(--text-muted);
     cursor: pointer;
+    transition: background 100ms ease;
   }
   .tool:hover:not(:disabled) {
     background: var(--surface-inset);
@@ -1694,15 +1700,22 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     padding: 6px 10px;
     cursor: pointer;
     text-align: left;
+    border-radius: 6px;
+    transition: background 100ms ease;
   }
   .tnode:hover {
     background: var(--surface-inset);
+  }
+  .tnode:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: -2px;
   }
   .trow.active > .tnode {
     color: var(--accent-strong);
     font-weight: 600;
     background: var(--surface-inset);
     border-radius: 6px;
+    box-shadow: inset 2px 0 0 var(--accent-strong);
   }
   .twisty {
     width: 12px;
