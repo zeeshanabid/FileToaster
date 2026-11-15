@@ -38,7 +38,6 @@
 
   <div class="spacer"></div>
   <div class="account">
-    <RunningTaskIcon />
     <button type="button" class="account-btn" title="Change password" aria-label="Change password" onclick={onChangePassword}>
       <span class="account-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
@@ -56,6 +55,7 @@
         </svg>
       </span>
     </button>
+    <RunningTaskIcon />
   </div>
 </div>
 
