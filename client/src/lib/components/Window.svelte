@@ -75,13 +75,19 @@ import { formatSize, formatDate } from '$lib/fs/format';
   // --- geometry: drag (header) and resize (bottom-right handle) ---
   let pos = $state<{ x: number; y: number } | null>(null);
   let dragging = $state(false);
-  let resizeStart = $state({ x: 0, y: 0, w: 0, h: 0 });
+  let resizeStart = $state({ x: 0, y: 0, w: 0, h: 0, tree: 0 });
   let resizing = $state(false);
+  let resizingTree = $state(false);
+  // Width of the folder-tree pane, set once at creation and adjustable with the
+  // vertical divider handle between the tree and the listing.
+  let treeWidth = $state(260);
   // svelte-ignore state_referenced_locally
   let size = $state({ width: winProp.width, height: winProp.height });
 
   const MIN_W = 480;
   const MIN_H = 300;
+  const MIN_TREE = 140;
+  const MAX_TREE = 520;
 
   function addMoveListeners() {
     window.addEventListener('pointermove', onPointerMove);
@@ -102,12 +108,23 @@ import { formatSize, formatDate } from '$lib/fs/format';
   let dragOrigin = $state<{ x: number; y: number } | null>(null);
   function onResizePointerDown(e: PointerEvent) {
     e.stopPropagation();
-    resizeStart = { x: e.clientX, y: e.clientY, w: size.width, h: size.height };
+    resizeStart = { x: e.clientX, y: e.clientY, w: size.width, h: size.height, tree: treeWidth };
     resizing = true;
+    resizingTree = false;
+    addMoveListeners();
+  }
+  function onTreeResizePointerDown(e: PointerEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    resizeStart = { x: e.clientX, y: e.clientY, w: size.width, h: size.height, tree: treeWidth };
+    resizingTree = true;
+    resizing = false;
     addMoveListeners();
   }
   function onPointerMove(e: PointerEvent) {
-    if (resizing) {
+    if (resizingTree) {
+      treeWidth = Math.max(MIN_TREE, Math.min(MAX_TREE, resizeStart.tree + (e.clientX - resizeStart.x)));
+    } else if (resizing) {
       size.width = Math.max(MIN_W, resizeStart.w + (e.clientX - resizeStart.x));
       size.height = Math.max(MIN_H, resizeStart.h + (e.clientY - resizeStart.y));
     } else if (dragOrigin) {
@@ -120,6 +137,7 @@ import { formatSize, formatDate } from '$lib/fs/format';
   function onPointerUp() {
     dragging = false;
     resizing = false;
+    resizingTree = false;
     removeMoveListeners();
   }
 
@@ -1294,7 +1312,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   </div>
 
   <main class="body">
-    <aside class="tree" aria-label="Folder tree">
+    <aside class="tree" aria-label="Folder tree" style="width:{treeWidth}px">
       <ul class="tree-root" data-frame={frame}>
         {#if win}
           {@render treeRow(win.rootPath, 0)}
@@ -1328,6 +1346,12 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
         </li>
       {/snippet}</ul>
     </aside>
+    <div
+      class="tree-resize"
+      onpointerdown={onTreeResizePointerDown}
+      aria-label="Resize folder tree"
+      role="separator"
+    ></div>
 
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="content" onclick={clearSelectionIfBackground}>
@@ -1608,11 +1632,46 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   }
   .tree {
     flex: none;
-    width: 220px;
+    width: 260px;
     border-right: 1px solid var(--border);
     background: var(--surface-soft);
     overflow: auto;
     padding: 8px 0;
+  }
+  .tree-resize {
+    flex: none;
+    width: 8px;
+    margin-left: -4px;
+    z-index: 5;
+    cursor: ew-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+  }
+  .tree-resize::after {
+    content: '';
+    width: 2px;
+    height: 32px;
+    border-radius: 2px;
+    background: var(--border);
+    transition: background 120ms ease, height 120ms ease;
+  }
+  .tree-resize:hover,
+  .tree-resize:active {
+    background: var(--surface-inset);
+  }
+  .tree-resize:hover::after,
+  .tree-resize:active::after,
+  .tree-resize:focus-visible::after {
+    background: var(--accent-strong);
+    height: 44px;
+  }
+  .tree-resize:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: -3px;
+    border-radius: 2px;
   }
   .tree-root {
     list-style: none;
