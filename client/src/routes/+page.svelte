@@ -50,7 +50,7 @@
 
 <svelte:window onkeydown={(e) => (e.key === 'Escape' && e.preventDefault())} />
 
-{#if $auth.authenticated}
+{#if $auth.status === 'authenticated'}
   <div class="shell">
     <Desktop />
     {#each $windows as win (win.id)}
@@ -59,9 +59,13 @@
     <Taskbar onChangePassword={openChangePassword} />
     <ChangePassword open={showChangePassword} on:close={closeChangePassword} />
   </div>
-{:else}
+{:else if $auth.status === 'unauthenticated'}
   <div class="login-shell">
     <Login on:submit={handleLogin} />
+  </div>
+{:else}
+  <div class="shell">
+    <div class="loading">Loading…</div>
   </div>
 {/if}
 
@@ -75,5 +79,10 @@
     place-items: center;
     min-height: 100vh;
     padding: 20px;
+  }
+  .loading {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+    letter-spacing: 0.02em;
   }
 </style>
