@@ -1,7 +1,9 @@
 package task
 
 import (
+  "bytes"
   "context"
+  "encoding/json"
   "errors"
   "io"
   "log/slog"
@@ -392,5 +394,47 @@ func TestPoolEmptyPoolExitsGracefully(t *testing.T) {
   }
   if got := pool.QueuedCount(); got != 0 {
     t.Fatalf("queued = %d, want 0", got)
+  }
+}
+
+// TestPoolEnqueueSetsMeta verifies that the operation metadata passed to
+// Enqueue is stored on the task record and published via the Hub so clients
+// receive it over SSE.
+func TestPoolEnqueueSetsMeta(t *testing.T) {
+  store := NewStore()
+  hub := NewHub()
+  pool := NewPool(store, hub, 1, testLogger())
+  defer pool.Close(context.Background())
+
+  meta := json.RawMessage(`{"dest":"/data/archive.zip","format":"zip"}`)
+  t1, _ := pool.Enqueue("compress", meta, func(ctx context.Context, prog *Progression) error {
+    return nil
+  })
+
+  // The task returned by Enqueue should have the meta set.
+  if !bytes.Equal(store.Get(t1.ID).Meta, meta) {
+    t.Fatalf("task meta = %s, want %s", store.Get(t1.ID).Meta, meta)
+  }
+
+  // The Hub should publish the task with meta for SSE subscribers.
+  sub := hub.Subscribe(nil)
+  waitFor(t, func() bool {
+    st := store.Get(t1.ID)
+    return st != nil && st.Status == StatusFinished
+  })
+
+  var published *Task
+  select {
+  case published = <-sub.Out():
+  case <-time.After(2 * time.Second):
+    t.Fatal("no publish received")
+  }
+  hub.Unsubscribe(sub)
+
+  if published == nil {
+    t.Fatal("published task is nil")
+  }
+  if !bytes.Equal(published.Meta, meta) {
+    t.Fatalf("published meta = %s, want %s", published.Meta, meta)
   }
 }

@@ -105,6 +105,7 @@ func (p *Pool) Enqueue(typ string, meta json.RawMessage, run Runner) (*Task, boo
     Status:  StatusQueued,
     Created: now,
     Updated: now,
+    Meta:    meta,
   }
   p.store.Add(t)
   p.hub.Publish(t)
