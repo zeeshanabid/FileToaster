@@ -24,9 +24,10 @@ type renameOp struct {
 
 // Rename renames the given paths within the allowed roots. The first path is
 // renamed to `name`; each subsequent path is renamed to `name (N)` for its
-// index, so a batch of selections receives distinct, ordered names. Each file
-// keeps its own extension, so renaming a.txt and b.md with name "report" yields
-// "report.txt" and "report (1).md".
+// index, so a batch of selections receives distinct, ordered names. When the
+// user's name carries an extension (e.g. "hello.zip") it is used as-is for
+// every file; otherwise each file keeps its own extension, so renaming a.txt
+// and b.md with the stem "report" yields "report.txt" and "report (1).md".
 //
 // The operation is atomic-ish: every target is conflict-checked up front, and if
 // any rename fails the ones that already succeeded are rolled back, leaving the
@@ -45,20 +46,32 @@ func Rename(roots *Roots, name string, paths []string) error {
 
   items := make([]renameOp, 0, len(paths))
   sources := make(map[string]struct{}, len(paths))
-  stem, _ := splitBase(name)
+  userStem, userExt := splitBase(name)
+  // If the user typed an explicit extension (e.g. "hello.zip"), honour it for
+  // every file. Otherwise append each file's own extension to the stem, so
+  // renaming a.txt and b.md with "report" yields "report.txt" and "report (1).md".
+  hasUserExt := userExt != ""
   for i, p := range paths {
     canon, err := roots.Resolve(p)
     if err != nil {
       return fsError(err)
     }
-    newName := stem
-    if i > 0 {
-      newName = fmt.Sprintf("%s (%d)", stem, i)
+    var newName string
+    if hasUserExt {
+      // The user named the target exactly; only the batch suffix changes.
+      newName = userStem + userExt
+      if i > 0 {
+        newName = fmt.Sprintf("%s (%d)%s", userStem, i, userExt)
+      }
+    } else {
+      newName = userStem
+      if i > 0 {
+        newName = fmt.Sprintf("%s (%d)", userStem, i)
+      }
+      // Each file keeps its own extension.
+      _, ext := splitBase(filepath.Base(canon))
+      newName += ext
     }
-    // Each file keeps its own extension, so renaming a.txt and b.md with the
-    // stem "report" yields "report.txt" and "report (1).md".
-    _, ext := splitBase(filepath.Base(canon))
-    newName += ext
     parent := filepath.Dir(canon)
     dst := filepath.Clean(filepath.Join(parent, newName))
     if !roots.Contained(dst) {

@@ -185,6 +185,20 @@ func TestRenameConflictWithAnotherSource(t *testing.T) {
   }
 }
 
+func TestRenameUsesUserProvidedExtension(t *testing.T) {
+  roots, root := newRenameRoots(t)
+  files := writeFiles(t, root, "photo.jpg")
+
+  // Renaming to an explicit name with an extension must use it as-is, not swap
+  // in the source file's extension.
+  if err := Rename(roots, "hello.zip", files); err != nil {
+    t.Fatalf("Rename: %v", err)
+  }
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"hello.zip"}) {
+    t.Fatalf("listing = %v, want [hello.zip]", got)
+  }
+}
+
 func TestRenameNoOpWhenAlreadyCorrect(t *testing.T) {
   roots, root := newRenameRoots(t)
   files := writeFiles(t, root, "a.txt")
