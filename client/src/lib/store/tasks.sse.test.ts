@@ -4,6 +4,7 @@ import { get } from 'svelte/store';
 import { tick } from 'svelte';
 import { taskList, initTasks, shutdownTasks } from '$lib/store/tasks';
 import { listTasks, cancelTask, submitCopy } from '$lib/fs/api';
+import { reloadWindowsForPath } from '$lib/store/windows';
 import type { Task } from '$lib/fs/api';
 
 // The live SSE path lives entirely inside tasks.ts and is exercised through the
@@ -21,7 +22,14 @@ import type { Task } from '$lib/fs/api';
     DEFAULT_CHUNK_SIZE: 4 << 20
   }));
 
+// The windows store is mocked so the SSE completion path can verify which
+// directory paths are scheduled for reload without touching real windows.
+vi.mock('$lib/store/windows', () => ({
+  reloadWindowsForPath: vi.fn()
+}));
+
 const listTasksMock = listTasks as unknown as Mock;
+const reloadSpy = reloadWindowsForPath as unknown as Mock;
 const enc = new TextEncoder();
 let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null;
 
@@ -83,16 +91,17 @@ function delay(ms = 30) {
 }
 
 beforeEach(() => {
-  stubFetch();
-  shutdownTasks();
-  initTasks();
-});
+    stubFetch();
+    shutdownTasks();
+    initTasks();
+    reloadSpy.mockClear();
+  });
 
-afterEach(() => {
-  shutdownTasks();
-  ctrl?.close();
-  vi.unstubAllGlobals();
-});
+  afterEach(() => {
+    shutdownTasks();
+    ctrl?.close();
+    vi.unstubAllGlobals();
+  });
 
 describe('live SSE task progress', () => {
   it('updates the store (and thus the progress bar) when the server streams deltas', async () => {
@@ -121,5 +130,97 @@ describe('live SSE task progress', () => {
     expect(afterSecond!.progress).toBe(75);
     expect(afterSecond!.bytes.done).toBe(750);
     expect(afterSecond!.bytes.filesDone).toBe(3);
+  });
+
+  it('rejects reload when the task is still running', async () => {
+    await tick();
+
+    push(copyTask({ status: 'running', progress: 50, bytes: { total: 1000, done: 500, filesTotal: 4, filesDone: 2, ratePerSec: 2048 } }));
+    await tick();
+    await delay();
+
+    // A non-terminal task must not trigger any reload.
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('triggers window reloads when a task reaches a terminal status', async () => {
+    await tick();
+
+    // Task is running, then finishes with the destination directory in meta.
+    push(copyTask({
+      status: 'running',
+      progress: 50,
+      bytes: { total: 1000, done: 500, filesTotal: 4, filesDone: 2, ratePerSec: 2048 }
+    }));
+    await tick();
+    await delay();
+    expect(reloadSpy).not.toHaveBeenCalled();
+
+    // The server reports the copy finished; the affected destination directory
+    // must be scheduled for reload.
+    push(copyTask({
+      status: 'finished',
+      progress: 100,
+      bytes: { total: 1000, done: 1000, filesTotal: 4, filesDone: 4, ratePerSec: 4096 },
+      meta: { items: [{ src: '/source/a.txt', dst: '/dest/a.txt' }], conflict: '' }
+    }));
+    await tick();
+    await delay();
+
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    expect(reloadSpy).toHaveBeenCalledWith('/dest');
+  });
+
+  it('triggers reload for both source and destination when a move finishes', async () => {
+    await tick();
+
+    push(copyTask({
+      id: 'task-move',
+      type: 'move',
+      status: 'finished',
+      progress: 100,
+      bytes: { total: 100, done: 100, filesTotal: 1, filesDone: 1, ratePerSec: 100 },
+      meta: { items: [{ src: '/from/a.txt', dst: '/to/a.txt' }] }
+    }));
+    await tick();
+    await delay();
+
+    const calledPaths = reloadSpy.mock.calls.map((c) => c[0]).sort();
+    expect(calledPaths).toEqual(['/from', '/to']);
+  });
+
+  it('triggers reload with the archive destination when compress finishes', async () => {
+    await tick();
+
+    push(copyTask({
+      id: 'task-compress',
+      type: 'compress',
+      status: 'finished',
+      progress: 100,
+      bytes: { total: 100, done: 100, filesTotal: 2, filesDone: 2, ratePerSec: 100 },
+      meta: { format: 'zip', dest: '/data/archive.zip', source: 2 }
+    }));
+    await tick();
+    await delay();
+
+    expect(reloadSpy).toHaveBeenCalledWith('/data');
+  });
+
+  it('triggers reload for a failed task terminal state', async () => {
+    await tick();
+
+    push(copyTask({
+      status: 'failed',
+      progress: 40,
+      bytes: { total: 1000, done: 400, filesTotal: 4, filesDone: 1, ratePerSec: 2048 },
+      meta: { items: [{ src: '/source/a.txt', dst: '/dest/a.txt' }], conflict: '' }
+    }));
+    await tick();
+    await delay();
+
+    // Failed tasks are terminal, so the directory state (which may be partial)
+    // should still be refreshed in the UI.
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    expect(reloadSpy).toHaveBeenCalledWith('/dest');
   });
 });

@@ -5,6 +5,7 @@
     closeWindow,
     displayName,
     focusWindow,
+    reloadWindowsForPath,
     updateWindow,
     windows,
     type AppWindow
@@ -64,8 +65,14 @@ import { formatSize, formatDate } from '$lib/fs/format';
     });
     void navigate(winProp.path);
     document.addEventListener('click', dismissUploadMenu);
+    // Listen for reload events triggered by task completion
+    window.addEventListener('filetoaster:reload', onReloadEvent as EventListener);
   });
-  onDestroy(() => { stop?.(); document.removeEventListener('click', dismissUploadMenu); });
+  onDestroy(() => {
+    stop?.();
+    document.removeEventListener('click', dismissUploadMenu);
+    window.removeEventListener('filetoaster:reload', onReloadEvent as EventListener);
+  });
 
   // `tree` is an external cache; Svelte only re-renders when a $state changes.
   // Bump `frame` after every tree mutation so the fold/outlines and per-directory
@@ -941,6 +948,16 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     }
   }
 
+  // Handle reload events from task completion. Only reload if this window's
+  // ID matches and the target path is this window's current path or a parent.
+  function onReloadEvent(e: CustomEvent) {
+    const { windowId, path } = e.detail;
+    if (windowId !== winProp.id) return;
+    if (win && (win.path === path || path.startsWith(win.path + '/'))) {
+      void reload();
+    }
+  }
+
   // In-place directory naming in the toolbar. `editingNew` toggles the input;
   // Enter creates and navigates into the folder, Escape/blur discards.
   let editingNew = $state(false);
@@ -971,6 +988,9 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       try {
         await mkdirDirectory(parent, name);
         void navigate(parent + '/' + name);
+        // New folder appears in every open window showing this directory, not
+        // just this one — refresh them all.
+        reloadWindowsForPath(parent);
       } catch (err) {
         mainError = err instanceof Error ? err.message : 'could not create folder';
       }
@@ -1006,10 +1026,13 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       editingRename = false;
       renameName = '';
       const count = selected.size;
+      const dir = win.path;
       try {
         await renameFile([...selected], name);
         clearSelection();
-        void reload();
+        // Reload every open window showing this directory (not just this one),
+        // since rename is synchronous and never flows through the task SSE path.
+        reloadWindowsForPath(dir);
         flash(`Renamed ${count} item${count === 1 ? '' : 's'}.`);
       } catch (err) {
         mainError = err instanceof Error ? err.message : 'could not rename';

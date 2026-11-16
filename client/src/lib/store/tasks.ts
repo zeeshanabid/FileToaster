@@ -18,6 +18,7 @@ import {
 } from '$lib/fs/api';
 import { archiveStem } from '$lib/fs/archive';
 import { uploadStoreKey } from '$lib/fs/upload';
+import { reloadWindowsForPath } from '$lib/store/windows';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
 // by an initial snapshot from /api/tasks and then by deltas over the SSE stream
@@ -239,7 +240,77 @@ function handleMessage(message: string) {
       // ignore
     }
   }
+  // When a task reaches a terminal state, reload any open windows showing
+  // the affected directories so the UI reflects the changes.
+  if (task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled') {
+    const affectedPaths = getAffectedPaths(task);
+    for (const path of affectedPaths) {
+      reloadWindowsForPath(path);
+    }
+  }
 }
+
+// Extract directory paths that were affected by a completed task.
+// Returns the paths of directories whose listings should be refreshed.
+function getAffectedPaths(task: Task): string[] {
+  const meta = task.meta ?? null;
+  const paths = new Set<string>();
+  function dirname(p: string): string {
+    const i = p.lastIndexOf('/');
+    return i <= 0 ? '/' : p.slice(0, i);
+  }
+  function addDir(p: string) {
+    if (p) paths.add(p);
+  }
+  switch (task.type) {
+    case 'copy': {
+      const m = meta as CopyMeta | null;
+      if (m?.items) {
+        for (const item of m.items) {
+          if (item.dst) addDir(dirname(item.dst));
+        }
+      }
+      break;
+    }
+    case 'move': {
+      const m = meta as MoveMeta | null;
+      if (m?.items) {
+        for (const item of m.items) {
+          if (item.src) addDir(dirname(item.src));
+          if (item.dst) addDir(dirname(item.dst));
+        }
+      }
+      break;
+    }
+    case 'delete': {
+      const m = meta as DeleteMeta | null;
+      if (m?.paths) {
+        for (const p of m.paths) addDir(dirname(p));
+      }
+      break;
+    }
+    case 'compress': {
+      const m = meta as CompressMeta | null;
+      if (m?.dest) addDir(dirname(m.dest));
+      break;
+    }
+    case 'decompress': {
+      const m = meta as DecompressMeta | null;
+      if (m?.extractDir) addDir(m.extractDir);
+      else if (m?.into) addDir(m.into);
+      break;
+    }
+    case 'upload': {
+      const m = meta as UploadMeta | null;
+      if (m?.dest) addDir(m.dest);
+      break;
+    }
+  }
+  return Array.from(paths);
+}
+
+// Export getAffectedPaths so it can be unit-tested independently.
+export { getAffectedPaths };
 
 // parseSSEMessage decodes one raw SSE message ("event: task\ndata: {...}") into
 // a Task, or returns null for anything that is not a task event with valid JSON.

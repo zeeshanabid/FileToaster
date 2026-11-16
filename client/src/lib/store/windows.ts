@@ -22,6 +22,7 @@ export interface AppWindow {
 export const windows: Writable<AppWindow[]> = writable([]);
 
 let nextZ = 10;
+let windowIdCounter = 0;
 
 function basename(p: string): string {
   const i = p.lastIndexOf('/');
@@ -43,12 +44,18 @@ function bringToFront(id: string) {
   );
 }
 
+function generateWindowId(rootPath: string): string {
+  windowIdCounter += 1;
+  const randomPart = Math.random().toString(36).slice(2, 9);
+  return `${rootPath}-${Date.now()}-${windowIdCounter}-${randomPart}`;
+}
+
 export function openWindow(root: { name: string; path: string }) {
   windows.update((list) => {
     nextZ += 1;
     const offset = (list.length % 6) * 28;
     const opened: AppWindow = {
-      id: `${root.path}-${Date.now()}`,
+      id: generateWindowId(root.path),
       name: root.name,
       rootPath: root.path,
       path: root.path,
@@ -61,6 +68,33 @@ export function openWindow(root: { name: string; path: string }) {
     };
     return [...list, opened];
   });
+}
+
+// Find all open windows that are currently showing the given path (or a parent of it).
+// Returns the window IDs that should be reloaded.
+export function findWindowsByPath(targetPath: string): string[] {
+  let result: string[] = [];
+  windows.update((list) => {
+    result = list
+      .filter((w) => {
+        // Reload if the window's current path is the target path or a parent of it
+        // (since changes in a child directory affect the parent's listing)
+        return w.path === targetPath || targetPath.startsWith(w.path + '/');
+      })
+      .map((w) => w.id);
+    return list;
+  });
+  return result;
+}
+
+// Trigger reload on all open windows showing the given path.
+// This calls the window's internal reload function via a custom event.
+export function reloadWindowsForPath(targetPath: string): void {
+  const windowIds = findWindowsByPath(targetPath);
+  for (const id of windowIds) {
+    // Dispatch a custom event that the Window component listens for
+    window.dispatchEvent(new CustomEvent('filetoaster:reload', { detail: { windowId: id, path: targetPath } }));
+  }
 }
 
 export function focusWindow(id: string) {

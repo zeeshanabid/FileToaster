@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSSEMessage, taskLabel } from '$lib/store/tasks';
+import { parseSSEMessage, taskLabel, getAffectedPaths } from '$lib/store/tasks';
 import type { Task } from '$lib/fs/api';
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'type' | 'status'>): Task {
@@ -100,5 +100,84 @@ describe('taskLabel', () => {
 
   it('describes a decompress by the archive stem', () => {
     expect(taskLabel(task({ id: '8', type: 'decompress', status: 'running', meta: { format: 'zip', archive: '/root/myfiles.zip', extractDir: '/root/myfiles', into: 'myfiles' } }))).toBe('Extract myfiles');
+  });
+});
+
+describe('getAffectedPaths', () => {
+  it('returns destination directory for copy tasks', () => {
+    const t = task({
+      id: '1',
+      type: 'copy',
+      status: 'finished',
+      meta: {
+        items: [
+          { src: '/root/a.txt', dst: '/dest/a.txt' },
+          { src: '/root/b.txt', dst: '/dest/b.txt' }
+        ],
+        conflict: ''
+      }
+    });
+    expect(getAffectedPaths(t)).toEqual(['/dest']);
+  });
+
+  it('returns source and destination directories for move tasks', () => {
+    const t = task({
+      id: '2',
+      type: 'move',
+      status: 'finished',
+      meta: {
+        items: [
+          { src: '/root/a.txt', dst: '/dest/a.txt' },
+          { src: '/root/b.txt', dst: '/dest/b.txt' }
+        ]
+      }
+    });
+    const paths = getAffectedPaths(t).sort();
+    expect(paths).toEqual(['/dest', '/root']);
+  });
+
+  it('returns parent directory for delete tasks', () => {
+    const t = task({
+      id: '3',
+      type: 'delete',
+      status: 'finished',
+      meta: { paths: ['/root/a.txt', '/root/b.txt'] }
+    });
+    expect(getAffectedPaths(t)).toEqual(['/root']);
+  });
+
+  it('returns parent directory for compress tasks', () => {
+    const t = task({
+      id: '4',
+      type: 'compress',
+      status: 'finished',
+      meta: { format: 'zip', dest: '/root/archive.zip', source: 2 }
+    });
+    expect(getAffectedPaths(t)).toEqual(['/root']);
+  });
+
+  it('returns extract directory for decompress tasks', () => {
+    const t = task({
+      id: '5',
+      type: 'decompress',
+      status: 'finished',
+      meta: { format: 'zip', archive: '/root/archive.zip', extractDir: '/root/extracted', into: 'extracted' }
+    });
+    expect(getAffectedPaths(t)).toEqual(['/root/extracted']);
+  });
+
+  it('returns destination directory for upload tasks', () => {
+    const t = task({
+      id: '6',
+      type: 'upload',
+      status: 'finished',
+      meta: { staging: 'staging', dest: '/root/uploads', phase: 'finalizing', files: 3 }
+    });
+    expect(getAffectedPaths(t)).toEqual(['/root/uploads']);
+  });
+
+  it('returns empty array when no meta is present', () => {
+    const t = task({ id: '7', type: 'copy', status: 'finished' });
+    expect(getAffectedPaths(t)).toEqual([]);
   });
 });
