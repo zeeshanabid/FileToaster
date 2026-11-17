@@ -265,8 +265,8 @@ describe('Window tree — store sync', () => {
       return { path, entries: base };
     });
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText('New folder'));
-    const input = await waitFor(() => screen.getByPlaceholderText('New folder') as HTMLInputElement);
+    await user.click(screen.getByLabelText('New directory'));
+    const input = await waitFor(() => screen.getByPlaceholderText('New directory') as HTMLInputElement);
     await user.type(input, 'TestFolder{enter}');
     expect(mkdirDirectory).toHaveBeenCalledWith('/root', 'TestFolder');
     // The window stays in the folder where the new folder was created; it does
@@ -275,18 +275,18 @@ describe('Window tree — store sync', () => {
     // The new folder appears in the listing.
     await waitFor(() => expect(within(screen.getByRole('table')).getByText('TestFolder')).toBeInTheDocument());
     // The in-place input is gone; the toolbar button is re-enabled.
-    await waitFor(() => expect(screen.queryByPlaceholderText('New folder')).not.toBeInTheDocument());
-    expect(screen.getByLabelText('New folder')).not.toBeDisabled();
+    await waitFor(() => expect(screen.queryByPlaceholderText('New directory')).not.toBeInTheDocument());
+    expect(screen.getByLabelText('New directory')).not.toBeDisabled();
   });
 
   it('discards an in-place new folder on Escape', async () => {
     await openAndRender();
     (mkdirDirectory as Mock).mockResolvedValue('/root/Something');
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText('New folder'));
-    const input = await waitFor(() => screen.getByPlaceholderText('New folder') as HTMLInputElement);
+    await user.click(screen.getByLabelText('New directory'));
+    const input = await waitFor(() => screen.getByPlaceholderText('New directory') as HTMLInputElement);
     await user.type(input, 'Something{escape}');
-    await waitFor(() => expect(screen.queryByPlaceholderText('New folder')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByPlaceholderText('New directory')).not.toBeInTheDocument());
     expect(currentStorePath()).toBe(ROOT);
     expect(mkdirDirectory).not.toHaveBeenCalled();
   });
@@ -1862,6 +1862,441 @@ describe('Window title + taskbar — directory sync', () => {
     updateWindow(win.id, { path: '/root/photos' });
     await waitFor(() => expect(windowTitleText()).toBe('photos'));
     await waitFor(() => expect(taskbarButtonText()).toBe('photos'));
+  });
+});
+
+describe('Window context menu', () => {
+  function menu(): HTMLElement {
+    return screen.getByTestId('context-menu') as HTMLElement;
+  }
+  function menuClosed(): HTMLElement | null {
+    return screen.queryByTestId('context-menu');
+  }
+  function menuItem(action: string): HTMLElement {
+    return menu().querySelector(`[data-action="${action}"]`) as HTMLElement;
+  }
+  function rows(): HTMLElement[] {
+    return [...screen.getByRole('table').querySelectorAll('tbody tr.row')] as HTMLElement[];
+  }
+  function rowByName(name: string): HTMLElement {
+    const row = rows().find((r) => r.textContent?.includes(name));
+    if (!row) throw new Error(`no row named ${name}`);
+    return row as HTMLElement;
+  }
+  function clickRow(name: string, modifier?: 'ctrl' | 'shift'): void {
+    const row = rowByName(name);
+    if (modifier === 'ctrl') {
+      fireEvent.click(row, { ctrlKey: true });
+    } else if (modifier === 'shift') {
+      fireEvent.click(row, { shiftKey: true });
+    } else {
+      fireEvent.click(row);
+    }
+  }
+  async function rightClick(target: HTMLElement): Promise<void> {
+    const ev = new Event('contextmenu', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'clientX', { value: 150, configurable: true });
+    Object.defineProperty(ev, 'clientY', { value: 150, configurable: true });
+    target.dispatchEvent(ev as unknown as MouseEvent);
+    await tick();
+  }
+  async function rightClickRow(name: string): Promise<void> {
+    await rightClick(rowByName(name));
+  }
+  async function rightClickEmpty(): Promise<void> {
+    await rightClick(screen.getByRole('table').closest('.content') as HTMLElement);
+  }
+  async function rightClickTree(path: string): Promise<void> {
+    await rightClick(within(tree()).getByTitle(path) as HTMLElement);
+  }
+
+  beforeEach(() => {
+    clipboard.set([]);
+    (setClipboard as unknown as Mock).mockClear();
+    (setCut as unknown as Mock).mockClear();
+    (submitCompressTask as unknown as Mock).mockClear();
+    (submitDeleteTask as unknown as Mock).mockClear();
+  });
+
+  it('opens a folder menu with folder-applicable actions enabled', async () => {
+    await openAndRender();
+    await rightClickRow('documents');
+    expect(menu()).toBeInTheDocument();
+    // Enabled for a folder.
+    for (const action of [
+      'cut',
+      'copy',
+      'delete',
+      'rename',
+      'compress',
+      'info',
+      'newfolder',
+      'upload',
+      'reload'
+    ]) {
+      expect(menuItem(action)).not.toBeDisabled();
+    }
+    // Disabled for a single directory.
+    for (const action of ['download', 'decompress', 'paste']) {
+      expect(menuItem(action)).toBeDisabled();
+    }
+  });
+
+  it('opens a file menu with file-applicable actions enabled', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    expect(menu()).toBeInTheDocument();
+    for (const action of ['cut', 'copy', 'delete', 'rename', 'compress', 'download', 'info', 'reload']) {
+      expect(menuItem(action)).not.toBeDisabled();
+    }
+    for (const action of ['decompress', 'paste', 'newfolder', 'upload']) {
+      expect(menuItem(action)).toBeDisabled();
+    }
+  });
+
+  it('enables Extract only for a single archive file', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    expect(menuItem('decompress')).toBeDisabled();
+    await rightClickRow('myfiles.zip');
+    expect(menuItem('decompress')).not.toBeDisabled();
+  });
+
+  it('opens a multi-selection menu with multi-applicable actions enabled', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    clickRow('documents', 'ctrl');
+    // Right-click a row that is part of the selection: the multi-selection is kept.
+    await rightClickRow('notes.txt');
+    expect(menu()).toBeInTheDocument();
+    for (const action of ['cut', 'copy', 'delete', 'compress', 'info', 'reload']) {
+      expect(menuItem(action)).not.toBeDisabled();
+    }
+    for (const action of ['rename', 'download', 'decompress', 'paste', 'newfolder', 'upload']) {
+      expect(menuItem(action)).toBeDisabled();
+    }
+  });
+
+  it('opens an empty-space menu', async () => {
+    await openAndRender();
+    await rightClickEmpty();
+    expect(menu()).toBeInTheDocument();
+    for (const action of ['newfolder', 'upload', 'reload']) {
+      expect(menuItem(action)).not.toBeDisabled();
+    }
+    for (const action of [
+      'cut',
+      'copy',
+      'delete',
+      'rename',
+      'compress',
+      'download',
+      'decompress',
+      'info',
+      'paste'
+    ]) {
+      expect(menuItem(action)).toBeDisabled();
+    }
+  });
+
+  it('enables Paste on empty space when the clipboard holds items', async () => {
+    await openAndRender();
+    clipboard.set(['/root/notes.txt']);
+    await tick();
+    await rightClickEmpty();
+    expect(menuItem('paste')).not.toBeDisabled();
+  });
+
+  it('right-clicking the tree shows a folder menu and rename targets that folder', async () => {
+    await openAndRender();
+    await rightClickTree('/root/documents');
+    expect(menu()).toBeInTheDocument();
+    expect(menuItem('rename')).not.toBeDisabled();
+    expect(menuItem('compress')).not.toBeDisabled();
+    fireEvent.click(menuItem('rename'));
+    await tick();
+    // Rename opens an in-place input pre-filled with the folder name.
+    const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+    expect(input.value).toBe('documents');
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+  });
+
+  it('copies the right-clicked selection via the menu', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    fireEvent.click(menuItem('copy'));
+    await tick();
+    expect(setClipboard).toHaveBeenCalledWith(['/root/notes.txt']);
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+  });
+
+  it('cuts the right-clicked selection via the menu', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    fireEvent.click(menuItem('cut'));
+    await tick();
+    expect(setCut).toHaveBeenCalledTimes(1);
+    expect(get(cutMode)).toBe(true);
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+  });
+
+  it('compresses via the menu', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    fireEvent.click(menuItem('compress'));
+    await waitFor(() => expect(screen.getByTestId('compress-dialog')).toBeInTheDocument());
+    fireEvent.click(within(screen.getByTestId('compress-dialog')).getByRole('button', { name: 'Compress' }));
+    await tick();
+    await waitFor(() =>
+      expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt'], 'zip')
+    );
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+  });
+
+  it('closes the menu on Escape', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    expect(menu()).toBeInTheDocument();
+    fireEvent.keyDown(menu(), { key: 'Escape' });
+    await waitFor(() => expect(menuClosed()).not.toBeInTheDocument());
+  });
+
+  it('closes the menu on a click outside it', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    expect(menu()).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('table').closest('.content') as HTMLElement);
+    await waitFor(() => expect(menuClosed()).not.toBeInTheDocument());
+  });
+
+  it('disables the Information toolbar button when nothing is selected', async () => {
+    await openAndRender();
+    const infoBtn = screen.getByLabelText('Information') as HTMLButtonElement;
+    expect(infoBtn).toBeDisabled();
+    await clickRow('notes.txt');
+    await waitFor(() => expect(infoBtn).not.toBeDisabled());
+  });
+
+  it('pastes as move (not copy) from the context menu when the clipboard is cut', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    fireEvent.click(menuItem('cut'));
+    await tick();
+    expect(get(cutMode)).toBe(true);
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+
+    // Right-click empty space and choose Paste: should open the move confirm,
+    // not submit a copy task.
+    await rightClickEmpty();
+    fireEvent.click(menuItem('paste'));
+    await waitFor(() => expect(screen.getByTestId('move-dialog')).toBeInTheDocument());
+    expect(submitCopyTask).not.toHaveBeenCalled();
+  });
+
+  it('renames a folder via the tree context menu', async () => {
+    await openAndRender();
+    await rightClickTree('/root/documents');
+    expect(menuItem('rename')).not.toBeDisabled();
+    fireEvent.click(menuItem('rename'));
+    await tick();
+    const input = await waitFor(() =>
+      screen.getByPlaceholderText('Rename') as HTMLInputElement
+    );
+    expect(input.value).toBe('documents');
+    // Rename via Enter should submit the rename task for the tree path.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument()
+    );
+  });
+
+  it('compresses via the tree context menu', async () => {
+    await openAndRender();
+    await rightClickTree('/root/documents');
+    expect(menuItem('compress')).not.toBeDisabled();
+    fireEvent.click(menuItem('compress'));
+    await waitFor(() => expect(screen.getByTestId('compress-dialog')).toBeInTheDocument());
+    fireEvent.click(within(screen.getByTestId('compress-dialog')).getByRole('button', { name: 'Compress' }));
+    await tick();
+    await waitFor(() =>
+      expect(submitCompressTask).toHaveBeenCalledWith(['/root/documents'], 'zip')
+    );
+  });
+
+  it('opens “Open” for a single directory and navigates into it', async () => {
+    await openAndRender();
+    await rightClickTree('/root/documents');
+    expect(menuItem('open')).not.toBeDisabled();
+    fireEvent.click(menuItem('open'));
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('work')).toBeInTheDocument());
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+  });
+
+  it('disables “Open” for a file and for a multi-selection', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    expect(menuItem('open')).toBeDisabled();
+    clickRow('notes.txt');
+    clickRow('documents', 'ctrl');
+    await rightClickRow('notes.txt');
+    expect(menuItem('open')).toBeDisabled();
+  });
+
+  it('opens “Up one directory” on empty space below the root and navigates up', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    await rightClickEmpty();
+    expect(menuItem('up')).not.toBeDisabled();
+    fireEvent.click(menuItem('up'));
+    await waitFor(() => expect(currentStorePath()).toBe(ROOT));
+  });
+
+  it('disables “Up one directory” at the root and in non-empty menus', async () => {
+    await openAndRender();
+    await rightClickEmpty();
+    expect(menuItem('up')).toBeDisabled();
+    await rightClickRow('notes.txt');
+    expect(menuItem('up')).toBeDisabled();
+  });
+
+  it('selects all items via the empty-space context menu', async () => {
+    await openAndRender();
+    await rightClickEmpty();
+    expect(menuItem('selectall')).not.toBeDisabled();
+    fireEvent.click(menuItem('selectall'));
+    await tick();
+    expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
+    const selectedRows = screen.getByRole('table').querySelectorAll('tbody tr.row.selected');
+    expect(selectedRows.length).toBe(4);
+  });
+
+  it('renames a tree node via an inplace input opened in the tree', async () => {
+    await openAndRender();
+    // Navigate into documents so the listing no longer contains 'photos';
+    // renaming the tree node then uses the tree branch (not the listing row).
+    await clickNode('/root/documents');
+    await rightClickTree('/root/photos');
+    expect(menuItem('rename')).not.toBeDisabled();
+    fireEvent.click(menuItem('rename'));
+    await tick();
+    // The rename input opens inplace in the tree node, not in the listing.
+    const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+    expect(input.value).toBe('photos');
+    fireEvent.input(input, { target: { value: 'pics' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(renameFile).toHaveBeenCalledWith(['/root/photos'], 'pics')
+    );
+    await waitFor(() => expect(screen.queryByPlaceholderText('Rename')).not.toBeInTheDocument());
+  });
+});
+
+describe('Window toolbar — select all', () => {
+  function selectallButton(): HTMLButtonElement {
+    return screen.getByLabelText('Select all') as HTMLButtonElement;
+  }
+  function uploadButton(): HTMLButtonElement {
+    return screen.getByLabelText('Upload') as HTMLButtonElement;
+  }
+  function infoButton(): HTMLButtonElement {
+    return screen.getByLabelText('Information') as HTMLButtonElement;
+  }
+
+  it('places the Select all button between Upload and Information', async () => {
+    await openAndRender();
+    const toolbar = document.querySelector('.toolbar') as HTMLElement;
+    const tools = [...toolbar.querySelectorAll('.tool')];
+    const byClass = (cls: string) => tools.findIndex((t) => t.classList.contains(cls));
+    const iUpload = byClass('upload');
+    const iSelect = byClass('selectall');
+    const iInfo = byClass('info');
+    expect(iSelect).not.toBe(-1);
+    expect(iSelect).toBe(iUpload + 1);
+    expect(iInfo).toBe(iSelect + 1);
+    expect(selectallButton()).not.toBeDisabled();
+  });
+
+  it('selects every item in the opened folder', async () => {
+    await openAndRender();
+    // 4 entries at the root: documents, photos, myfiles.zip, notes.txt.
+    const rows = screen.getByRole('table').querySelectorAll('tbody tr.row');
+    expect(rows.length).toBe(4);
+    fireEvent.click(selectallButton());
+    await tick();
+    const selectedRows = screen.getByRole('table').querySelectorAll('tbody tr.row.selected');
+    expect(selectedRows.length).toBe(4);
+    // The Information badge reflects the selection count.
+    expect(infoButton().querySelector('.badge')?.textContent).toBe('4');
+  });
+
+  it('disables Select all when the folder is empty', async () => {
+    await openAndRender();
+    (fetchListing as Mock).mockResolvedValueOnce({ path: ROOT, entries: [] });
+    fireEvent.click(screen.getByLabelText('Reload'));
+    await waitFor(() => expect(selectallButton()).toBeDisabled());
+  });
+});
+
+describe('Window reload — task completion', () => {
+  it('re-fetches the opened directory when a task-completion reload event arrives', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    (fetchListing as Mock).mockClear();
+    // Simulate the SSE task-completion handler reloading windows for this path.
+    window.dispatchEvent(
+      new CustomEvent('filetoaster:reload', { detail: { windowId: id, path: '/root/documents' } })
+    );
+    await tick();
+    await waitFor(() => expect(fetchListing).toHaveBeenCalledWith('/root/documents'));
+  });
+
+  it('does not reload when the event targets a different window', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    (fetchListing as Mock).mockClear();
+    const before = (fetchListing as Mock).mock.calls.length;
+    // An event addressed to another window must be ignored by this one.
+    window.dispatchEvent(
+      new CustomEvent('filetoaster:reload', {
+        detail: { windowId: 'some-other-window-id', path: '/root/documents' }
+      })
+    );
+    await tick();
+    await waitFor(() => expect((fetchListing as Mock).mock.calls.length).toBe(before));
+  });
+
+  it('reloads the tree and clears loading after compress task completion', async () => {
+    await openAndRender();
+    (fetchListing as Mock).mockClear();
+    window.dispatchEvent(
+      new CustomEvent('filetoaster:reload', { detail: { windowId: id, path: '/root' } })
+    );
+    await tick();
+    await waitFor(() => expect(fetchListing).toHaveBeenCalledWith('/root'));
+    await waitFor(() => expect(fileTree.isLoading('/root')).toBe(false));
+    expect(within(tree()).getByText('documents')).toBeInTheDocument();
+  });
+
+  it('ignores concurrent reload events for the same window (reentrancy guard)', async () => {
+    await openAndRender();
+    (fetchListing as Mock).mockClear();
+    // Dispatch two reload events in quick succession for the same window.
+    window.dispatchEvent(
+      new CustomEvent('filetoaster:reload', { detail: { windowId: id, path: '/root' } })
+    );
+    window.dispatchEvent(
+      new CustomEvent('filetoaster:reload', { detail: { windowId: id, path: '/root' } })
+    );
+    await tick();
+    // Only one fetch should occur (the second is ignored by the reentrancy guard).
+    await waitFor(() => expect(fetchListing).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchListing).toHaveBeenCalledWith('/root'));
+    await waitFor(() => expect(fileTree.isLoading('/root')).toBe(false));
+    await waitFor(() => expect(fileTree.isLoading('/root')).toBe(false));
   });
 });
 

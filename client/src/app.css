@@ -34,6 +34,7 @@
   --ok-strong: #10b981;
   --warn: #fbbf24;
   --alert: #fb7185;
+  --alert-strong: #f43f5e;
 
   /* Elevation */
   --shadow-window: 0 24px 70px rgba(0, 0, 0, 0.45);

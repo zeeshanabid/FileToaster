@@ -142,11 +142,14 @@ export class FileTree {
 
   // refresh reloads a single path from the server, bypassing cache (used by the
   // toolbar "reload" button so changes made outside the UI become visible).
-  // Expansion of other nodes is left untouched.
+  // Expansion of other nodes is left untouched. Loading state is managed by
+  // `list()` so it stays in sync even when an inflight load exists.
   refresh(path: string): Promise<Listing> {
     this.cache.delete(path);
     this.error.delete(path);
-    this.loading.delete(path);
+    // Force a fresh fetch by deleting any inflight promise so list() doesn't
+    // return a stale pending promise, and by ensuring cache is empty when list() checks.
+    this.inflight.delete(path);
     return this.list(path);
   }
 

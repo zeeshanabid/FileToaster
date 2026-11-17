@@ -32,6 +32,7 @@ import {
 } from '$lib/store/tasks';
 import { isArchiveFile } from '$lib/fs/archive';
 import FileIcon from './FileIcon.svelte';
+import ContextMenu from './ContextMenu.svelte';
 import InfoDialog from './InfoDialog.svelte';
 import ConfirmDelete from './ConfirmDelete.svelte';
 import ConfirmMove from './ConfirmMove.svelte';
@@ -182,6 +183,20 @@ import { formatSize, formatDate } from '$lib/fs/format';
   let selected = $state<Set<string>>(new Set());
   let lastClicked: string | null = $state(null);
 
+  // --- context (right-click) menu state ---
+  // `menuKind` is one of 'empty' | 'file' | 'folder' | 'multi'. `menuSelection`
+  // mirrors `selected` so the menu can render enablement independently of the
+  // `menuContextPath` is the folder New directory / Paste / Upload target.
+  let menuOpen = $state(false);
+  let menuX = $state(0);
+  let menuY = $state(0);
+  let menuKind = $state<'empty' | 'file' | 'folder' | 'multi'>('empty');
+  let menuSelection = $state<Array<{ path: string; name: string; type: 'file' | 'dir' }>>([]);
+  let menuContextPath = $state('/');
+  // `uploadDest` overrides the upload destination for a context-menu "Upload"
+  // (right-click a folder → upload into that folder); null means the open folder.
+  let uploadDest = $state<string | null>(null);
+
   function selectOnly(p: string) {
     selected = new Set([p]);
     lastClicked = p;
@@ -222,6 +237,146 @@ import { formatSize, formatDate } from '$lib/fs/format';
   }
   function clearSelectionIfBackground(e: MouseEvent) {
     if (e.target === e.currentTarget) selected = new Set();
+  }
+
+  // Entries of the current selection, used to render the context menu and to
+  // pass to operations that need the per-item name/type. Includes tree nodes
+  // that are not part of the current listing.
+  function selectionEntries(): Array<{ path: string; name: string; type: 'file' | 'dir' }> {
+    return [...selected].map((path) => {
+      const found = entries.find((it) => it.path === path);
+      if (found) return { path: found.path, name: found.name, type: found.type };
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      return { path, name, type: 'dir' };
+    });
+  }
+
+  // Select every item in the currently opened folder.
+  function selectAll() {
+    if (!win || entries.length === 0) return;
+    selected = new Set(entries.map((it) => it.path));
+    lastClicked = null;
+  }
+
+  // --- context (right-click) menu -------------------------------------------
+  // Three menu kinds: 'folder' / 'file' (single row), 'multi' (several rows)
+  // and 'empty' (background). Actions are gated so only the ones applicable to
+  // the clicked target are enabled; the rest are shown disabled. Every action
+  // reuses the existing toolbar flows (cut/copy/paste/delete/rename/compress/
+  // download/decompress/info/new-folder/upload/reload).
+  function openContextMenu(
+    e: MouseEvent,
+    kind: 'empty' | 'file' | 'folder' | 'multi',
+    selection: Array<{ path: string; name: string; type: 'file' | 'dir' }>,
+    contextPath: string
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Sync the window selection so the existing action functions (which read
+    // `selected`) operate on the context-menu target.
+    selected = new Set(selection.map((it) => it.path));
+    lastClicked = selection.length === 1 ? selection[0].path : null;
+    menuX = e.clientX;
+    menuY = e.clientY;
+    menuKind = kind;
+    menuSelection = selection;
+    menuContextPath = contextPath;
+    menuOpen = true;
+  }
+  function closeContextMenu() {
+    menuOpen = false;
+    uploadDest = null;
+  }
+  function onContextAction(action: string) {
+    closeContextMenu();
+    switch (action) {
+      case 'cut':
+        cutSelection();
+        break;
+      case 'copy':
+        copySelection();
+        break;
+      case 'paste':
+        if ($cutMode) {
+          moveOpen = true;
+        } else {
+          pasteInto(menuContextPath);
+        }
+        break;
+      case 'delete':
+        startDelete();
+        break;
+      case 'rename':
+        startRename();
+        reload();
+        break;
+      case 'compress':
+        startCompress();
+        break;
+      case 'download':
+        confirmDownload();
+        break;
+      case 'decompress':
+        startDecompress();
+        break;
+      case 'info':
+        openInfo();
+        break;
+      case 'newfolder':
+        startNewDirIn(menuContextPath);
+        reload();
+        break;
+      case 'upload':
+        uploadDest = menuContextPath;
+        openUploadMenu();
+        break;
+      case 'reload':
+        reload();
+        break;
+      case 'open':
+        // Open a single directory (double-click equivalent). Only enabled for a
+        // single folder target.
+        void navigate(menuContextPath);
+        break;
+      case 'up':
+        goUp();
+        break;
+      case 'selectall':
+        selectAll();
+        break;
+    }
+  }
+  // `row.type` is 'file'|'dir'; the menu kind uses 'file'|'folder'.
+  function rowKind(type: Entry['type']): 'file' | 'folder' {
+    return type === 'dir' ? 'folder' : 'file';
+  }
+
+  function onRowContextMenu(e: MouseEvent, row: Entry) {
+    const entry = { path: row.path, name: row.name, type: row.type };
+    const contextPath = row.type === 'dir' ? row.path : win ? win.path : '/';
+    const kind = rowKind(row.type);
+    if (selected.has(row.path)) {
+      if (selected.size === 1) {
+        openContextMenu(e, kind, [entry], contextPath);
+      } else {
+        openContextMenu(e, 'multi', selectionEntries(), win ? win.path : '/');
+      }
+    } else {
+      // Right-clicking an unselected row selects just that row.
+      openContextMenu(e, kind, [entry], contextPath);
+    }
+  }
+  function onEmptyContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    selected = new Set();
+    lastClicked = null;
+    menuX = e.clientX;
+    menuY = e.clientY;
+    menuKind = 'empty';
+    menuSelection = [];
+    menuContextPath = win ? win.path : '/';
+    menuOpen = true;
   }
 
   // --- information dialog ---
@@ -501,14 +656,9 @@ import { formatSize, formatDate } from '$lib/fs/format';
    }
 
   // --- compress: archive the current selection in place ----------------------
-  // `compressOpen` toggles the format-confirm modal; `compressEntries` (the
-  // selected rows) render inside it. Compress has no destination — the server
-  // writes the archive next to the selection and renames a colliding target, so
-  // there is nothing to prompt for beyond the chosen format.
+  // `compressOpen` toggles the format-confirm modal; `selectionEntries()` feeds
+  // the ConfirmCompress dialog and works for tree nodes not in the current listing.
   let compressOpen = $state(false);
-  let compressEntries = $derived(
-    entries.filter((it) => selected.has(it.path)).map((it) => ({ path: it.path, name: it.name, type: it.type }))
-  );
 
   function startCompress() {
     if (selected.size === 0) {
@@ -633,7 +783,8 @@ async function onPickFiles() {
     if (f.isDirectory) continue; // directories from picker have no blob; they're expanded via webkitdirectory
     items.push(await fileItemFromPicker(f));
   }
-  await startUploadFromItems(items);
+  await startUploadFromItems(items, uploadDest ?? (win?.path ?? '/'));
+  uploadDest = null;
 }
 
 // Folder picker (`multiple` + `webkitdirectory`): the OS returns every file in
@@ -652,12 +803,15 @@ async function onPickFolder() {
     const f = picked[i] as File;
     items.push(await fileItemFromPicker(f));
   }
-  await startUploadFromItems(items);
+  await startUploadFromItems(items, uploadDest ?? (win?.path ?? '/'));
+  uploadDest = null;
 }
 
   // startUploadFromItems builds a manifest from picked/dropped items (their real
-  // bytes carried as blobs) and starts the chunked upload into the open folder.
-  async function startUploadFromItems(items: ReadonlyArray<DnDItem>) {
+  // bytes carried as blobs) and starts the chunked upload into `dest`, which
+  // defaults to the window's open folder. A context-menu "Upload" overrides it
+  // to upload into the right-clicked folder.
+  async function startUploadFromItems(items: ReadonlyArray<DnDItem>, dest: string = win?.path ?? '/') {
     if (!win) return;
     if (items.length === 0) {
       flash('No files to upload.');
@@ -669,7 +823,7 @@ async function onPickFolder() {
         flash('No files to upload.');
         return;
       }
-      const taskID = await uploadManager.startUpload(win.path, manifest);
+      const taskID = await uploadManager.startUpload(dest, manifest);
       uploadMenuOpen = false;
       clearSelection();
       if (taskID) {
@@ -805,7 +959,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
 
   // isDirectoryDrop reports whether a drop represents a folder/directory. We
   // only accept files on drag-and-drop (folders upload through the toolbar
-  // "Upload folder…" picker), so onDrop rejects a directory drop. Two browser
+  // "Upload directory…" picker), so onDrop rejects a directory drop. Two browser
   // behaviors are covered: Blink (Chrome/Edge) flattens a dropped folder into
   // DataTransfer.files, each file carrying a non-empty webkitRelativePath, while
   // Gecko (Firefox) leaves DataTransfer.files empty and exposes the folder as a
@@ -831,7 +985,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   }
 
   // Drag-and-drop onto the window: accept files only, never folders. Folder
-  // upload is offered through the toolbar "Upload folder…" picker.
+  // upload is offered through the toolbar "Upload directory…" picker.
   async function onDrop(e: DragEvent) {
     e.preventDefault();
     const dt = e.dataTransfer;
@@ -941,20 +1095,29 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     void navigate(parent);
   }
 
+  let reloading = $state(new Set<string>());
+
   // Reload the currently opened directory from the server, bypassing cache, so
   // changes made outside the UI become visible without navigating away.
-  async function reload() {
-    if (!win) return;
+  // A per-path reentrancy guard prevents concurrent reloads for the same path
+  // while allowing different paths to reload simultaneously.
+  async function reload(path?: string) {
+    const targetPath = path ?? win?.path;
+    if (!targetPath || reloading.has(targetPath)) return;
+    reloading.add(targetPath);
     try {
       mainLoading = true;
       mainError = null;
-      const listing = await tree.refresh(win.path);
-      entries = listing.entries;
+      const listing = await tree.refresh(targetPath);
+      if (targetPath === win?.path) {
+        entries = listing.entries;
+      }
       frame += 1;
     } catch (err) {
       mainError = err instanceof Error ? err.message : 'could not reload this folder';
     } finally {
       mainLoading = false;
+      reloading.delete(targetPath);
     }
   }
 
@@ -964,7 +1127,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     const { windowId, path } = e.detail;
     if (windowId !== winProp.id) return;
     if (win && (win.path === path || path.startsWith(win.path + '/'))) {
-      void reload();
+      void reload(path);
     }
   }
 
@@ -973,10 +1136,18 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   let editingNew = $state(false);
   let newName = $state('');
   let inputEl: HTMLInputElement | null = $state(null);
+  // `newDirParent` overrides the folder a new folder is created in (set by the
+  // context menu's "New folder" on a folder/background); null means the open
+  // folder (`win.path`), which the toolbar uses.
+  let newDirParent: string | null = $state(null);
   let isAtRoot = $derived(win ? win.path === win.rootPath : true);
 
   function startNewDir() {
     if (!win) return;
+    startNewDirIn(win.path);
+  }
+  function startNewDirIn(parent: string) {
+    newDirParent = parent;
     newName = '';
     editingNew = true;
   }
@@ -989,22 +1160,24 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     if (!editingNew) return;
     editingNew = false;
     newName = '';
+    newDirParent = null;
   }
     async function confirmNewDir() {
       const name = newName.trim();
-      if (!name || !win || !editingNew) return;
+      if (!name || !editingNew) return;
+      const parent = newDirParent ?? (win ? win.path : '/');
       editingNew = false;
-      const parent = win.path;
+      newName = '';
+      newDirParent = null;
+      // View the target folder first so the new folder shows up in the current
+      // window when the context menu created it inside another directory.
+      if (win && parent !== win.path) await navigate(parent);
       try {
         await mkdirDirectory(parent, name);
-        // Keep the window on the folder where the new folder was created: reload
-        // every window showing this directory (including this one) so the new
-        // folder appears without navigating into it.
         reloadWindowsForPath(parent);
       } catch (err) {
         mainError = err instanceof Error ? err.message : 'could not create folder';
       }
-      newName = '';
     }
 
     // --- rename: synchronous, like new folder --------------------------------
@@ -1016,22 +1189,47 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     let editingRename = $state(false);
     let renameName = $state('');
     let renameInputEl: HTMLInputElement | null = $state(null);
+    // In-place rename of a tree node that is not part of the current listing.
+    let editingTreeRename = $state(false);
+    let treeRenamePath = $state('');
+    let treeRenameName = $state('');
+    let treeRenameInputEl: HTMLInputElement | null = $state(null);
 
     function startRename() {
       if (!win || selected.size === 0) return;
       // Pre-fill with the exact current name (including the extension for files,
-      // and none for names without one) so the user edits in place.
-      const first = entries.find((it) => selected.has(it.path));
-      renameName = first ? first.name : '';
+      // and none for names without one) so the user edits in place. Tree nodes
+      // may not appear in `entries` (the current listing), so fall back to the
+      // context-menu selection when the entry isn't in the listing.
+      const first =
+        entries.find((it) => selected.has(it.path)) ??
+        menuSelection.find((it) => selected.has(it.path));
+      if (!first) return;
+      // A tree node that isn't listed in the current folder is renamed inplace
+      // inside the tree itself, not in the main listing.
+      if (!entries.some((it) => it.path === first.path)) {
+        editingTreeRename = true;
+        treeRenamePath = first.path;
+        treeRenameName = first.name;
+        return;
+      }
+      renameName = first.name;
       editingRename = true;
     }
     $effect(() => {
       if (editingRename) renameInputEl?.focus();
+      if (editingTreeRename) treeRenameInputEl?.focus();
     });
     function cancelRename() {
       if (!editingRename) return;
       editingRename = false;
       renameName = '';
+    }
+    function cancelTreeRename() {
+      if (!editingTreeRename) return;
+      editingTreeRename = false;
+      treeRenamePath = '';
+      treeRenameName = '';
     }
     async function confirmRename() {
       const name = renameName.trim();
@@ -1047,6 +1245,27 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
         // since rename is synchronous and never flows through the task SSE path.
         reloadWindowsForPath(dir);
         flash(`Renamed ${count} item${count === 1 ? '' : 's'}.`);
+      } catch (err) {
+        mainError = err instanceof Error ? err.message : 'could not rename';
+      }
+    }
+
+    async function confirmTreeRename() {
+      const name = treeRenameName.trim();
+      if (!editingTreeRename || !treeRenamePath || !name) return;
+      editingTreeRename = false;
+      const path = treeRenamePath;
+      treeRenamePath = '';
+      treeRenameName = '';
+      try {
+        await renameFile([path], name);
+        // Reload the parent folder so the renamed node appears in listings and
+        // refresh the tree cache for it so the renamed node shows its new name.
+        const parent = dirname(path);
+        reloadWindowsForPath(parent);
+        if (win) await tree.refresh(parent).catch(() => {});
+        frame += 1;
+        flash('Renamed 1 item.');
       } catch (err) {
         mainError = err instanceof Error ? err.message : 'could not rename';
       }
@@ -1162,7 +1381,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   {#snippet newFolderInput()}
     <form class="new-input-form" onsubmit={() => confirmNewDir()}>
       <input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
-        placeholder="New folder"
+        placeholder="New directory"
         onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
         onblur={() => cancelNewDir()} />
     </form>
@@ -1173,6 +1392,14 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
         placeholder="Rename"
         onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}
         onblur={() => cancelRename()} />
+    </form>
+  {/snippet}
+  {#snippet treeRenameInput()}
+    <form class="new-input-form" onsubmit={() => confirmTreeRename()}>
+      <input class="new-input" bind:this={treeRenameInputEl} bind:value={treeRenameName} autocomplete="off" spellcheck="false"
+        placeholder="Rename"
+        onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmTreeRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelTreeRename(); } }}
+        onblur={() => cancelTreeRename()} />
     </form>
   {/snippet}
   <header class="header" onpointerdown={onHeaderPointerDown} aria-roledescription="draggable" role="application">
@@ -1193,13 +1420,13 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
          <path d="M12 19V5M5 12l7-7 7 7" />
        </svg>
      </button>
-     <button class="tool" type="button" title="Reload" aria-label="Reload" onclick={() => reload()}>
+      <button class="tool reload" type="button" title="Reload" aria-label="Reload" onclick={() => reload()}>
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
          <path d="M21 12a9 9 0 1 1-3.2-6.9" />
          <path d="M21 4v5h-5" />
        </svg>
      </button>
-     <button class="tool" type="button" title="New folder" aria-label="New folder" onclick={() => startNewDir()} disabled={editingNew}>
+      <button class="tool newfolder" type="button" title="New directory" aria-label="New directory" onclick={() => startNewDir()} disabled={editingNew}>
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
          <path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" />
          <path d="M12 11v6M9 14h6" />
@@ -1317,7 +1544,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
        </svg>
      </button>
      <div class="upload-menu-wrap">
-       <button class="tool upload" type="button" title="Upload files or folders to this folder" aria-label="Upload" aria-haspopup="menu" aria-expanded={uploadMenuOpen} onclick={openUploadMenu}>
+        <button class="tool upload" type="button" title="Upload files or directories to this folder" aria-label="Upload" aria-haspopup="menu" aria-expanded={uploadMenuOpen} onclick={openUploadMenu}>
          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
            <path d="M12 19V5" />
            <path d="M6 9l6-6 6 6" />
@@ -1327,7 +1554,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
        {#if uploadMenuOpen}
          <div class="upload-menu" role="menu" aria-label="Upload options">
            <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; fileInput?.click(); }}>Upload files…</button>
-           <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; folderInput?.click(); }}>Upload folder…</button>
+            <button class="upload-menu-item" type="button" role="menuitem" onclick={() => { uploadMenuOpen = false; folderInput?.click(); }}>Upload directory…</button>
          </div>
        {/if}
      </div>
@@ -1348,7 +1575,13 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
        onchange={onPickFolder}
        aria-hidden="true"
       />
-      <button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
+       <button class="tool selectall" type="button" title="Select all items" aria-label="Select all" disabled={entries.length === 0} onclick={() => selectAll()}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <path d="M3 3h18v18H3z" />
+          <path d="M7 7l3 3 7-7" />
+        </svg>
+      </button>
+      <button class="tool info" type="button" title="Information" aria-label="Information" disabled={selected.size === 0} onclick={() => openInfo()}>
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
          <path d="M12 16v-4M12 8h.01" />
@@ -1373,12 +1606,26 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
           data-tree-active={win && win.path === dir ? dir : undefined}
           style="padding-left:{8 + depth * 12}px"
         >
-          <button type="button" class="tnode" title={dir} onclick={() => navigate(dir)}>
+          <button
+            type="button"
+            class="tnode"
+            title={dir}
+            onclick={() => navigate(dir)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openContextMenu(e, 'folder', [{ path: dir, name: label(dir), type: 'dir' }], dir);
+            }}
+          >
             <span class="twisty" aria-hidden="true" onclick={(e) => { e.stopPropagation(); void tree.toggleExpand(winProp.id, dir).then(() => frame += 1).catch(() => frame += 1); frame += 1; }}>{arrow(dir)}</span>
              <span class="ticon" aria-hidden="true">
                <FileIcon type="folder" />
              </span>
-            <span class="tname" title={label(dir)}>{label(dir)}</span>
+             {#if editingTreeRename && treeRenamePath === dir}
+               {@render treeRenameInput()}
+             {:else}
+               <span class="tname" title={label(dir)}>{label(dir)}</span>
+             {/if}
           </button>
           {#if s.expanded}
             {#if s.loading}
@@ -1402,7 +1649,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     ></div>
 
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="content" onclick={clearSelectionIfBackground}>
+    <div class="content" onclick={clearSelectionIfBackground} oncontextmenu={onEmptyContextMenu}>
       {#if mainLoading && entries.length === 0}
         <div class="empty">Loading…</div>
       {:else if mainError}
@@ -1449,6 +1696,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
                    onclick={(e) => onRowClick(e, row)}
                    ondblclick={() => (row.type === 'dir' && navigate(row.path))}
                    ondragstart={(e) => onRowDragStart(e, row)}
+                   oncontextmenu={(e) => onRowContextMenu(e, row)}
                 >
                   <td class="name">
                     <span class="fg" aria-hidden="true">
@@ -1518,7 +1766,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
 
   {#if compressOpen}
     <ConfirmCompress
-      entries={compressEntries}
+      entries={selectionEntries()}
       onClose={cancelCompress}
       onConfirm={confirmCompress}
     />
@@ -1531,6 +1779,20 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       onConfirm={confirmDecompress}
     />
   {/if}
+
+  <ContextMenu
+    open={menuOpen}
+    x={menuX}
+    y={menuY}
+    kind={menuKind}
+    selection={menuSelection}
+    contextPath={menuContextPath}
+    canPaste={$clipboard.length > 0}
+    canSelectAll={entries.length > 0}
+    canGoUp={!isAtRoot}
+    onClose={closeContextMenu}
+    onAction={onContextAction}
+  />
 </div>
 
 <style>
@@ -1644,7 +1906,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     border-radius: 8px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: background 100ms ease;
+    transition: background 100ms ease, color 100ms ease;
   }
   .tool:hover:not(:disabled) {
     background: var(--surface-inset);
