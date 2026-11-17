@@ -631,7 +631,7 @@ async function onPickFiles() {
   for (let i = 0; i < picked.length; i++) {
     const f = picked[i] as File & { isDirectory?: boolean };
     if (f.isDirectory) continue; // directories from picker have no blob; they're expanded via webkitdirectory
-    items.push(await fileItem(f));
+    items.push(await fileItemFromPicker(f));
   }
   await startUploadFromItems(items);
 }
@@ -650,7 +650,7 @@ async function onPickFolder() {
   const items: DnDItem[] = [];
   for (let i = 0; i < picked.length; i++) {
     const f = picked[i] as File;
-    items.push(await fileItem(f));
+    items.push(await fileItemFromPicker(f));
   }
   await startUploadFromItems(items);
 }
@@ -695,6 +695,20 @@ async function onPickFolder() {
   interface DropReader {
     readEntries: () => Promise<DropEntry[]>;
   }
+
+// fileItemFromPicker adapts a File from a file picker (not drag-and-drop) into
+// the manifest item shape. Picker files are backed by the actual filesystem and
+// won't be evicted, so we use the File directly without cloning to avoid OOM
+// on large directories.
+async function fileItemFromPicker(f: File): Promise<DnDItem> {
+  return {
+    name: f.name,
+    size: f.size,
+    webRelativePath: f.webkitRelativePath ?? '',
+    isFile: true,
+    blob: f
+  };
+}
 
 // fileItem adapts a picked/dropped File into the manifest item shape.
 // Files from a dropped folder carry webkitRelativePath and are backed by the
