@@ -997,9 +997,9 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       const parent = win.path;
       try {
         await mkdirDirectory(parent, name);
-        void navigate(parent + '/' + name);
-        // New folder appears in every open window showing this directory, not
-        // just this one — refresh them all.
+        // Keep the window on the folder where the new folder was created: reload
+        // every window showing this directory (including this one) so the new
+        // folder appears without navigating into it.
         reloadWindowsForPath(parent);
       } catch (err) {
         mainError = err instanceof Error ? err.message : 'could not create folder';
@@ -1019,7 +1019,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
 
     function startRename() {
       if (!win || selected.size === 0) return;
-      renameName = '';
+      // Pre-fill with the exact current name (including the extension for files,
+      // and none for names without one) so the user edits in place.
+      const first = entries.find((it) => selected.has(it.path));
+      renameName = first ? first.name : '';
       editingRename = true;
     }
     $effect(() => {
@@ -1066,6 +1069,15 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       kids: tree.isExpanded(winProp.id, dir) ? tree.childEntries(dir) : []
     };
   }
+
+  // The path of the row that the rename input replaces in the listing while
+  // `editingRename` is set (the first selected entry); `null` otherwise so the
+  // listing can show the input in place of that row.
+  const renameTarget = $derived(
+    editingRename && selected.size > 0
+      ? entries.find((it) => selected.has(it.path))?.path ?? null
+      : null
+  );
 
   // Sorted view of the current entries. For name, folders sort first; the other
   // keys sort purely by value.
@@ -1147,6 +1159,22 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     }}
     ondrop={onWindowDrop}
   >
+  {#snippet newFolderInput()}
+    <form class="new-input-form" onsubmit={() => confirmNewDir()}>
+      <input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
+        placeholder="New folder"
+        onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
+        onblur={() => cancelNewDir()} />
+    </form>
+  {/snippet}
+  {#snippet renameInput()}
+    <form class="new-input-form" onsubmit={() => confirmRename()}>
+      <input class="new-input" bind:this={renameInputEl} bind:value={renameName} autocomplete="off" spellcheck="false"
+        placeholder="Rename"
+        onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}
+        onblur={() => cancelRename()} />
+    </form>
+  {/snippet}
   <header class="header" onpointerdown={onHeaderPointerDown} aria-roledescription="draggable" role="application">
     <span class="logo" aria-hidden="true">
       <img src="/filetoaster-directory.svg" alt="" />
@@ -1319,24 +1347,8 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
        bind:this={folderInput}
        onchange={onPickFolder}
        aria-hidden="true"
-     />
-     {#if editingNew}
-       <form class="new" onsubmit={() => confirmNewDir()}>
-         <input class="new-input" bind:this={inputEl} bind:value={newName} autocomplete="off" spellcheck="false"
-           placeholder="New folder"
-           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmNewDir(); } else if (e.key === 'Escape') { e.preventDefault(); cancelNewDir(); } }}
-           onblur={() => cancelNewDir()} />
-       </form>
-     {/if}
-     {#if editingRename}
-       <form class="new" onsubmit={() => confirmRename()}>
-         <input class="new-input" bind:this={renameInputEl} bind:value={renameName} autocomplete="off" spellcheck="false"
-           placeholder="Rename"
-           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRename(); } else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}
-           onblur={() => cancelRename()} />
-       </form>
-     {/if}
-     <button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
+      />
+      <button class="tool info" type="button" title="Information" aria-label="Information" onclick={() => openInfo()}>
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
          <path d="M12 16v-4M12 8h.01" />
@@ -1396,7 +1408,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       {:else if mainError}
         <div class="error">{mainError}</div>
       {:else if rows.length === 0}
-        <div class="empty">This folder is empty.</div>
+        {#if editingNew}
+          {@render newFolderInput()}
+        {:else}
+          <div class="empty">This folder is empty.</div>
+        {/if}
       {:else}
         <table class="list">
           <thead>
@@ -1410,26 +1426,41 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
             </tr>
           </thead>
           <tbody>
-            {#each rows as row (row.path)}
-              <tr
-                class="row"
-                class:selected={selected.has(row.path)}
-                class:dir={row.type === 'dir'}
-                draggable={selected.has(row.path)}
-                 onclick={(e) => onRowClick(e, row)}
-                 ondblclick={() => (row.type === 'dir' && navigate(row.path))}
-                 ondragstart={(e) => onRowDragStart(e, row)}
-               >
-                <td class="name">
-                  <span class="fg" aria-hidden="true">
-                    <FileIcon type={row.type === 'dir' ? 'folder' : 'doc'} />
-                  </span>
-                  <span class="rname">{row.name}</span>
+            {#if editingNew}
+              <tr class="row new-folder-row">
+                <td class="name" colspan="4">
+                  {@render newFolderInput()}
                 </td>
-                <td class="size">{formatSize(row.size)}</td>
-                <td class="date">{formatDate(row.created)}</td>
-                <td class="date">{formatDate(row.modified)}</td>
               </tr>
+            {/if}
+            {#each rows as row (row.path)}
+              {#if editingRename && row.path === renameTarget}
+                <tr class="row renaming-row">
+                  <td class="name" colspan="4">
+                    {@render renameInput()}
+                  </td>
+                </tr>
+              {:else}
+                <tr
+                  class="row"
+                  class:selected={selected.has(row.path)}
+                  class:dir={row.type === 'dir'}
+                  draggable={selected.has(row.path)}
+                   onclick={(e) => onRowClick(e, row)}
+                   ondblclick={() => (row.type === 'dir' && navigate(row.path))}
+                   ondragstart={(e) => onRowDragStart(e, row)}
+                >
+                  <td class="name">
+                    <span class="fg" aria-hidden="true">
+                      <FileIcon type={row.type === 'dir' ? 'folder' : 'doc'} />
+                    </span>
+                    <span class="rname">{row.name}</span>
+                  </td>
+                  <td class="size">{formatSize(row.size)}</td>
+                  <td class="date">{formatDate(row.created)}</td>
+                  <td class="date">{formatDate(row.modified)}</td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>
@@ -1650,14 +1681,23 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     background: var(--alert);
     border-radius: 9px;
   }
-  .new {
+  .new-input-form {
     display: grid;
     place-items: center;
-    margin-left: auto;
-    padding-right: 4px;
+    width: 100%;
+    padding: 6px 10px;
+  }
+  .new-folder-row,
+  .renaming-row {
+    background: var(--surface-soft);
+  }
+  .new-folder-row td,
+  .renaming-row td {
+    padding: 4px 10px;
   }
   .new-input {
-    width: 160px;
+    width: 100%;
+    max-width: 320px;
     height: 28px;
     padding: 0 8px;
     font: inherit;

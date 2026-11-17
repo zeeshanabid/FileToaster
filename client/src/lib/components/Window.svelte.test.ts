@@ -247,17 +247,34 @@ describe('Window tree — store sync', () => {
     await waitFor(() => expect(within(screen.getByRole('table')).getByText('work')).toBeInTheDocument());
   });
 
-  it('creates a new directory in-place and navigates into it', async () => {
+  it('creates a new folder in-place and stays in the current folder', async () => {
     await openAndRender();
-    (fetchListing as Mock).mockImplementation(async (path: string) => ({ path, entries: FS[path] ?? [] }));
     (mkdirDirectory as Mock).mockResolvedValue('/root/TestFolder');
+    // The freshly created folder shows up in the listing after the reload.
+    (fetchListing as Mock).mockImplementation(async (path: string) => {
+      const base = FS[path] ?? [];
+      if (path === ROOT) {
+        return {
+          path,
+          entries: [
+            ...base,
+            { path: '/root/TestFolder', name: 'TestFolder', type: 'dir', size: 0, created: '', modified: '' }
+          ]
+        };
+      }
+      return { path, entries: base };
+    });
     const user = userEvent.setup();
     await user.click(screen.getByLabelText('New folder'));
     const input = await waitFor(() => screen.getByPlaceholderText('New folder') as HTMLInputElement);
     await user.type(input, 'TestFolder{enter}');
     expect(mkdirDirectory).toHaveBeenCalledWith('/root', 'TestFolder');
-    await waitFor(() => expect(currentStorePath()).toBe('/root/TestFolder'));
-    // The toolbar returns to its quiet state (input gone, button re-enabled).
+    // The window stays in the folder where the new folder was created; it does
+    // not navigate into the new folder.
+    await waitFor(() => expect(currentStorePath()).toBe(ROOT));
+    // The new folder appears in the listing.
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('TestFolder')).toBeInTheDocument());
+    // The in-place input is gone; the toolbar button is re-enabled.
     await waitFor(() => expect(screen.queryByPlaceholderText('New folder')).not.toBeInTheDocument());
     expect(screen.getByLabelText('New folder')).not.toBeDisabled();
   });
@@ -1020,20 +1037,37 @@ describe('Window compress', () => {
     await waitFor(() => expect(renameButton()).not.toBeDisabled());
   });
 
-  it('opens an in-place input and renames a single selection on Enter', async () => {
+  it('opens an in-place input pre-filled with the exact name and renames on Enter', async () => {
     await openAndRender();
     await clickRow('notes.txt');
     const user = userEvent.setup();
     await user.click(renameButton());
     const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+    // The input is pre-filled with the exact current name, extension included.
+    expect(input.value).toBe('notes.txt');
+    await user.clear(input);
     await user.type(input, 'journal{enter}');
 
     expect(renameFile).toHaveBeenCalledWith(['/root/notes.txt'], 'journal');
-    // Selection is cleared and the toolbar returns to its quiet state.
+    // Selection is cleared and the listing returns to its quiet state.
     await waitFor(() => expect(renameButton()).toBeDisabled());
     await waitFor(() => expect(screen.queryByPlaceholderText('Rename')).not.toBeInTheDocument());
     // A transient status confirms the rename.
     await waitFor(() => expect(screen.getByText(/Renamed 1 item/i)).toBeInTheDocument());
+  });
+
+  it('pre-files a name without an extension exactly (adds no extension)', async () => {
+    await openAndRender();
+    await clickRow('documents');
+    const user = userEvent.setup();
+    await user.click(renameButton());
+    const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+    // A name with no extension is shown as-is, with nothing appended.
+    expect(input.value).toBe('documents');
+    await user.clear(input);
+    await user.type(input, 'archive{enter}');
+
+    expect(renameFile).toHaveBeenCalledWith(['/root/documents'], 'archive');
   });
 
   it('renames a multi-selection, passing every path (and the raw name) to the server', async () => {
@@ -1043,6 +1077,7 @@ describe('Window compress', () => {
     const user = userEvent.setup();
     await user.click(renameButton());
     const input = await waitFor(() => screen.getByPlaceholderText('Rename') as HTMLInputElement);
+    await user.clear(input);
     await user.type(input, 'archive{enter}');
 
     // Suffixing (" (1)", " (2)") is server-side; the client forwards the raw
