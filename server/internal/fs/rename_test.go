@@ -60,20 +60,8 @@ func TestRenameSingleFile(t *testing.T) {
   if err := Rename(roots, "renamed", files); err != nil {
     t.Fatalf("Rename: %v", err)
   }
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"renamed.txt"}) {
-    t.Fatalf("listing = %v, want [renamed.txt]", got)
-  }
-}
-
-func TestRenameSingleFileKeepsStemWhenNameHasNoExtension(t *testing.T) {
-  roots, root := newRenameRoots(t)
-  files := writeFiles(t, root, "report.pdf")
-
-  if err := Rename(roots, "invoice", files); err != nil {
-    t.Fatalf("Rename: %v", err)
-  }
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"invoice.pdf"}) {
-    t.Fatalf("listing = %v, want [invoice.pdf]", got)
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"renamed"}) {
+    t.Fatalf("listing = %v, want [renamed]", got)
   }
 }
 
@@ -84,20 +72,20 @@ func TestRenameMultipleFilesSuffixes(t *testing.T) {
   if err := Rename(roots, "rename", files); err != nil {
     t.Fatalf("Rename: %v", err)
   }
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"rename (1).jpg", "rename (2).jpg", "rename.jpg"}) {
-    t.Fatalf("listing = %v, want the three suffixed names", got)
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"rename", "rename (1)", "rename (2)"}) {
+    t.Fatalf("listing = %v, want the three suffixed exact names", got)
   }
 }
 
-func TestRenameMultipleFilesPreserveOwnExtensions(t *testing.T) {
+func TestRenameMultipleFilesUseExactNameNoExtensions(t *testing.T) {
   roots, root := newRenameRoots(t)
   files := writeFiles(t, root, "a.txt", "b.md", "c.log")
 
   if err := Rename(roots, "report", files); err != nil {
     t.Fatalf("Rename: %v", err)
   }
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"report (1).md", "report (2).log", "report.txt"}) {
-    t.Fatalf("listing = %v, want per-file extensions preserved", got)
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"report", "report (1)", "report (2)"}) {
+    t.Fatalf("listing = %v, want exact names with no appended extensions", got)
   }
 }
 
@@ -154,9 +142,8 @@ func TestRenameNoPaths(t *testing.T) {
 func TestRenameConflictsAndLeavesFilesAsIs(t *testing.T) {
   roots, root := newRenameRoots(t)
   files := writeFiles(t, root, "one.jpg", "two.jpg")
-  // A pre-existing entry that would collide with the suffixed name of the 2nd
-  // file: "rename (1).jpg".
-  if err := os.WriteFile(filepath.Join(root, "rename (1).jpg"), []byte("x"), 0o644); err != nil {
+  // A pre-existing entry that collides with the suffixed name of the 2nd file.
+  if err := os.WriteFile(filepath.Join(root, "rename (1)"), []byte("x"), 0o644); err != nil {
     t.Fatal(err)
   }
 
@@ -165,22 +152,22 @@ func TestRenameConflictsAndLeavesFilesAsIs(t *testing.T) {
     t.Fatalf("error = %v, want RenameExists", err)
   }
   // The selection is left untouched (plus the pre-existing file still present).
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"one.jpg", "rename (1).jpg", "two.jpg"}) {
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"one.jpg", "rename (1)", "two.jpg"}) {
     t.Fatalf("listing = %v, want files unchanged", got)
   }
 }
 
 func TestRenameConflictWithAnotherSource(t *testing.T) {
   roots, root := newRenameRoots(t)
-  // Renaming foo.txt to "bar" puts it on bar.txt's current path, which would
-  // clobber bar.txt (also in the selection) before it is renamed.
-  files := writeFiles(t, root, "foo.txt", "bar.txt")
+  // Renaming a.txt to "c" lands the target on c's own path; c is also in the
+  // selection, so this would clobber it and must be rejected.
+  files := writeFiles(t, root, "a.txt", "c")
 
-  err := Rename(roots, "bar", files)
+  err := Rename(roots, "c", files)
   if !errors.Is(err, RenameExists) {
     t.Fatalf("error = %v, want RenameExists", err)
   }
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"bar.txt", "foo.txt"}) {
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"a.txt", "c"}) {
     t.Fatalf("listing = %v, want files unchanged", got)
   }
 }
@@ -199,15 +186,17 @@ func TestRenameUsesUserProvidedExtension(t *testing.T) {
   }
 }
 
-func TestRenameNoOpWhenAlreadyCorrect(t *testing.T) {
+func TestRenameToFileWithoutExtension(t *testing.T) {
+  // Renaming hello.txt with the bare stem "hello" yields exactly "hello"; the
+  // original extension is not appended.
   roots, root := newRenameRoots(t)
-  files := writeFiles(t, root, "a.txt")
+  files := writeFiles(t, root, "hello.txt")
 
-  if err := Rename(roots, "a", files); err != nil {
-    t.Fatalf("Rename (no-op): %v", err)
+  if err := Rename(roots, "hello", files); err != nil {
+    t.Fatalf("Rename: %v", err)
   }
-  if got := listing(t, root); !reflect.DeepEqual(got, []string{"a.txt"}) {
-    t.Fatalf("listing = %v, want [a.txt] unchanged", got)
+  if got := listing(t, root); !reflect.DeepEqual(got, []string{"hello"}) {
+    t.Fatalf("listing = %v, want [hello] (extension not kept)", got)
   }
 }
 

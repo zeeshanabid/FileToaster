@@ -43,9 +43,9 @@ func TestServeFsRename(t *testing.T) {
   if !body.OK {
     t.Fatalf("ok = false")
   }
-  // Verify the files were renamed with the expected suffixes. "sub" is the
-  // directory buildTestConfig seeds into the root and must remain untouched.
-  want := map[string]bool{"renamed.txt": true, "renamed (1).txt": true, "sub": true}
+  // Verify the files were renamed to the exact names. "sub" is the directory
+  // buildTestConfig seeds into the root and must remain untouched.
+  want := map[string]bool{"renamed": true, "renamed (1)": true, "sub": true}
   entries, err := os.ReadDir(root)
   if err != nil {
     t.Fatal(err)
@@ -100,7 +100,7 @@ func TestServeFsRenameConflict(t *testing.T) {
     }
   }
   // Pre-create the suffixed name so the batch conflicts.
-  if err := os.WriteFile(filepath.Join(root, "renamed (1).txt"), []byte("x"), 0o644); err != nil {
+  if err := os.WriteFile(filepath.Join(root, "renamed (1)"), []byte("x"), 0o644); err != nil {
     t.Fatal(err)
   }
 
@@ -111,7 +111,7 @@ func TestServeFsRenameConflict(t *testing.T) {
     t.Errorf("status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
   }
   // The selection is left untouched.
-  for _, n := range []string{"a.txt", "b.txt", "renamed (1).txt"} {
+  for _, n := range []string{"a.txt", "b.txt", "renamed (1)"} {
     if _, err := os.Stat(filepath.Join(root, n)); err != nil {
       t.Errorf("%q should still exist: %v", n, err)
     }
