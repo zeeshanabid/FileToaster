@@ -56,10 +56,6 @@ import { formatSize, formatDate } from '$lib/fs/format';
     // alongside files where the browser supports it; it is not a standard
     // typed attribute, so set it imperatively on the bound files picker input.
     fileInput?.setAttribute('directory', '');
-    // `webkitdirectory` (plus `multiple`) makes the folder picker return every
-    // file in the chosen folder; it is not a standard typed attribute, so set it
-    // imperatively on the bound folder picker input.
-    folderInput?.setAttribute('webkitdirectory', '');
     stop = selection.subscribe((w) => {
       win = w;
     });
@@ -1304,6 +1300,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
      <input
        type="file"
        multiple
+       webkitdirectory
        style="display:none"
        bind:this={folderInput}
        onchange={onPickFolder}
