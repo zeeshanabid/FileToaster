@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { parseSSEMessage, taskLabel, getAffectedPaths } from '$lib/store/tasks';
+import { parseSSEMessage, taskLabel, getAffectedPaths, ingestStateToTasks, uploadSessionVisible } from '$lib/store/tasks';
 import type { Task } from '$lib/fs/api';
+import type { IngestState } from '$lib/fs/upload';
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'type' | 'status'>): Task {
   const now = new Date().toISOString();
@@ -179,5 +180,59 @@ describe('getAffectedPaths', () => {
   it('returns empty array when no meta is present', () => {
     const t = task({ id: '7', type: 'copy', status: 'finished' });
     expect(getAffectedPaths(t)).toEqual([]);
+  });
+});
+
+describe('upload session → taskbar task', () => {
+  function ingest(overrides: Partial<IngestState> = {}): IngestState {
+    return {
+      taskID: 'sess-1',
+      dest: '/root/out',
+      chunkSize: 1,
+      files: [{ rel: 'a', size: 4, chunks: 4 }],
+      dirs: [],
+      received: [new Uint8Array(4)],
+      present: [true, true, false, false],
+      phase: 'staging',
+      error: null,
+      finalizeID: null,
+      bytesSent: 2,
+      startTime: Date.now() - 1000,
+      lastNotifyTime: Date.now(),
+      lastBytesSent: 0,
+      ...overrides
+    };
+  }
+
+  it('shows a staging session as a running upload with progress', () => {
+    const tasks = ingestStateToTasks(ingest({ phase: 'staging' }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('upload');
+    expect(tasks[0].status).toBe('running');
+    expect(tasks[0].progress).toBe(50);
+    // The task carries the staging session id so cancel/resume target it.
+    expect((tasks[0].meta as { staging: string }).staging).toBe('sess-1');
+  });
+
+  it('keeps a cancelled session visible so it can be resumed', () => {
+    expect(uploadSessionVisible(ingest({ phase: 'cancelled' }))).toBe(true);
+    const tasks = ingestStateToTasks(ingest({ phase: 'cancelled' }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].status).toBe('cancelled');
+    // Resume targets the session by the staging id carried in meta.
+    expect((tasks[0].meta as { staging: string }).staging).toBe('sess-1');
+  });
+
+  it('keeps a failed session visible so it can be resumed', () => {
+    expect(uploadSessionVisible(ingest({ phase: 'failed' }))).toBe(true);
+    const tasks = ingestStateToTasks(ingest({ phase: 'failed', error: 'boom' }));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].status).toBe('failed');
+    expect(tasks[0].error).toBe('boom');
+  });
+
+  it('does not show a finished session', () => {
+    expect(uploadSessionVisible(ingest({ phase: 'done' }))).toBe(false);
+    expect(ingestStateToTasks(ingest({ phase: 'done' }))).toHaveLength(0);
   });
 });

@@ -5,7 +5,8 @@ import type { Writable } from 'svelte/store';
 import { fireEvent, screen, within } from '@testing-library/dom';
 import type { Task } from '$lib/fs/api';
 import { formatRate, formatSize } from '$lib/fs/format';
-import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction } from '$lib/store/tasks';
+import { uploadManager } from '$lib/fs/upload';
+import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen } from '$lib/store/tasks';
 import RunningTaskIcon from './RunningTaskIcon.svelte';
 
 // The component reads its live data from $lib/store/tasks. These stores are
@@ -14,12 +15,22 @@ import RunningTaskIcon from './RunningTaskIcon.svelte';
 // instances the component subscribes to. The real module types them as
 // Readable; the mock instances are writable, so cast for driving them.
 vi.mock('$lib/store/tasks', async () => {
-  const { writable } = await import('svelte/store');
+  const { writable, derived } = await import('svelte/store');
+  const taskListStore = writable<Task[]>([]);
+  const runningCountStore = writable<number>(0);
+  const queuedCountStore = writable<number>(0);
+  const activeCountStore = writable<number>(0);
+  const taskPanelOpenStore = writable<boolean>(false);
   return {
-    taskList: writable<Task[]>([]),
-    runningCount: writable<number>(0),
-    queuedCount: writable<number>(0),
-    activeCount: writable<number>(0),
+    taskList: taskListStore,
+    runningCount: runningCountStore,
+    queuedCount: queuedCountStore,
+    activeCount: activeCountStore,
+    combinedTaskList: derived(taskListStore, ($t) => $t),
+    combinedRunningCount: derived(runningCountStore, ($r) => $r),
+    combinedQueuedCount: derived(queuedCountStore, ($q) => $q),
+    combinedActiveCount: derived(activeCountStore, ($a) => $a),
+    taskPanelOpen: taskPanelOpenStore,
     taskLabel: (t: Task) => (t.type === 'copy' ? 'Copy' : t.type),
     cancelTaskAction: vi.fn(async () => {})
   };
@@ -141,5 +152,45 @@ describe('RunningTaskIcon — progress bar and stats', () => {
     expect(tasksPanel.querySelector('.bar')).toBeTruthy();
     // The rate cell only renders while running.
     expect(tasksPanel.querySelector('.rate')).toBeNull();
+  });
+});
+
+describe('RunningTaskIcon — upload resume', () => {
+  it('shows a Resume button for a cancelled upload and resumes it by its staging id', async () => {
+    const resumeSpy = vi.spyOn(uploadManager, 'resumeSession').mockResolvedValue(true);
+    await openPanel();
+    tasks.set([
+      copyTask({
+        id: 'staging-sess-1',
+        type: 'upload',
+        status: 'cancelled',
+        meta: { staging: 'sess-1', dest: '/root/out', phase: 'cancelled', files: 1 }
+      })
+    ]);
+    active.set(0);
+    await tick();
+
+    const resume = within(screen.getByRole('dialog')).getByRole('button', { name: 'Resume upload' });
+    fireEvent.click(resume);
+    await tick();
+    expect(resumeSpy).toHaveBeenCalledWith('sess-1');
+    resumeSpy.mockRestore();
+  });
+
+  it('shows a Resume button for a failed upload', async () => {
+    await openPanel();
+    tasks.set([
+      copyTask({
+        id: 'staging-sess-2',
+        type: 'upload',
+        status: 'failed',
+        error: 'boom',
+        meta: { staging: 'sess-2', dest: '/root/out', phase: 'failed', files: 1 }
+      })
+    ]);
+    active.set(0);
+    await tick();
+
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Resume upload' })).toBeInTheDocument();
   });
 });

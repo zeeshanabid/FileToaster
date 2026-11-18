@@ -31,6 +31,9 @@
   onMount(() => {
     if (browser) {
       void checkSession();
+      // Surface any upload sessions remembered from before a refresh in the
+      // taskbar (paused), so they can be resumed from where they left off.
+      uploadManager.loadPersisted();
       // Read the server's upload sizing once and configure the shared
       // UploadManager so file slicing and the global concurrency limit match
       // the server (and stay within the limits that avoid upload failures).

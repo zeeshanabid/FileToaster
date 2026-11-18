@@ -23,22 +23,29 @@ vi.mock('$lib/store/auth', () => ({
   logout: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('$lib/store/tasks', () => ({
-  initTasks: vi.fn(),
-  shutdownTasks: vi.fn(),
-  activeCount: writable(0),
-  clipboard: writable([]),
-  cutMode: writable(false),
-  cutEntries: writable([]),
-  setClipboard: vi.fn(),
-  clearClipboard: vi.fn(),
-  setCut: vi.fn(),
-  submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' })),
-  submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' })),
-  submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' })),
-  submitCompressTask: vi.fn(async () => ({ taskID: 'task-7' })),
-  submitDecompressTask: vi.fn(async () => ({ taskID: 'task-8' }))
-}));
+vi.mock('$lib/store/tasks', async () => {
+  const { writable, derived } = await import('svelte/store');
+  const activeCountStore = writable(0);
+  const taskPanelOpenStore = writable(false);
+  return {
+    initTasks: vi.fn(),
+    shutdownTasks: vi.fn(),
+    activeCount: activeCountStore,
+    combinedActiveCount: derived(activeCountStore, ($a: number) => $a),
+    taskPanelOpen: taskPanelOpenStore,
+    clipboard: writable([]),
+    cutMode: writable(false),
+    cutEntries: writable([]),
+    setClipboard: vi.fn(),
+    clearClipboard: vi.fn(),
+    setCut: vi.fn(),
+    submitCopyTask: vi.fn(async () => ({ taskID: 'task-1' })),
+    submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' })),
+    submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' })),
+    submitCompressTask: vi.fn(async () => ({ taskID: 'task-7' })),
+    submitDecompressTask: vi.fn(async () => ({ taskID: 'task-8' }))
+  };
+});
 
 vi.mock('$lib/fs/api', () => ({
   fetchListing: vi.fn(),
@@ -49,6 +56,7 @@ vi.mock('$lib/fs/api', () => ({
   uploadChunk: vi.fn(),
   getUploadStatus: vi.fn(),
   cancelUpload: vi.fn(),
+  resumeUpload: vi.fn(),
   chunkCountForFile: vi.fn(() => 1),
   DEFAULT_CHUNK_SIZE: 4 << 20,
   downloadFile: vi.fn()

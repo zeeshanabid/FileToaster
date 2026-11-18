@@ -1,16 +1,58 @@
 <script lang="ts">
-  import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction } from '$lib/store/tasks';
+  import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen } from '$lib/store/tasks';
   import { formatRate, formatSize } from '$lib/fs/format';
   import type { Task } from '$lib/fs/api';
+  import { uploadManager } from '$lib/fs/upload';
 
+  // Local open state, synced with the global taskPanelOpen store
   let open = $state(false);
+
+  // Sync with global store
+  $effect(() => {
+    open = $taskPanelOpen;
+  });
+
+  // Auto-open panel when there are active tasks
+  $effect(() => {
+    if ($combinedActiveCount > 0 && !open) {
+      taskPanelOpen.set(true);
+    }
+  });
+
+  function togglePanel() {
+    const newOpen = !open;
+    open = newOpen;
+    taskPanelOpen.set(newOpen);
+  }
 
   async function on_cancel(task: Task) {
     if (task.status !== 'running' && task.status !== 'queued') return;
+    // For upload staging tasks, use the upload manager's abort with the original task ID from meta
+    if (task.type === 'upload' && task.meta && (task.meta as any).staging) {
+      const stagingTaskID = (task.meta as any).staging;
+      try {
+        await uploadManager.abort(stagingTaskID);
+      } catch {
+        // Ignore transport errors
+      }
+      return;
+    }
     try {
       await cancelTaskAction(task.id);
     } catch {
       // The pool reports cancellation itself; ignore transport errors.
+    }
+  }
+
+  async function on_resume(task: Task) {
+    if (task.type !== 'upload') return;
+    if (task.status !== 'cancelled' && task.status !== 'failed') return;
+    const stagingTaskID = (task.meta as any)?.staging;
+    if (!stagingTaskID) return;
+    try {
+      await uploadManager.resumeSession(stagingTaskID);
+    } catch {
+      // Ignore transport errors
     }
   }
 
@@ -39,7 +81,7 @@
     aria-expanded={open}
     aria-label="Tasks"
     title="Show tasks"
-    onclick={() => (open = !open)}
+    onclick={togglePanel}
   >
     <span class="tasks-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
@@ -48,8 +90,8 @@
         <path d="M9 14l2 2 4-4" />
       </svg>
     </span>
-    {#if $activeCount > 0}
-      <span class="badge" title={$activeCount + " task" + ($activeCount === 1 ? '' : 's') + " active"}>{$activeCount}</span>
+    {#if $combinedActiveCount > 0}
+      <span class="badge" title={$combinedActiveCount + " task" + ($combinedActiveCount === 1 ? '' : 's') + " active"}>{$combinedActiveCount}</span>
     {/if}
   </button>
 
@@ -57,16 +99,16 @@
     <div class="popover" role="dialog" aria-label="Tasks">
       <div class="popover-head">
         Tasks
-        {#if $runningCount > 0 || $queuedCount > 0}
+        {#if $combinedRunningCount > 0 || $combinedQueuedCount > 0}
           <span class="counts">
-            {$runningCount} running{#if $queuedCount > 0}, {$queuedCount} queued{/if}
+            {$combinedRunningCount} running{#if $combinedQueuedCount > 0}, {$combinedQueuedCount} queued{/if}
           </span>
         {/if}
       </div>
-      {#if $taskList.length === 0}
+      {#if $combinedTaskList.length === 0}
         <div class="empty">No tasks yet.</div>
       {:else}
-        {#each $taskList as task (task.id)}
+        {#each $combinedTaskList as task (task.id)}
           <div class="task" class:terminal={task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled'}>
             <div class="task-row">
               <span class="task-name" title={taskLabel(task)}>{taskLabel(task)}</span>
@@ -83,6 +125,19 @@
                     <path d="M7 7l10 10M17 7L7 17" />
                   </svg>
                 </button>
+              {:else if task.type === 'upload' && (task.status === 'cancelled' || task.status === 'failed')}
+                <button
+                  class="resume"
+                  type="button"
+                  aria-label="Resume upload"
+                  title="Resume upload"
+                  onclick={() => on_resume(task)}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+                    <path d="M5 12h14" />
+                    <path d="M12 5l7 7-7 7" />
+                  </svg>
+                </button>
               {/if}
             </div>
             {#if task.status === 'running' || task.status === 'queued'}
@@ -96,7 +151,7 @@
                 {#if task.bytes.total > 0}
                   <span class="bytes">{formatSize(task.bytes.done)} / {formatSize(task.bytes.total)}</span>
                 {/if}
-                {#if task.status === 'running'}
+                {#if task.status === 'running' && task.bytes.ratePerSec > 0}
                   <span class="rate">{formatRate(task.bytes.ratePerSec)}</span>
                 {/if}
               </div>
@@ -288,6 +343,32 @@
   .cancel svg {
     width: 12px;
     height: 12px;
+  }
+  .resume {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    background: var(--ok-strong);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    transition: all 120ms ease;
+    box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
+  }
+  .resume:hover {
+    background: var(--ok);
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(34, 197, 94, 0.5);
+  }
+  .resume:active {
+    transform: scale(0.98);
+  }
+  .resume svg {
+    width: 16px;
+    height: 16px;
   }
   .bar {
     height: 7px;

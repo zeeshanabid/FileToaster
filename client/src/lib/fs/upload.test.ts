@@ -152,15 +152,19 @@ describe('chunkCountForFile / defaults', () => {
 // fakeUpload implements UploadApi in memory; `finalizeOnLast` returns the
 // finalize task id once every chunk has been ingested, mirroring the server.
 // `hangAt` makes one specific chunk hang so a session can be left in staging.
+// `delayMs` adds a delay between chunks to allow testing abort/resume mid-upload.
 function fakeUpload(opts: {
   finalizeOnLast?: boolean;
   hangAt?: { fileIdx: number; chunkIdx: number };
   failAll?: boolean;
   failFirst?: number;
+  onUpload?: (fileIdx: number, chunkIdx: number) => void;
+  delayMs?: number;
 } = {}): UploadApi & {
   created: CreateUploadRequest[];
   uploads: Array<{ fileIdx: number; chunkIdx: number; size: number; blob?: Blob }>;
   cancelled: string[];
+  resumed: string[];
   statusCalls: string[];
   calls: number;
 } {
@@ -168,6 +172,7 @@ function fakeUpload(opts: {
     created: [] as CreateUploadRequest[],
     uploads: [] as Array<{ fileIdx: number; chunkIdx: number; size: number; blob?: Blob }>,
     cancelled: [] as string[],
+    resumed: [] as string[],
     statusCalls: [] as string[]
   };
   let attempts = 0;
@@ -184,7 +189,9 @@ function fakeUpload(opts: {
       if (opts.failAll || (opts.failFirst !== undefined && attempts <= opts.failFirst)) {
         throw new Error('transient chunk upload error');
       }
+      if (opts.delayMs) await new Promise(r => setTimeout(r, opts.delayMs));
       state.uploads.push({ fileIdx, chunkIdx, size: blob.size, blob });
+      if (opts.onUpload) opts.onUpload(fileIdx, chunkIdx);
       const total = state.uploads.length;
       if (opts.finalizeOnLast && total >= expectedTotal()) {
         return {
@@ -204,6 +211,10 @@ function fakeUpload(opts: {
     },
     async cancelUpload(taskID) {
       state.cancelled.push(taskID);
+    },
+    async resumeUpload(taskID) {
+      state.resumed.push(taskID);
+      return { chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0 };
     }
   };
   function expectedTotal(): number {
@@ -221,6 +232,14 @@ async function waitFor(mgr: UploadManager, taskID: string, phase: string): Promi
     await new Promise((r) => setTimeout(r, 2));
   }
   throw new Error(`timed out waiting for phase ${phase}`);
+}
+
+async function waitForUploadStart(api: ReturnType<typeof fakeUpload>): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (api.calls > 0) return;
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  throw new Error('timed out waiting for upload to start');
 }
 
 describe('UploadManager.startUpload', () => {
@@ -355,6 +374,57 @@ describe('UploadManager.resume', () => {
     const mgr = new UploadManager(api);
     expect(await mgr.resume('nope')).toBe(false);
   });
+
+  it('clears the server-side abort before re-sending the missing chunks', async () => {
+    const api = fakeUpload({ finalizeOnLast: false });
+    const mgr = new UploadManager(api, 8, 3, 0);
+    localStorage.setItem(
+      uploadStoreKey('sess-1'),
+      JSON.stringify({
+        taskID: 'sess-1',
+        dest: '/root/out',
+        chunkSize: 4,
+        files: [{ rel: 'a.txt', size: 8, chunks: 2 }],
+        dirs: [],
+        present: [true, false],
+        received: [[0, 0, 0, 0, 0, 0, 0, 0]],
+        phase: 'cancelled'
+      })
+    );
+
+    expect(await mgr.resume('sess-1')).toBe(true);
+
+    // The server abort was cleared so an aborted session accepts chunks again.
+    expect(api.resumed).toContain('sess-1');
+    await waitFor(mgr, 'sess-1', 'finalizing');
+    expect(api.uploads.map((u) => u.chunkIdx)).toEqual([1]);
+  });
+
+  it('loadPersisted surfaces a remembered session as a paused, resumable task', () => {
+    const api = fakeUpload();
+    const mgr = new UploadManager(api, 8, 3, 0);
+    localStorage.setItem(
+      uploadStoreKey('sess-9'),
+      JSON.stringify({
+        taskID: 'sess-9',
+        dest: '/root/out',
+        chunkSize: 4,
+        files: [{ rel: 'a.txt', size: 8, chunks: 2 }],
+        dirs: [],
+        present: [true, false],
+        received: [[0, 0, 0, 0, 0, 0, 0, 0]],
+        phase: 'staging'
+      })
+    );
+
+    mgr.loadPersisted();
+
+    const state = mgr.state('sess-9');
+    expect(state).toBeDefined();
+    // Loaded paused: nothing is re-sent until the user resumes.
+    expect(state?.phase).toBe('cancelled');
+    expect(api.uploads).toHaveLength(0);
+  });
 });
 
 describe('UploadManager.abort', () => {
@@ -383,11 +453,170 @@ describe('UploadManager.abort', () => {
     const api = fakeUpload({ hangAt: { fileIdx: 0, chunkIdx: 0 } });
     const mgr = new UploadManager(api, 8, 3, 0);
     const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
-    // The single chunk hangs, so the session stays staging until we abort.
-    await waitFor(mgr, taskID as string, 'staging');
+    await waitForUploadStart(api);
     await mgr.abort(taskID as string);
     expect(mgr.state(taskID as string)?.phase).toBe('cancelled');
     expect(mgr.finished(taskID as string)).toBe(true);
+  });
+
+  it('abort persists cancelled state to localStorage', async () => {
+    const api = fakeUpload({ hangAt: { fileIdx: 0, chunkIdx: 0 } });
+    const mgr = new UploadManager(api, 8, 3, 0);
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
+    await waitForUploadStart(api);
+    await mgr.abort(taskID as string);
+    // localStorage should have the cancelled state
+    const stored = localStorage.getItem(uploadStoreKey(taskID as string));
+    expect(stored).not.toBeNull();
+    const parsed = JSON.parse(stored!);
+    expect(parsed.phase).toBe('cancelled');
+  });
+
+  it('resumeSession resumes an aborted session in memory', async () => {
+    const api = fakeUpload({ hangAt: { fileIdx: 0, chunkIdx: 0 } });
+    const mgr = new UploadManager(api, 8, 3, 0);
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
+    await waitForUploadStart(api);
+    // Abort the session
+    await mgr.abort(taskID as string);
+    expect(mgr.state(taskID as string)?.phase).toBe('cancelled');
+    
+    // Resume the aborted session
+    const resumed = await mgr.resumeSession(taskID as string);
+    expect(resumed).toBe(true);
+    expect(mgr.state(taskID as string)?.phase).toBe('staging');
+    expect(mgr.state(taskID as string)?.error).toBeNull();
+    // Note: the upload will hang on the same chunk (hangAt), so we don't wait for finalizing
+  });
+
+  it('resumeSession resumes a failed session in memory', async () => {
+    const api = fakeUpload({ failAll: true });
+    const mgr = new UploadManager(api, 8, 2, 0);
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
+    await waitFor(mgr, taskID as string, 'failed');
+    expect(mgr.state(taskID as string)?.phase).toBe('failed');
+    expect(mgr.state(taskID as string)?.error).not.toBeNull();
+    
+    // Resume the failed session
+    const resumed = await mgr.resumeSession(taskID as string);
+    expect(resumed).toBe(true);
+    expect(mgr.state(taskID as string)?.phase).toBe('staging');
+    expect(mgr.state(taskID as string)?.error).toBeNull();
+  });
+
+  it('resumeSession returns false for non-cancelled/failed sessions', async () => {
+    const api = fakeUpload({ finalizeOnLast: true });
+    const mgr = new UploadManager(api, 8, 3, 0);
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
+    await waitFor(mgr, taskID as string, 'finalizing');
+    
+    const resumed = await mgr.resumeSession(taskID as string);
+    expect(resumed).toBe(false);
+  });
+
+  it('resumeSession returns false for unknown task', async () => {
+    const api = fakeUpload();
+    const mgr = new UploadManager(api);
+    const resumed = await mgr.resumeSession('unknown');
+    expect(resumed).toBe(false);
+  });
+
+  it('resumeSession continues from the last uploaded chunk after abort', async () => {
+    // Create a file with 2 chunks, add delay between chunks so we can abort after first
+    // Use concurrency=1 to ensure chunks upload sequentially
+    let firstChunkDone = false;
+    const api = fakeUpload({ 
+      finalizeOnLast: true,
+      delayMs: 50, // 50ms delay between chunks
+      onUpload: (fileIdx, chunkIdx) => {
+        if (fileIdx === 0 && chunkIdx === 0) firstChunkDone = true;
+      }
+    });
+    const mgr = new UploadManager(api, 1, 3, 0); // concurrency=1 for sequential uploads
+    // 8MB file with 4MB chunks = 2 chunks
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 8 << 20, chunks: 2 }], dirs: [] }, 4 << 20);
+    
+    // Wait for first chunk to complete
+    await vi.waitFor(() => expect(firstChunkDone).toBe(true));
+    
+    // Abort after first chunk
+    await mgr.abort(taskID as string);
+    expect(mgr.state(taskID as string)?.phase).toBe('cancelled');
+    const uploadsAfterAbort = api.uploads.length;
+    expect(uploadsAfterAbort).toBe(1);
+    expect(api.uploads[0].chunkIdx).toBe(0);
+    
+    // Resume the aborted session
+    const resumed = await mgr.resumeSession(taskID as string);
+    expect(resumed).toBe(true);
+    expect(mgr.state(taskID as string)?.phase).toBe('staging');
+    
+    // Wait for finalizing (second chunk should complete)
+    await waitFor(mgr, taskID as string, 'finalizing');
+    
+    // Should have 2 uploads total (first chunk was already uploaded, second chunk uploaded on resume)
+    expect(api.uploads.length).toBe(2);
+    expect(api.uploads[0].chunkIdx).toBe(0);
+    expect(api.uploads[1].chunkIdx).toBe(1);
+  });
+
+  it('resumeSession clears the server-side abort before re-sending chunks', async () => {
+    const api = fakeUpload({ hangAt: { fileIdx: 0, chunkIdx: 0 } });
+    const mgr = new UploadManager(api, 1, 3, 0);
+    const taskID = (await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE)) as string;
+    await waitForUploadStart(api);
+    await mgr.abort(taskID);
+    expect(api.cancelled).toContain(taskID);
+    expect(api.resumed).toHaveLength(0);
+
+    expect(await mgr.resumeSession(taskID)).toBe(true);
+    // The server abort was cleared so the missing chunks are accepted again.
+    expect(api.resumed).toContain(taskID);
+  });
+
+  it('a later upload is not starved by waiters left behind by an aborted upload', async () => {
+    // Reproduces the "re-upload hangs in the same tab" bug: an aborted upload
+    // leaves its not-yet-started chunks queued in the shared pool. Before the
+    // fix those stale waiters consumed every release, so a fresh upload's chunks
+    // never ran (a page refresh cleared the in-memory pool, which is why it
+    // appeared to work again after reloading).
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((r) => (openGate = r));
+    let ids = 0;
+    const uploads: Array<{ id: string; chunkIdx: number }> = [];
+    const api: UploadApi = {
+      async createUpload() {
+        ids++;
+        return { taskID: `sess-${ids}` };
+      },
+      async uploadChunk(taskID, _fileIdx, chunkIdx) {
+        await gate;
+        uploads.push({ id: taskID, chunkIdx });
+        return { chunkSize: 0, totalChunks: 1, receivedChunks: 1, totalBytes: 0, receivedBytes: 0 };
+      },
+      async getUploadStatus() {
+        return { chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0 };
+      },
+      async cancelUpload() {},
+      async resumeUpload() {
+        return { chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0 };
+      }
+    };
+    const mgr = new UploadManager(api, 2, 3, 0);
+
+    // Session A: 20 chunks at concurrency 2 → 2 in flight (gated), 18 waiting.
+    const a = (await mgr.startUpload('/root/a', { files: [{ rel: 'a', size: 20, chunks: 20 }], dirs: [] }, 1)) as string;
+    await new Promise((r) => setTimeout(r, 5));
+    await mgr.abort(a);
+
+    // Let A's in-flight chunks finish so their slots are released back to the pool.
+    openGate();
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Session B: a fresh upload that must be able to drain every one of its chunks.
+    const b = (await mgr.startUpload('/root/b', { files: [{ rel: 'b', size: 20, chunks: 20 }], dirs: [] }, 1)) as string;
+    await waitFor(mgr, b, 'finalizing');
+    expect(uploads.filter((u) => u.id === b)).toHaveLength(20);
   });
 });
 
@@ -416,6 +645,9 @@ describe('UploadManager concurrency pool', () => {
         return { chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0 };
       },
       async cancelUpload() {},
+      async resumeUpload() {
+        return { chunkSize: 0, totalChunks: 0, receivedChunks: 0, totalBytes: 0, receivedBytes: 0 };
+      },
       get counts() {
         return { inflight, peak, completed };
       }
@@ -517,5 +749,40 @@ describe('UploadManager.sendWithRetry retries', () => {
     mgr.clear(taskID as string);
     expect(mgr.state(taskID as string)).toBeUndefined();
     expect(mgr.finished(taskID as string)).toBe(false);
+  });
+
+  it('clearByFinalizeID() clears session by finalize task ID and removes localStorage', async () => {
+    const api = fakeUpload({ finalizeOnLast: true });
+    const mgr = new UploadManager(api, 8, 3, 0);
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
+    await waitFor(mgr, taskID as string, 'finalizing');
+    
+    // The session should exist with a finalizeID
+    const state = mgr.state(taskID as string);
+    expect(state).toBeDefined();
+    expect(state!.finalizeID).toBe('task-final');
+    expect(localStorage.getItem(uploadStoreKey(taskID as string))).not.toBeNull();
+    
+    // Clear by finalizeID (as the server finalize task would do)
+    mgr.clearByFinalizeID('task-final');
+    
+    // Session should be gone
+    expect(mgr.state(taskID as string)).toBeUndefined();
+    // localStorage should be cleared
+    expect(localStorage.getItem(uploadStoreKey(taskID as string))).toBeNull();
+  });
+
+  it('clearByFinalizeID() does not remove localStorage for non-finished uploads', async () => {
+    const api = fakeUpload({ failAll: true });
+    const mgr = new UploadManager(api, 8, 2, 0);
+    const taskID = await mgr.startUpload('/root/out', { files: [{ rel: 'a', size: 4, chunks: 1 }], dirs: [] }, DEFAULT_CHUNK_SIZE);
+    await waitFor(mgr, taskID as string, 'failed');
+    
+    // localStorage should still exist for failed uploads (resumable)
+    expect(localStorage.getItem(uploadStoreKey(taskID as string))).not.toBeNull();
+    
+    // Even if we call clearByFinalizeID (which shouldn't match), localStorage should persist
+    mgr.clearByFinalizeID('non-existent-finalize-id');
+    expect(localStorage.getItem(uploadStoreKey(taskID as string))).not.toBeNull();
   });
 });

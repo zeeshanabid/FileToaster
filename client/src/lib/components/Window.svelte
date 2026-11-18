@@ -30,7 +30,8 @@ import {
   submitDeleteTask,
   submitMoveTask,
   submitCompressTask,
-  submitDecompressTask
+  submitDecompressTask,
+  taskPanelOpen
 } from '$lib/store/tasks';
 import { isArchiveFile } from '$lib/fs/archive';
 import { basename, isWithin } from '$lib/fs/paths';
@@ -763,9 +764,8 @@ import { formatSize, formatDate } from '$lib/fs/format';
   }
 
   // --- upload: chunked, resumable uploads into this window's open folder ------
-  // `uploadState` tracks the staging upload (task id + phase) so the footer can
-  // offer an abort control while ingest is in progress; once the tracked finalize
-  // op takes over, the taskbar handles cancellation.
+  // The upload progress is now shown in the taskbar (RunningTaskIcon).
+  // This window only tracks the task ID for the finalize phase to know when to stop polling.
   let uploadState = $state<{ taskID: string; phase: string } | null>(null);
   // progressPct is the ingest completion (sent chunks ÷ total) for the active
   // staging upload, written to below so the footer bar can update live.
@@ -850,6 +850,7 @@ async function onPickFolder() {
         const st = uploadManager.state(taskID);
         uploadState = st ? { taskID: st.taskID, phase: st.phase } : { taskID, phase: 'staging' };
         flash(`Uploading… (task ${taskID}).`);
+        taskPanelOpen.set(true);
       }
     } catch (err) {
       flash(err instanceof Error ? err.message : 'could not upload');
@@ -1052,32 +1053,6 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     uploadState = null;
     flash('Upload aborted.');
   }
-
-  function uploadActive(): boolean {
-    return !!uploadState && uploadState.phase === 'staging';
-  }
-
-  // The manager's present-bitmap is plain JS, so Svelte does not track chunk
-  // completion and re-render on its own — a live upload would show a frozen bar.
-  // While a session is staging, poll the manager into `progressPct` (a $state)
-  // so the footer ingest bar updates; once the phase leaves "staging" (the
-  // finalize copy takes over) the polling stops and the taskbar drives progress.
-  $effect(() => {
-    if (!uploadState || uploadState.phase !== 'staging') {
-      progressPct = 0;
-      return;
-    }
-    const id = uploadState.taskID;
-    const read = () => {
-      const s = uploadManager.state(id);
-      if (!s) return;
-      const done = s.present.reduce((n, p) => n + (p ? 1 : 0), 0);
-      progressPct = s.present.length ? Math.round((done / s.present.length) * 100) : 0;
-    };
-    read();
-    const timer = setInterval(read, 100);
-    return () => clearInterval(timer);
-  });
 
   // The tree is anchored at the window's root and never re-rooted on navigation.
   // The title bar shows the currently opened folder; the store's `name` stays as
@@ -1787,15 +1762,6 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     {#if status}
       <span class="status-msg">{status}</span>
     {/if}
-    {#if uploadActive()}
-      <div class="upload-progress" role="progressbar" aria-label="Upload progress" aria-valuenow={progressPct} aria-valuemin={0} aria-valuemax={100}>
-        <span class="upload-bar" style="width:{progressPct}%"></span>
-        <span class="upload-progress-label">{progressPct}%</span>
-      </div>
-      <button class="abort-upload" type="button" aria-label="Abort upload" onclick={abortUpload}>
-        Abort upload
-      </button>
-    {/if}
     <span class="count">{rows.length} item{rows.length === 1 ? '' : 's'}</span>
   </footer>
 
@@ -2355,55 +2321,6 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   }
   .count {
     margin-left: auto;
-    white-space: nowrap;
-  }
-  .abort-upload {
-    display: grid;
-    place-items: center;
-    height: 22px;
-    padding: 0 8px;
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    color: var(--alert);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .abort-upload:hover {
-    background: var(--surface-inset);
-  }
-  .upload-progress {
-    position: relative;
-    display: grid;
-    grid-template-columns: auto 88px;
-    align-items: center;
-    gap: 8px;
-  }
-  .upload-bar {
-    display: block;
-    width: 0;
-    height: 8px;
-    min-width: 8px;
-    flex: 1;
-    background: var(--surface-inset);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    overflow: hidden;
-    transition: width 120ms linear;
-  }
-  .upload-bar::after {
-    content: '';
-    display: block;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  }
-  .upload-progress-label {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
   .upload-menu-wrap {

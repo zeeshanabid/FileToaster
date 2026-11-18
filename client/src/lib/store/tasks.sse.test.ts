@@ -18,6 +18,7 @@ import type { Task } from '$lib/fs/api';
     uploadChunk: vi.fn(),
     getUploadStatus: vi.fn(),
     cancelUpload: vi.fn(),
+    resumeUpload: vi.fn(),
     chunkCountForFile: vi.fn(() => 1),
     DEFAULT_CHUNK_SIZE: 4 << 20
   }));

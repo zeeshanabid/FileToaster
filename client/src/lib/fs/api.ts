@@ -543,6 +543,26 @@ export async function cancelUpload(taskID: string): Promise<void> {
   }
 }
 
+// resumeUpload clears a cancelled session's abort flag so the client can continue
+// sending the missing chunks (resume after abort). Chunks already received are
+// kept, so the upload resumes from where it left off. It resolves to the resumable
+// status and rejects when the session no longer exists (already finalized/swept).
+export async function resumeUpload(taskID: string): Promise<UploadStatus> {
+  const res = await fetch(`/api/uploads/${encodeURIComponent(taskID)}/resume`, {
+    method: 'POST',
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+    const message =
+      typeof payload.error === 'string' && payload.error
+        ? payload.error
+        : `upload resume failed (${res.status})`;
+    throw new ApiError(message);
+  }
+  return (await res.json()) as UploadStatus;
+}
+
 // fetchUploadConfig returns the upload sizing the server wants the client to use:
 // the fixed per-file chunk size and the maximum number of chunks to upload at
 // once. Values fall back to the client defaults (DEFAULT_CHUNK_SIZE, 1) when the

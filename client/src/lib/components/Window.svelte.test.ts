@@ -46,6 +46,7 @@ import {
     uploadChunk: vi.fn(),
     getUploadStatus: vi.fn(),
     cancelUpload: vi.fn(),
+    resumeUpload: vi.fn(),
     chunkCountForFile: vi.fn(() => 1),
     DEFAULT_CHUNK_SIZE: 4 << 20
   }));
@@ -53,16 +54,29 @@ import {
   // The tasks store is mocked so copy/paste/delete/compress can be tested without a backend. The
 // `clipboard` store is created inside the factory (where the imported `writable`
 // is available); the clipboard helpers mutate it to mimic the real module.
-vi.mock('$lib/store/tasks', () => {
+vi.mock('$lib/store/tasks', async () => {
+  const { writable, derived } = await import('svelte/store');
   const store = writable<string[]>([]);
   const cutMode = writable<boolean>(false);
   const cutEntries = writable<Array<{ path: string; name: string; type: 'file' | 'dir' }>>([]);
+  const activeCountStore = writable(0);
+  const runningCountStore = writable(0);
+  const queuedCountStore = writable(0);
+  const taskListStore = writable([]);
+  const taskPanelOpenStore = writable(false);
   return {
     clipboard: store,
     cutMode,
     initTasks: vi.fn(),
     shutdownTasks: vi.fn(),
-    activeCount: writable(0),
+    activeCount: activeCountStore,
+    runningCount: runningCountStore,
+    queuedCount: queuedCountStore,
+    combinedActiveCount: derived(activeCountStore, ($a: number) => $a),
+    combinedRunningCount: derived(runningCountStore, ($r: number) => $r),
+    combinedQueuedCount: derived(queuedCountStore, ($q: number) => $q),
+    combinedTaskList: derived(taskListStore, ($t) => $t),
+    taskPanelOpen: taskPanelOpenStore,
     cutEntries,
     setClipboard: vi.fn((paths: string[]) => {
       store.set(paths);
@@ -1275,10 +1289,6 @@ async function dropFilesViaFastPath(files: File[]): Promise<void> {
     const [dest, manifest] = uploadSpy.mock.calls[0];
     expect(dest).toBe(ROOT);
     expect(manifest.files.map((f) => f.rel)).toEqual(['dropped.txt']);
-
-    // The footer shows the abort control and a transient upload status.
-    await waitFor(() => expect(screen.getByLabelText('Abort upload')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText(/Uploading/i)).toBeInTheDocument());
   });
 
   it('rejects a drop that carries a folder path (webkitRelativePath)', async () => {
@@ -1296,7 +1306,6 @@ async function dropFilesViaFastPath(files: File[]): Promise<void> {
     await openAndRender();
     await dropFiles([]);
     expect(uploadSpy).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Abort upload')).not.toBeInTheDocument();
   });
 
    it('accepts the dragover so drops from outside the browser land on the window', async () => {
@@ -1461,7 +1470,6 @@ describe('Window toolbar upload — file picker', () => {
     await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(1));
     const [, manifest] = uploadSpy.mock.calls[0];
     expect(manifest.files.map((f) => f.rel)).toEqual(['single.txt']);
-    await waitFor(() => expect(screen.getByLabelText('Abort upload')).toBeInTheDocument());
   });
 
   it('uploads a mix of files and directories chosen from the picker', async () => {
@@ -1500,9 +1508,9 @@ describe('Window upload — ingest progress', () => {
     fireEvent.change(input);
   }
 
-  it('reports ingest progress in the footer while chunks are still being sent', async () => {
+  it('starts upload and hands off to taskbar for progress', async () => {
     // Two files, each one chunk. The second chunk hangs so the session stays in
-    // staging with the first chunk present → the footer reports 50%.
+    // staging with the first chunk present.
     (uploadChunk as Mock).mockImplementation((_taskID, fileIdx) =>
       fileIdx === 1
         ? new Promise<void>(() => {})
@@ -1510,7 +1518,9 @@ describe('Window upload — ingest progress', () => {
     );
     await openAndRender();
     pickFiles([new File(['one'], 'a.bin'), new File(['two'], 'b.bin')]);
-    await waitFor(() => expect(screen.getByLabelText('Upload progress')).toHaveTextContent('50%'));
+    // The window no longer shows ingest progress; it hands off to the taskbar.
+    // Just verify the upload was started (createUpload was called).
+    await waitFor(() => expect(createUpload).toHaveBeenCalledTimes(1));
   });
 });
 

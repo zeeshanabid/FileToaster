@@ -17,7 +17,7 @@ import {
   type UploadMeta
 } from '$lib/fs/api';
 import { archiveStem } from '$lib/fs/archive';
-import { uploadStoreKey } from '$lib/fs/upload';
+import { uploadStoreKey, uploadManager, type IngestState, globalChunkSpan } from '$lib/fs/upload';
 import { reloadWindowsForPath } from '$lib/store/windows';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
@@ -48,6 +48,183 @@ export const finishedCount: Readable<number> = derived(taskList, ($list, set) =>
 );
 export const failedCount: Readable<number> = derived(taskList, ($list, set) =>
   set($list.filter((t) => t.status === 'failed').length)
+);
+
+// Convert an upload staging session to Task-like objects for display in the taskbar
+// Returns an array because we now create separate tasks for staging and finalizing
+export function ingestStateToTasks(state: IngestState): Task[] {
+  const totalChunks = state.present.length;
+  const doneChunks = state.present.filter((p) => p).length;
+  const progress = totalChunks > 0 ? Math.round((doneChunks / totalChunks) * 100) : 0;
+  
+  // Calculate total bytes and done bytes
+  const totalBytes = state.files.reduce((sum, f) => sum + f.size, 0);
+  const doneBytes = state.files.reduce((sum, f, idx) => {
+    const span = globalChunkSpan(state.files, idx);
+    const fileDoneChunks = state.present.slice(span.start, span.end).filter((p) => p).length;
+    const fileTotalChunks = span.end - span.start;
+    return sum + Math.round((fileDoneChunks / fileTotalChunks) * f.size);
+  }, 0);
+  
+  // Calculate files done/total (a file is "done" when all its chunks are present)
+  const filesTotal = state.files.length;
+  const filesDone = state.files.filter((_, idx) => {
+    const span = globalChunkSpan(state.files, idx);
+    return state.present.slice(span.start, span.end).every((p) => p);
+  }).length;
+  
+  // Calculate upload speed (bytes per second)
+  const elapsedSec = (Date.now() - state.startTime) / 1000;
+  const ratePerSec = elapsedSec > 0 ? Math.round(state.bytesSent / elapsedSec) : 0;
+  
+  const tasks: Task[] = [];
+  const baseCreated = new Date(state.startTime).toISOString();
+  const now = new Date().toISOString();
+  
+  if (state.phase === 'staging') {
+    // Staging task - shows upload progress with speed
+    tasks.push({
+      id: `staging-${state.taskID}`,
+      type: 'upload',
+      status: 'running',
+      progress,
+      created: baseCreated,
+      updated: now,
+      error: state.error ?? undefined,
+      bytes: {
+        total: totalBytes,
+        done: doneBytes,
+        filesTotal,
+        filesDone,
+        ratePerSec
+      },
+      meta: {
+        staging: state.taskID,
+        dest: state.dest,
+        phase: 'staging',
+        files: state.files.length
+      } as UploadMeta
+    });
+  } else if (state.phase === 'finalizing') {
+    // Finalizing task - shows finalizing progress
+    tasks.push({
+      id: `finalizing-${state.taskID}`,
+      type: 'upload',
+      status: 'running',
+      progress: 0, // finalizing doesn't have chunk progress
+      created: baseCreated,
+      updated: now,
+      error: state.error ?? undefined,
+      bytes: {
+        total: totalBytes,
+        done: totalBytes,
+        filesTotal,
+        filesDone,
+        ratePerSec: 0
+      },
+      meta: {
+        staging: state.taskID,
+        dest: state.dest,
+        phase: 'finalizing',
+        files: state.files.length
+      } as UploadMeta
+    });
+  } else if (state.phase === 'cancelled' || state.phase === 'failed') {
+    // A terminal-but-resumable session stays in the taskbar so the user can
+    // resume it (the RunningTaskIcon shows a Resume button for these).
+    tasks.push({
+      id: `staging-${state.taskID}`,
+      type: 'upload',
+      status: state.phase === 'cancelled' ? 'cancelled' : 'failed',
+      progress,
+      created: baseCreated,
+      updated: now,
+      error: state.error ?? undefined,
+      bytes: {
+        total: totalBytes,
+        done: doneBytes,
+        filesTotal,
+        filesDone,
+        ratePerSec: 0
+      },
+      meta: {
+        staging: state.taskID,
+        dest: state.dest,
+        phase: state.phase,
+        files: state.files.length
+      } as UploadMeta
+    });
+  }
+  
+  return tasks;
+}
+
+// uploadSessionVisible reports whether a session should be shown in the taskbar.
+// Terminal-but-resumable sessions (cancelled/failed) stay visible so they can be
+// resumed; a session that finished or was cleared is gone from the map entirely.
+export function uploadSessionVisible(state: IngestState): boolean {
+  return (
+    state.phase === 'staging' ||
+    state.phase === 'finalizing' ||
+    state.phase === 'cancelled' ||
+    state.phase === 'failed'
+  );
+}
+
+// Reactive store for upload staging sessions (converted to Task-like objects)
+function createUploadStagingTasksStore(): Readable<Task[]> {
+  const { subscribe, set } = writable<Task[]>([]);
+  
+  const unsubscribe = uploadManager.subscribe(() => {
+    const allTasks: Task[] = [];
+    uploadManager.sessions.forEach((state) => {
+      if (uploadSessionVisible(state)) {
+        allTasks.push(...ingestStateToTasks(state));
+      }
+    });
+    set(allTasks);
+  });
+  
+  // Initial population
+  const allTasks: Task[] = [];
+  uploadManager.sessions.forEach((state) => {
+    if (uploadSessionVisible(state)) {
+      allTasks.push(...ingestStateToTasks(state));
+    }
+  });
+  set(allTasks);
+  
+  return {
+    subscribe,
+    // Cleanup on last unsubscribe (though in practice this lives for the app lifetime)
+  };
+}
+
+export const uploadStagingTasks: Readable<Task[]> = createUploadStagingTasksStore();
+
+// Auto-open taskbar panel when new tasks start
+export const taskPanelOpen = writable(false);
+
+// Combined task list: SSE tasks + upload staging tasks
+export const combinedTaskList: Readable<Task[]> = derived(
+  [taskList, uploadStagingTasks],
+  ([$taskList, $uploadStagingTasks]) => {
+    // Merge, with upload staging tasks appearing first (they're more immediate)
+    const merged = [...$uploadStagingTasks, ...$taskList];
+    // Sort by creation time (oldest first)
+    return merged.sort((a, b) => Date.parse(a.created) - Date.parse(b.created));
+  }
+);
+
+// Re-export combined counts
+export const combinedRunningCount: Readable<number> = derived(combinedTaskList, ($list, set) =>
+  set($list.filter((t) => t.status === 'running').length)
+);
+export const combinedQueuedCount: Readable<number> = derived(combinedTaskList, ($list, set) =>
+  set($list.filter((t) => t.status === 'queued').length)
+);
+export const combinedActiveCount: Readable<number> = derived(combinedTaskList, ($list, set) =>
+  set($list.filter((t) => t.status === 'running' || t.status === 'queued').length)
 );
 
 // `clipboard` holds the paths the user has copied so a paste can reference them.
@@ -227,6 +404,12 @@ function handleMessage(message: string) {
   const task = parseSSEMessage(message);
   if (!task) return;
   tasksMap.update((map) => ({ ...map, [task.id]: task }));
+  
+  // Auto-open task panel when new task arrives
+  if (task.status === 'running' || task.status === 'queued') {
+    taskPanelOpen.set(true);
+  }
+  
   // An upload that reached a terminal status no longer has a resumable server
   // session; drop its remembered local handle so a stale localStorage entry
   // never triggers a restart prompt later.
@@ -234,10 +417,15 @@ function handleMessage(message: string) {
     task.type === 'upload' &&
     (task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled')
   ) {
-    try {
-      localStorage.removeItem(uploadStoreKey(task.id));
-    } catch {
-      // ignore
+    // Only remove from localStorage on successful upload (finished)
+    if (task.status === 'finished') {
+      try {
+        localStorage.removeItem(uploadStoreKey(task.id));
+      } catch {
+        // ignore
+      }
+      // Clear the staging/finalizing local tasks by the finalize task ID
+      uploadManager.clearByFinalizeID(task.id);
     }
   }
   // When a task reaches a terminal state, reload any open windows showing

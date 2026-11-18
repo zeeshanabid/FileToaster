@@ -24,6 +24,7 @@ import {
   uploadChunk as apiUploadChunk,
   getUploadStatus as apiGetUploadStatus,
   cancelUpload as apiCancelUpload,
+  resumeUpload as apiResumeUpload,
   chunkCountForFile,
   DEFAULT_CHUNK_SIZE
 } from '$lib/fs/api';
@@ -36,6 +37,7 @@ export interface UploadApi {
   uploadChunk(taskID: string, fileIdx: number, chunkIdx: number, blob: Blob): Promise<UploadChunkResponse>;
   getUploadStatus(taskID: string): Promise<UploadStatus>;
   cancelUpload(taskID: string): Promise<void>;
+  resumeUpload(taskID: string): Promise<UploadStatus>;
 }
 
 // ManifestEntry is what the window passes for a selected row: a path with its
@@ -211,6 +213,7 @@ interface PersistedUpload {
   dirs: string[];
   present: boolean[];
   received: number[][];
+  phase: IngestState['phase'];
 }
 
 // IngestState tracks one in-progress upload session on the client.
@@ -229,16 +232,23 @@ export interface IngestState {
   phase: 'staging' | 'finalizing' | 'done' | 'failed' | 'cancelled';
   error: string | null;
   finalizeID: string | null;
+  // Speed tracking
+  bytesSent: number;
+  startTime: number;
+  lastNotifyTime: number;
+  lastBytesSent: number;
 }
 
 const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
  
 // UploadManager owns the in-memory upload sessions and drives chunk upload,
-// resume, retry and abort. It is a plain class (no Svelte) so svelte-check type
-// checks it as ordinary TypeScript.
-export class UploadManager {
-  private sessions = new Map<string, IngestState>();
-  // Global chunk-upload concurrency pool shared by every session. `inflight`
+  // resume, retry and abort. It is a plain class (no Svelte) so svelte-check type
+  // checks it as ordinary TypeScript.
+  export class UploadManager {
+    sessions = new Map<string, IngestState>();
+    // Subscribers for reactive updates when sessions change
+    private subscribers = new Set<() => void>();
+    // Global chunk-upload concurrency pool shared by every session. `inflight`
   // counts chunk PUTs currently on the network and `waiters` queues the chunks
   // waiting for a slot. Capping the pool here (rather than per file, as a
   // per-session pool did) is what bounds the number of simultaneous upload
@@ -246,14 +256,18 @@ export class UploadManager {
   // limit applies across all files and sessions, never per file. This is the
   // fix for net::ERR_INSUFFICIENT_RESOURCES when uploading large files.
   private inflight = 0;
-  private waiters: Array<() => void> = [];
+  // Each waiter carries the session that queued it, so a release can skip the
+  // waiters left behind by a cancelled session instead of waking them (which
+  // would starve a later upload's chunks — see release()).
+  private waiters: Array<{ resolve: () => void; state: IngestState }> = [];
 
   constructor(
     private api: UploadApi = {
       createUpload: apiCreateUpload,
       uploadChunk: apiUploadChunk,
       getUploadStatus: apiGetUploadStatus,
-      cancelUpload: apiCancelUpload
+      cancelUpload: apiCancelUpload,
+      resumeUpload: apiResumeUpload
     },
     private concurrency = 8,
     private maxRetries = 3,
@@ -273,6 +287,16 @@ export class UploadManager {
     }
   }
 
+  // Subscribe to session changes for reactive UI updates
+  subscribe(fn: () => void): () => void {
+    this.subscribers.add(fn);
+    return () => this.subscribers.delete(fn);
+  }
+
+  private notify(): void {
+    for (const fn of this.subscribers) fn();
+  }
+
   // acquire waits for a free slot in the global pool, then reserves it and
   // returns true. It returns false (without taking a slot) as soon as the
   // session is cancelled, so an aborted upload stops waking and slicing chunks
@@ -285,16 +309,40 @@ export class UploadManager {
         this.inflight++;
         return true;
       }
-      await new Promise<void>((resolve) => this.waiters.push(resolve));
+      await new Promise<void>((resolve) => this.waiters.push({ resolve, state }));
     }
     return false;
   }
 
-  // release frees a slot and wakes the next waiting chunk, if any.
+  // release frees a slot and wakes the next waiter whose session is still
+  // active. Waiters belonging to a cancelled session are dropped instead of
+  // woken: waking them would consume the release (they return immediately) and
+  // leave a later upload's chunks stuck behind them forever — the bug that made
+  // a re-upload hang in the same tab until a refresh cleared the pool.
   private release(): void {
     this.inflight--;
-    const next = this.waiters.shift();
-    if (next) next();
+    while (this.waiters.length) {
+      const next = this.waiters.shift()!;
+      if (next.state.phase !== 'cancelled') {
+        next.resolve();
+        return;
+      }
+    }
+  }
+
+  // dropWaitersFor removes every waiter belonging to `state` and wakes it, so the
+  // suspended acquire() re-checks the phase and returns. Called when a session is
+  // aborted or resumed so its pending chunks do not linger in (and block) the pool.
+  private dropWaitersFor(state: IngestState): void {
+    const keep: Array<{ resolve: () => void; state: IngestState }> = [];
+    for (const w of this.waiters) {
+      if (w.state === state) {
+        w.resolve();
+      } else {
+        keep.push(w);
+      }
+    }
+    this.waiters = keep;
   }
 
   // startUpload creates a server session for `dest`, persists the handle, and
@@ -335,10 +383,15 @@ export class UploadManager {
       present: new Array(total).fill(false),
       phase: 'staging',
       error: null,
-      finalizeID: null
+      finalizeID: null,
+      bytesSent: 0,
+      startTime: Date.now(),
+      lastNotifyTime: Date.now(),
+      lastBytesSent: 0
     };
     this.sessions.set(taskID, state);
     this.persist(state);
+    this.notify();
     void this.uploadAll(state);
     return taskID;
   }
@@ -365,11 +418,69 @@ export class UploadManager {
       present: persisted.present,
       phase: 'staging',
       error: null,
-      finalizeID: null
+      finalizeID: null,
+      bytesSent: persisted.present.filter((p) => p).length * persisted.chunkSize, // approximate
+      startTime: Date.now(),
+      lastNotifyTime: Date.now(),
+      lastBytesSent: 0
     };
     this.sessions.set(taskID, state);
+    this.notify();
+    // Clear any server-side abort before re-sending the missing chunks so the
+    // server accepts them again. A session gone server-side (restart/swept)
+    // rejects here; the re-sent chunks then 404 and the session settles as failed.
+    try {
+      await this.api.resumeUpload(taskID);
+    } catch {
+      // fall through — uploadAll surfaces any real failure via the session state
+    }
     void this.uploadAll(state);
     return true;
+  }
+
+  // loadPersisted restores every remembered session from localStorage into the
+  // in-memory map as a paused (cancelled) session, so a page refresh surfaces the
+  // upload in the taskbar with a Resume control instead of silently dropping it.
+  // No chunks are re-sent until the user resumes. Sessions whose persisted phase
+  // is finalizing/done are skipped: their work lives server-side and arrives via
+  // the task stream.
+  loadPersisted(): void {
+    if (!browserAvailable()) return;
+    let changed = false;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(UPLOAD_STORAGE_PREFIX)) continue;
+      const taskID = key.slice(UPLOAD_STORAGE_PREFIX.length);
+      if (this.sessions.has(taskID)) continue;
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      let persisted: PersistedUpload;
+      try {
+        persisted = JSON.parse(raw) as PersistedUpload;
+      } catch {
+        continue;
+      }
+      if (persisted.phase === 'finalizing' || persisted.phase === 'done') continue;
+      const state: IngestState = {
+        taskID: persisted.taskID,
+        dest: persisted.dest,
+        chunkSize: persisted.chunkSize,
+        files: persisted.files,
+        dirs: persisted.dirs,
+        received: persisted.received.map((bytes) => new Uint8Array(bytes)),
+        present: persisted.present,
+        phase: 'cancelled',
+        error: null,
+        finalizeID: null,
+        bytesSent: persisted.present.filter((p) => p).length * persisted.chunkSize,
+        startTime: Date.now(),
+        lastNotifyTime: Date.now(),
+        lastBytesSent: 0
+      };
+      this.sessions.set(taskID, state);
+      changed = true;
+    }
+    if (changed) this.notify();
   }
 
   // abort marks the session aborted and asks the server to stop ingestion,
@@ -378,12 +489,46 @@ export class UploadManager {
     const state = this.sessions.get(taskID);
     if (!state) return;
     state.phase = 'cancelled';
+    // Drop this session's pending pool waiters so an aborted upload cannot
+    // starve a later upload's chunks (see release()).
+    this.dropWaitersFor(state);
     try {
       await this.api.cancelUpload(taskID);
     } catch {
       // A failed cancel leaves the chunks on the server; the age sweep still
       // reclaims the staging dir. Ignore so the UI can report the abort.
     }
+    this.persist(state);
+    this.notify();
+  }
+
+  // resumeSession resumes an aborted or failed session that is already in memory.
+  // It keeps the already-received chunks and continues uploading the missing ones.
+  async resumeSession(taskID: string): Promise<boolean> {
+    const state = this.sessions.get(taskID);
+    if (!state) return false;
+    if (state.phase !== 'cancelled' && state.phase !== 'failed') return false;
+    // Drop any waiters still queued from the previous attempt so the resumed
+    // chunks do not duplicate them (and are not stuck behind them).
+    this.dropWaitersFor(state);
+    // Clear the server-side abort so the missing chunks are accepted again. An
+    // aborted session refuses chunks until this succeeds; if the session is gone
+    // server-side the re-sent chunks 404 and the session settles as failed.
+    try {
+      await this.api.resumeUpload(taskID);
+    } catch {
+      // fall through — uploadAll surfaces any real failure via the session state
+    }
+    state.phase = 'staging';
+    state.error = null;
+    // Reset start time for accurate speed calculation on resume
+    state.startTime = Date.now();
+    state.lastNotifyTime = Date.now();
+    state.lastBytesSent = state.bytesSent;
+    this.persist(state);
+    this.notify();
+    void this.uploadAll(state);
+    return true;
   }
 
   // state returns a copy of the ingest state for a session (for the window to
@@ -401,7 +546,23 @@ export class UploadManager {
   // clear forgets a session's local state (called once the finalize task is
   // terminal and its localStorage entry has been cleared).
   clear(taskID: string): void {
-    this.sessions.delete(taskID);
+    const state = this.sessions.get(taskID);
+    if (state) {
+      this.discard(state);
+    }
+    this.notify();
+  }
+
+  // clearByFinalizeID finds and clears a session by its finalize task ID.
+  // This is used when the server's finalize task finishes (its ID differs from the staging session ID).
+  clearByFinalizeID(finalizeID: string): void {
+    for (const [_, state] of this.sessions) {
+      if (state.finalizeID === finalizeID) {
+        this.discard(state);
+        this.notify();
+        return;
+      }
+    }
   }
 
   private persist(state: IngestState): void {
@@ -410,10 +571,11 @@ export class UploadManager {
       taskID: state.taskID,
       dest: state.dest,
       chunkSize: state.chunkSize,
-      files: state.files,
+      files: state.files.map((f) => ({ rel: f.rel, size: f.size, chunks: f.chunks })),
       dirs: state.dirs,
       present: state.present,
-      received: state.received.map((bytes) => Array.from(bytes))
+      received: state.received.map((bytes) => Array.from(bytes)),
+      phase: state.phase
     };
     try {
       localStorage.setItem(uploadStoreKey(state.taskID), JSON.stringify(persisted));
@@ -485,11 +647,15 @@ export class UploadManager {
         const globalIndex = globalChunkFor(state.files, fileIdx, slice.index);
         const resp = await this.api.uploadChunk(state.taskID, fileIdx, slice.index, blob);
         state.present[globalIndex] = true;
+        // Track bytes sent for speed calculation
+        state.bytesSent += blob.size;
         this.persist(state);
+        this.notify();
         if (resp.taskID) {
           state.finalizeID = resp.taskID;
           state.phase = 'finalizing';
           this.persist(state);
+          this.notify();
         }
         return;
       } catch (err) {
@@ -498,6 +664,7 @@ export class UploadManager {
           state.phase = 'failed';
           state.error = err instanceof Error ? err.message : 'chunk upload failed';
           this.persist(state);
+          this.notify();
           return;
         }
         await sleep(this.retryDelayMs * 2 ** attempt);
@@ -515,6 +682,7 @@ export class UploadManager {
   private checkCompleted(state: IngestState): void {
     if (state.finalizeID) {
       state.phase = 'finalizing';
+      this.notify();
       return;
     }
     if (state.phase !== 'staging') return;
@@ -525,6 +693,7 @@ export class UploadManager {
       // dropped the session. The finalize task will appear via SSE; the label
       // (phase "finalizing") picks it up from the terminal task meta.
       state.phase = 'finalizing';
+      this.notify();
     }
   }
 }
