@@ -1071,6 +1071,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     if (!win) return;
     const root = win.rootPath;
     if (path !== root && !path.startsWith(root + '/')) return;
+    // Leaving the current folder discards any prior selection so the toolbar
+    // reflects only the newly opened directory (its action buttons re-enable
+    // based on an empty selection and the info badge resets) and nothing stays
+    // highlighted in the main view.
+    clearSelection();
     try {
       mainLoading = true;
       mainError = null;

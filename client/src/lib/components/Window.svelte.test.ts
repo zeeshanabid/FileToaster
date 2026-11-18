@@ -735,6 +735,29 @@ describe('Window selection & information dialog', () => {
     expect(infoButton().querySelector('.badge')).toBeNull();
   });
 
+  it('clears the selection and resets the toolbar when navigating to another folder', async () => {
+    await openAndRender();
+    await clickRow('notes.txt', 'ctrl');
+    await clickRow('myfiles.zip', 'ctrl');
+    // Two items are selected: the badge counts them and action buttons enable.
+    expect(badgeCount()).toBe(2);
+    expect(screen.getByLabelText('Delete')).not.toBeDisabled();
+
+    // Navigate into a different folder via the tree.
+    await clickNode('/root/documents');
+
+    // Nothing stays selected: the info badge resets to nothing.
+    expect(infoButton().querySelector('.badge')).toBeNull();
+    // No row in the (new) listing is styled as selected.
+    expect(screen.getByRole('table').querySelector('.row.selected')).toBeNull();
+    // The toolbar action buttons disable again with an empty selection.
+    expect(screen.getByLabelText('Delete')).toBeDisabled();
+    expect(screen.getByLabelText('Copy')).toBeDisabled();
+    expect(screen.getByLabelText('Cut')).toBeDisabled();
+    expect(screen.getByLabelText('Compress')).toBeDisabled();
+    expect(screen.getByLabelText('Rename')).toBeDisabled();
+  });
+
   it('opens the information dialog and calls fetchInfo with selected paths', async () => {
     await openAndRender();
     await clickRow('notes.txt');
