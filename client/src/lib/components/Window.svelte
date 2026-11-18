@@ -5,6 +5,7 @@
     closeWindow,
     displayName,
     focusWindow,
+    isActiveWindow,
     openWindow,
     reloadWindowsForPath,
     toggleMinimize,
@@ -66,12 +67,14 @@ import { formatSize, formatDate } from '$lib/fs/format';
     });
     void navigate(winProp.path);
     document.addEventListener('click', dismissUploadMenu);
+    window.addEventListener('keydown', onWindowKeydown);
     // Listen for reload events triggered by task completion
     window.addEventListener('filetoaster:reload', onReloadEvent as EventListener);
   });
   onDestroy(() => {
     stop?.();
     document.removeEventListener('click', dismissUploadMenu);
+    window.removeEventListener('keydown', onWindowKeydown);
     window.removeEventListener('filetoaster:reload', onReloadEvent as EventListener);
   });
 
@@ -81,6 +84,7 @@ import { formatSize, formatDate } from '$lib/fs/format';
   let frame = $state(0);
 
   // --- geometry: drag (header) and resize (bottom-right handle) ---
+  let rootEl: HTMLElement | null = $state(null);
   let pos = $state<{ x: number; y: number } | null>(null);
   let dragging = $state(false);
   let resizeStart = $state({ x: 0, y: 0, w: 0, h: 0, tree: 0 });
@@ -159,6 +163,9 @@ import { formatSize, formatDate } from '$lib/fs/format';
   let entries = $state<Entry[]>([]);
   let mainLoading = $state(false);
   let mainError = $state<string | null>(null);
+  // Bound to the scrolling listing container so keyboard navigation can keep
+  // the cursor row in view (scoped to this window, never another one).
+  let contentEl: HTMLElement | null = $state(null);
 
   type SortKey = 'name' | 'size' | 'created' | 'updated';
   const SORT_KEYS: SortKey[] = ['name', 'size', 'created', 'updated'];
@@ -182,6 +189,12 @@ import { formatSize, formatDate } from '$lib/fs/format';
   // selection across the visible (sorted) order.
   let selected = $state<Set<string>>(new Set());
   let lastClicked: string | null = $state(null);
+  // `cursor` is the row the keyboard is currently on (the active row for
+  // arrow-key navigation). `kbAnchor` is the stable anchor for shift+arrow
+  // range extension, kept separately from `lastClicked` so extending the range
+  // repeatedly from the keyboard does not drift the anchor.
+  let cursor: string | null = $state(null);
+  let kbAnchor: string | null = $state(null);
 
   // --- context (right-click) menu state ---
   // `menuKind` is one of 'empty' | 'file' | 'folder' | 'multi'. `menuSelection`
@@ -200,6 +213,8 @@ import { formatSize, formatDate } from '$lib/fs/format';
   function selectOnly(p: string) {
     selected = new Set([p]);
     lastClicked = p;
+    cursor = p;
+    kbAnchor = p;
   }
   function togglePath(p: string) {
     const next = new Set(selected);
@@ -212,6 +227,8 @@ import { formatSize, formatDate } from '$lib/fs/format';
     }
     selected = next;
     lastClicked = p;
+    cursor = p;
+    kbAnchor = p;
   }
   function rangeSelect(anchor: string, target: string) {
     const order = rows.map((r) => r.path);
@@ -225,6 +242,10 @@ import { formatSize, formatDate } from '$lib/fs/format';
     const hi = Math.max(i, j);
     selected = new Set(order.slice(lo, hi + 1));
     lastClicked = target;
+    cursor = target;
+    // Keep the original range start stable so repeated shift-clicks (and
+    // shift+arrow afterwards) extend from where the range began.
+    kbAnchor = anchor;
   }
   function onRowClick(e: MouseEvent, row: Entry) {
     if (e.ctrlKey || e.metaKey) {
@@ -256,6 +277,8 @@ import { formatSize, formatDate } from '$lib/fs/format';
     if (!win || entries.length === 0) return;
     selected = new Set(entries.map((it) => it.path));
     lastClicked = null;
+    cursor = null;
+    kbAnchor = null;
   }
 
   // --- context (right-click) menu -------------------------------------------
@@ -529,6 +552,8 @@ import { formatSize, formatDate } from '$lib/fs/format';
     function clearSelection() {
     selected = new Set();
     lastClicked = null;
+    cursor = null;
+    kbAnchor = null;
   }
 
   // --- cut + move: paste branches to a tracked move task when cutMode is set ---
@@ -1118,6 +1143,204 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     void navigate(parent);
   }
 
+  // --- keyboard shortcuts (per window) -------------------------------------
+  // Every open window listens, but only the active (top-most, non-minimized)
+  // window reacts, so arrows, Enter, select-all and the ctrl+alt actions never
+  // leak into another open file window.
+  function isTextInputTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || typeof el.tagName !== 'string') return false;
+    const tag = el.tagName;
+    return (
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      el.isContentEditable === true
+    );
+  }
+
+  // Enter / arrow handling must not hijack a focused native control (a toolbar
+  // button still activates on Enter; links keep their own keyboard behavior).
+  function isNativeControlTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (isTextInputTarget(target)) return true;
+    if (!el || typeof el.tagName !== 'string') return false;
+    return el.tagName === 'BUTTON' || el.tagName === 'A';
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (!win || win.minimized) return;
+    // A key event targeted inside this window only drives this window; events
+    // that arrive from elsewhere (body/document) drive the active window and
+    // are ignored by every other one, so windows never affect each other.
+    const targetNode = e.target as Node | null;
+    const targetEl = e.target as HTMLElement | null;
+    const insideThisWindow = !!targetNode && !!rootEl && rootEl.contains(targetNode);
+    const insideOtherWindow =
+      !insideThisWindow &&
+      !!targetEl &&
+      typeof targetEl.closest === 'function' &&
+      !!targetEl.closest('.window');
+    if (insideOtherWindow) return;
+    if (!insideThisWindow && !isActiveWindow(winProp.id)) return;
+    if (isTextInputTarget(e.target)) return;
+    // While a modal or menu belonging to this window is open, the background
+    // must not react to shortcuts.
+    if (
+      infoOpen ||
+      deleteOpen ||
+      moveOpen ||
+      dropChoiceOpen ||
+      compressOpen ||
+      decompressOpen ||
+      menuOpen ||
+      uploadMenuOpen
+    ) {
+      return;
+    }
+
+    // Ctrl+Alt is reported as AltGr on many layouts/browsers, where `e.key` is the
+    // *character* the combination produces (e.g. "®" for R, "@" for Q) rather
+    // than the letter. The physical `e.code` ("KeyR") is layout-independent, so
+    // prefer it and only fall back to an ASCII `e.key`.
+    function shortcutLetter(e: KeyboardEvent): string | null {
+      if (typeof e.code === 'string' && /^Key[A-Z]$/.test(e.code)) {
+        return e.code.slice(3).toLowerCase();
+      }
+      if (typeof e.key === 'string' && e.key.length === 1) {
+        const lower = e.key.toLowerCase();
+        if (lower >= 'a' && lower <= 'z') return lower;
+      }
+      return null;
+    }
+
+    // Ctrl+Alt combinations are the app's file actions.
+    if (e.ctrlKey && e.altKey && !e.metaKey) {
+      if (e.key === 'ArrowUp' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        goUp();
+        return;
+      }
+      switch (shortcutLetter(e)) {
+        case 'r':
+          e.preventDefault();
+          void reload();
+          return;
+        case 'c':
+          e.preventDefault();
+          copySelection();
+          return;
+        case 'v':
+          e.preventDefault();
+          paste();
+          return;
+        case 'x':
+          e.preventDefault();
+          cutSelection();
+          return;
+        case 'd':
+          e.preventDefault();
+          startDelete();
+          return;
+        case 'a':
+          e.preventDefault();
+          selectAll();
+          return;
+        case 'i':
+          e.preventDefault();
+          void openInfo();
+          return;
+        case 'l':
+          e.preventDefault();
+          void confirmDownload();
+          return;
+        case 'n':
+          e.preventDefault();
+          startNewDir();
+          return;
+        case 't':
+          e.preventDefault();
+          taskPanelOpen.update((open) => !open);
+          return;
+        default:
+          return;
+      }
+    }
+
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (isNativeControlTarget(e.target)) return;
+
+    // Arrow navigation belongs to the main listing only, never the tree view.
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('.tree')) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveCursor(1, e.shiftKey);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveCursor(-1, e.shiftKey);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      openCursorDirectory();
+    }
+  }
+
+  // Move the keyboard cursor one row up/down. A plain move selects exactly that
+  // row; a shift move extends the selection from the stable anchor (kbAnchor).
+  function moveCursor(delta: number, extend: boolean) {
+    if (rows.length === 0) return;
+    const current = cursor ? rows.findIndex((r) => r.path === cursor) : -1;
+    const next =
+      current === -1
+        ? delta > 0
+          ? 0
+          : rows.length - 1
+        : Math.min(rows.length - 1, Math.max(0, current + delta));
+    const target = rows[next];
+    if (!target) return;
+    const previous = current === -1 ? null : rows[current];
+    cursor = target.path;
+    if (!extend) {
+      selected = new Set([target.path]);
+      lastClicked = target.path;
+      kbAnchor = target.path;
+    } else {
+      if (kbAnchor === null) kbAnchor = previous ? previous.path : target.path;
+      const anchorIndex = rows.findIndex((r) => r.path === kbAnchor);
+      if (anchorIndex === -1) {
+        selected = new Set([target.path]);
+        lastClicked = target.path;
+        kbAnchor = target.path;
+      } else {
+        const lo = Math.min(anchorIndex, next);
+        const hi = Math.max(anchorIndex, next);
+        selected = new Set(rows.slice(lo, hi + 1).map((r) => r.path));
+        lastClicked = target.path;
+      }
+    }
+    scrollPathIntoView(target.path);
+  }
+
+  // Enter opens the directory under the keyboard cursor (or the single selected
+  // directory); Enter on a file is intentionally a no-op.
+  function openCursorDirectory() {
+    const candidate = cursor ? rows.find((r) => r.path === cursor) : undefined;
+    const single = selected.size === 1 ? rows.find((r) => selected.has(r.path)) : undefined;
+    const target = candidate ?? single;
+    if (target && target.type === 'dir') void navigate(target.path);
+  }
+
+  function scrollPathIntoView(path: string) {
+    requestAnimationFrame(() => {
+      if (!contentEl) return;
+      const row = [...contentEl.querySelectorAll<HTMLElement>('[data-row-path]')].find(
+        (el) => el.getAttribute('data-row-path') === path
+      );
+      row?.scrollIntoView?.({ block: 'nearest' });
+    });
+  }
+
   let reloading = $state(new Set<string>());
 
   // Reload the currently opened directory from the server, bypassing cache, so
@@ -1388,6 +1611,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     class:minimized={winProp.minimized}
     role="dialog"
     tabindex="0"
+    bind:this={rootEl}
     aria-label={title}
     style="left:{pos ? pos.x : winProp.x}px; top:{pos ? pos.y : winProp.y}px; width:{size.width}px; height:{size.height}px; z-index:{winProp.zIndex};"
     onmousedown={() => focusWindow(winProp.id)}
@@ -1682,7 +1906,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     ></div>
 
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="content" onclick={clearSelectionIfBackground} oncontextmenu={onEmptyContextMenu}>
+    <div class="content" bind:this={contentEl} onclick={clearSelectionIfBackground} oncontextmenu={onEmptyContextMenu}>
       {#if mainLoading && entries.length === 0}
         <div class="empty">Loading…</div>
       {:else if mainError}
@@ -1725,6 +1949,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
                   class="row"
                   class:selected={selected.has(row.path)}
                   class:dir={row.type === 'dir'}
+                  data-row-path={row.path}
                   draggable={selected.has(row.path)}
                    onclick={(e) => onRowClick(e, row)}
                    ondblclick={() => (row.type === 'dir' && navigate(row.path))}

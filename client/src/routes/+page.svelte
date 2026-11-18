@@ -7,6 +7,7 @@
   import Taskbar from '$lib/components/Taskbar.svelte';
   import Window from '$lib/components/Window.svelte';
   import ChangePassword from '$lib/components/ChangePassword.svelte';
+  import ShortcutsOverlay from '$lib/components/ShortcutsOverlay.svelte';
   import { windows } from '$lib/store/windows';
   import { auth, login, checkSession } from '$lib/store/auth';
   import { uploadManager } from '$lib/fs/upload';
@@ -61,6 +62,7 @@
     {/each}
     <Taskbar onChangePassword={openChangePassword} />
     <ChangePassword open={showChangePassword} on:close={closeChangePassword} />
+    <ShortcutsOverlay />
   </div>
 {:else if $auth.status === 'unauthenticated'}
   <div class="login-shell">

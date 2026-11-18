@@ -1,4 +1,4 @@
-import { writable, type Writable } from 'svelte/store';
+import { writable, get, type Writable } from 'svelte/store';
 import { basename, isWithin } from '$lib/fs/paths';
 
 export interface AppWindow {
@@ -95,6 +95,17 @@ export function reloadWindowsForPath(targetPath: string): void {
 
 export function focusWindow(id: string) {
   bringToFront(id);
+}
+
+// isActiveWindow reports whether `id` is the window that should receive
+// keyboard shortcuts: the top-most window that is not minimized. Shortcuts are
+// per window, so only this one reacts to arrows / Enter / ctrl+alt bindings and
+// the other open file windows are left untouched.
+export function isActiveWindow(id: string): boolean {
+  const visible = get(windows).filter((w) => !w.minimized);
+  if (visible.length === 0) return false;
+  const top = visible.reduce((a, b) => (b.zIndex >= a.zIndex ? b : a));
+  return top.id === id;
 }
 
 export function closeWindow(id: string) {

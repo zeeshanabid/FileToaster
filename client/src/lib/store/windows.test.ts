@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { get, writable } from 'svelte/store';
-import { openWindow, closeWindow, updateWindow, findWindowsByPath, reloadWindowsForPath, displayName, windows, type AppWindow } from './windows';
+import { openWindow, closeWindow, updateWindow, findWindowsByPath, reloadWindowsForPath, displayName, isActiveWindow, focusWindow, toggleMinimize, windows, type AppWindow } from './windows';
 
 // Reset the module-level windows store between tests so state does not leak.
 function resetWindows() {
@@ -130,5 +130,41 @@ describe('filesystem root windows', () => {
     const win = get(windows).find((w) => w.rootPath === '/')!;
     expect(findWindowsByPath('/data/docs')).toContain(win.id);
     closeWindow(win.id);
+  });
+});
+
+describe('isActiveWindow', () => {
+  beforeEach(() => {
+    windows.set([]);
+  });
+
+  it('reports false when no window is open', () => {
+    expect(isActiveWindow('missing')).toBe(false);
+  });
+
+  it('treats the most recently created window as active', () => {
+    openWindow({ name: 'A', path: '/active/a' });
+    openWindow({ name: 'B', path: '/active/b' });
+    const [a, b] = get(windows);
+    expect(isActiveWindow(b.id)).toBe(true);
+    expect(isActiveWindow(a.id)).toBe(false);
+  });
+
+  it('follows focus when a window is brought to the front', () => {
+    openWindow({ name: 'A', path: '/active/a' });
+    openWindow({ name: 'B', path: '/active/b' });
+    const [a, b] = get(windows);
+    focusWindow(a.id);
+    expect(isActiveWindow(a.id)).toBe(true);
+    expect(isActiveWindow(b.id)).toBe(false);
+  });
+
+  it('skips minimized windows when choosing the active one', () => {
+    openWindow({ name: 'A', path: '/active/a' });
+    openWindow({ name: 'B', path: '/active/b' });
+    const [a, b] = get(windows);
+    toggleMinimize(b.id);
+    expect(isActiveWindow(b.id)).toBe(false);
+    expect(isActiveWindow(a.id)).toBe(true);
   });
 });

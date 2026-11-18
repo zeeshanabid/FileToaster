@@ -32,7 +32,8 @@ import {
   submitDeleteTask,
   submitMoveTask,
   submitCompressTask,
-  submitDecompressTask
+  submitDecompressTask,
+  taskPanelOpen
 } from '$lib/store/tasks';
 
   vi.mock('$lib/fs/api', () => ({
@@ -2658,5 +2659,486 @@ describe('Window status bar — copy path button', () => {
     const copyBtn = screen.getByLabelText('Copy path');
     fireEvent.click(copyBtn);
     await waitFor(() => expect(screen.getByText('Failed to copy path.')).toBeInTheDocument());
+  });
+});
+
+// Keyboard shortcuts. Every window listens on `window`, but only the active
+// (top-most, non-minimized) window reacts; these tests cover the main-list
+// navigation and each ctrl+alt binding, plus the per-window isolation rule.
+describe('Window keyboard — arrow navigation', () => {
+  function listingRows(): HTMLElement[] {
+    return [...screen.getByRole('table').querySelectorAll('tbody tr.row')] as HTMLElement[];
+  }
+  function selectedRows(): HTMLElement[] {
+    return [...screen.getByRole('table').querySelectorAll('tbody tr.row.selected')] as HTMLElement[];
+  }
+  function selectedNames(): string[] {
+    return selectedRows().map((r) => r.getAttribute('data-row-path') ?? '');
+  }
+  function press(key: string, opts: KeyboardEventInit = {}): void {
+    fireEvent.keyDown(document.body, { key, ...opts });
+  }
+
+  it('ArrowDown selects the first row and moves down through the sorted list', async () => {
+    await openAndRender();
+    expect(selectedRows()).toHaveLength(0);
+    press('ArrowDown');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/documents']);
+    press('ArrowDown');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/photos']);
+    press('ArrowDown');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/myfiles.zip']);
+  });
+
+  it('ArrowUp moves back up and clamps at the first row', async () => {
+    await openAndRender();
+    press('ArrowDown');
+    await tick();
+    press('ArrowDown');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/photos']);
+    press('ArrowUp');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/documents']);
+    press('ArrowUp');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/documents']);
+  });
+
+  it('ArrowUp with nothing selected selects the last row', async () => {
+    await openAndRender();
+    press('ArrowUp');
+    await tick();
+    expect(selectedNames()).toEqual(['/root/notes.txt']);
+  });
+
+  it('Shift+ArrowDown extends the selection downwards from the anchor', async () => {
+    await openAndRender();
+    press('ArrowDown');
+    await tick();
+    press('ArrowDown', { shiftKey: true });
+    await tick();
+    expect(selectedNames()).toEqual(['/root/documents', '/root/photos']);
+    press('ArrowDown', { shiftKey: true });
+    await tick();
+    expect(selectedNames()).toEqual(['/root/documents', '/root/photos', '/root/myfiles.zip']);
+  });
+
+  it('Shift+ArrowUp shrinks the selection back towards the anchor', async () => {
+    await openAndRender();
+    press('ArrowDown');
+    await tick();
+    press('ArrowDown', { shiftKey: true });
+    await tick();
+    press('ArrowDown', { shiftKey: true });
+    await tick();
+    expect(selectedRows()).toHaveLength(3);
+    press('ArrowUp', { shiftKey: true });
+    await tick();
+    expect(selectedNames()).toEqual(['/root/documents', '/root/photos']);
+  });
+
+  it('keeps the cursor row scrolled into view', async () => {
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+    try {
+      await openAndRender();
+      scrollSpy.mockClear();
+      press('ArrowDown');
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    } finally {
+      scrollSpy.mockRestore();
+    }
+  });
+
+  it('ignores arrow keys while typing in an input', async () => {
+    await openAndRender();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('New directory'));
+    const input = await waitFor(() => screen.getByPlaceholderText('New directory') as HTMLInputElement);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await tick();
+    expect(selectedRows()).toHaveLength(0);
+  });
+});
+
+describe('Window keyboard — Enter opens a directory', () => {
+  function press(key: string, opts: KeyboardEventInit = {}): void {
+    fireEvent.keyDown(document.body, { key, ...opts });
+  }
+
+  it('opens the selected directory', async () => {
+    await openAndRender();
+    press('ArrowDown');
+    await tick();
+    press('Enter');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    expect(within(screen.getByRole('table')).getByText('work')).toBeInTheDocument();
+  });
+
+  it('does nothing on a selected file', async () => {
+    await openAndRender();
+    press('ArrowDown');
+    press('ArrowDown');
+    press('ArrowDown');
+    await tick();
+    expect(screen.getByRole('table').querySelector('.row.selected')?.textContent).toContain('myfiles.zip');
+    press('Enter');
+    await tick();
+    expect(currentStorePath()).toBe(ROOT);
+    expect(within(screen.getByRole('table')).getByText('notes.txt')).toBeInTheDocument();
+  });
+
+  it('does nothing when the selection is empty', async () => {
+    await openAndRender();
+    press('Enter');
+    await tick();
+    expect(currentStorePath()).toBe(ROOT);
+  });
+});
+
+describe('Window keyboard — ctrl+alt actions', () => {
+  function press(key: string, opts: KeyboardEventInit = {}): void {
+    fireEvent.keyDown(document.body, { key, ctrlKey: true, altKey: true, ...opts });
+  }
+  function clickRow(name: string): void {
+    const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+      .find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+    if (!row) throw new Error(`no row named ${name}`);
+    fireEvent.click(row);
+  }
+
+  beforeEach(() => {
+    clipboard.set([]);
+    cutMode.set(false);
+    cutEntries.set([]);
+    taskPanelOpen.set(false);
+    (submitCopyTask as Mock).mockClear();
+    (submitCopyTask as Mock).mockResolvedValue({ taskID: 'task-1' });
+    (setClipboard as Mock).mockClear();
+    (setCut as Mock).mockClear();
+    (submitDeleteTask as Mock).mockClear();
+    (submitDeleteTask as Mock).mockResolvedValue({ taskID: 'task-9' });
+    (submitDecompressTask as Mock).mockClear();
+  });
+
+  it('CTRL + ALT + R reloads the current folder', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    const listing = fetchListing as Mock;
+    listing.mockClear();
+    press('r');
+    await waitFor(() => expect(listing).toHaveBeenCalledWith('/root/documents'));
+  });
+
+  it('CTRL + ALT + C copies the selection', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    press('c');
+    await tick();
+    expect(get(clipboard)).toEqual(['/root/notes.txt']);
+    expect(setClipboard).toHaveBeenCalledWith(['/root/notes.txt']);
+  });
+
+  it('CTRL + ALT + V pastes into the open folder', async () => {
+    await openAndRender();
+    clipboard.set(['/root/notes.txt']);
+    await tick();
+    press('v');
+    await waitFor(() =>
+      expect(submitCopyTask).toHaveBeenCalledWith(['/root/notes.txt'], ROOT)
+    );
+  });
+
+  it('CTRL + ALT + X cuts the selection', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    press('x');
+    await tick();
+    expect(get(cutMode)).toBe(true);
+    expect(get(clipboard)).toEqual(['/root/notes.txt']);
+  });
+
+  it('CTRL + ALT + D opens the delete confirmation', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    press('d');
+    await waitFor(() => expect(screen.getByTestId('delete-dialog')).toBeInTheDocument());
+  });
+
+  it('CTRL + ALT + A selects every row', async () => {
+    await openAndRender();
+    press('a');
+    await tick();
+    expect(screen.getByRole('table').querySelectorAll('tbody tr.row.selected')).toHaveLength(4);
+  });
+
+  it('CTRL + ALT + L downloads the selected file', async () => {
+    const realLocation = window.location;
+    const fake = Object.create(Object.getPrototypeOf(realLocation)) as Location & { assign: MockInstance };
+    fake.assign = vi.fn();
+    Object.defineProperty(window, 'location', { value: fake, configurable: true });
+    try {
+      (downloadFile as Mock).mockReset();
+      (downloadFile as Mock).mockResolvedValue('tok-xyz');
+      await openAndRender();
+      clickRow('notes.txt');
+      await tick();
+      press('l');
+      await waitFor(() => expect(downloadFile).toHaveBeenCalledWith('/root/notes.txt'));
+      expect(fake.assign).toHaveBeenCalledWith('/downloads/tok-xyz');
+    } finally {
+      Object.defineProperty(window, 'location', { value: realLocation, configurable: true });
+    }
+  });
+
+  it('CTRL + ALT + N starts a new directory', async () => {
+    await openAndRender();
+    press('n');
+    await waitFor(() => expect(screen.getByPlaceholderText('New directory')).toBeInTheDocument());
+  });
+
+  it('CTRL + ALT + T opens and closes the tasks list', async () => {
+    await openAndRender();
+    expect(get(taskPanelOpen)).toBe(false);
+    press('t');
+    await tick();
+    expect(get(taskPanelOpen)).toBe(true);
+    press('t');
+    await tick();
+    expect(get(taskPanelOpen)).toBe(false);
+  });
+
+  it('CTRL + ALT + ArrowUp goes up one directory', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    press('ArrowUp');
+    await waitFor(() => expect(currentStorePath()).toBe(ROOT));
+  });
+});
+
+describe('Window keyboard — per-window isolation', () => {
+  async function renderTwoWindows(): Promise<{ first: HTMLElement; second: HTMLElement; ids: [string, string] }> {
+    openWindow({ name: 'First', path: ROOT });
+    openWindow({ name: 'Second', path: ROOT });
+    const list = get(windows);
+    const ids: [string, string] = [list[0].id, list[1].id];
+    renderComp(Window, { window: list[0] });
+    renderComp(Window, { window: list[1] });
+    await waitFor(() => {
+      expect(document.querySelectorAll('.window').length).toBe(2);
+      expect(document.querySelectorAll('.window tbody tr.row').length).toBe(8);
+    });
+    const els = [...document.querySelectorAll('.window')] as HTMLElement[];
+    return { first: els[0], second: els[1], ids };
+  }
+  function selectedIn(el: HTMLElement): number {
+    return el.querySelectorAll('tbody tr.row.selected').length;
+  }
+  function press(key: string, opts: KeyboardEventInit = {}): void {
+    fireEvent.keyDown(document.body, { key, ...opts });
+  }
+
+  it('only the active window responds to arrows and select all', async () => {
+    const { first, second } = await renderTwoWindows();
+    // The second window was created last, so it is on top / active.
+    press('ArrowDown');
+    await tick();
+    expect(selectedIn(first)).toBe(0);
+    expect(selectedIn(second)).toBe(1);
+
+    press('a', { ctrlKey: true, altKey: true });
+    await tick();
+    expect(selectedIn(first)).toBe(0);
+    expect(selectedIn(second)).toBe(4);
+  });
+
+  it('shift+arrow ranges stay confined to the active window', async () => {
+    const { first, second } = await renderTwoWindows();
+    press('ArrowDown');
+    await tick();
+    press('ArrowDown', { shiftKey: true });
+    await tick();
+    expect(selectedIn(first)).toBe(0);
+    expect(selectedIn(second)).toBe(2);
+  });
+
+  it('Enter only navigates the active window', async () => {
+    const { ids } = await renderTwoWindows();
+    press('ArrowDown');
+    await tick();
+    press('Enter');
+    await waitFor(() => {
+      const list = get(windows);
+      expect(list.find((w) => w.id === ids[1])?.path).toBe('/root/documents');
+      expect(list.find((w) => w.id === ids[0])?.path).toBe(ROOT);
+    });
+  });
+});
+
+describe('Window keyboard — targeted events address one window', () => {
+  async function renderTwoWindows(): Promise<{ first: HTMLElement; second: HTMLElement }> {
+    openWindow({ name: 'First', path: ROOT });
+    openWindow({ name: 'Second', path: ROOT });
+    const list = get(windows);
+    renderComp(Window, { window: list[0] });
+    renderComp(Window, { window: list[1] });
+    await waitFor(() => {
+      expect(document.querySelectorAll('.window').length).toBe(2);
+      expect(document.querySelectorAll('.window tbody tr.row').length).toBe(8);
+    });
+    const els = [...document.querySelectorAll('.window')] as HTMLElement[];
+    return { first: els[0], second: els[1] };
+  }
+  function selectedIn(el: HTMLElement): number {
+    return el.querySelectorAll('tbody tr.row.selected').length;
+  }
+
+  it('an event dispatched to a background window does not move the active one', async () => {
+    const { first, second } = await renderTwoWindows();
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    await tick();
+    expect(selectedIn(first)).toBe(1);
+    expect(selectedIn(second)).toBe(0);
+  });
+});
+
+// Regression: with Ctrl+Alt held, many browsers/layouts report the *produced*
+// character in `e.key` (AltGr behavior: "®" instead of "r", "@" instead of "q")
+// or leave it as "Unidentified". The shortcut must match the physical `e.code`
+// ("KeyR") so the letter bindings still fire.
+describe('Window keyboard — ctrl+alt letters via the physical key code', () => {
+  function pressCode(letter: string): void {
+    fireEvent.keyDown(document.body, {
+      key: 'Unidentified',
+      code: `Key${letter.toUpperCase()}`,
+      ctrlKey: true,
+      altKey: true
+    });
+  }
+  function clickRow(name: string): void {
+    const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+      .find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+    if (!row) throw new Error(`no row named ${name}`);
+    fireEvent.click(row);
+  }
+
+  beforeEach(() => {
+    clipboard.set([]);
+    cutMode.set(false);
+    cutEntries.set([]);
+    taskPanelOpen.set(false);
+    (fetchInfo as Mock).mockClear();
+    (fetchInfo as Mock).mockResolvedValue([]);
+    (submitCopyTask as Mock).mockClear();
+    (submitCopyTask as Mock).mockResolvedValue({ taskID: 'task-1' });
+    (submitDeleteTask as Mock).mockClear();
+    (submitDeleteTask as Mock).mockResolvedValue({ taskID: 'task-9' });
+  });
+
+  it('CTRL + ALT + R reloads (AltGr reports a produced character)', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    const listing = fetchListing as Mock;
+    listing.mockClear();
+    fireEvent.keyDown(document.body, { key: '®', code: 'KeyR', ctrlKey: true, altKey: true });
+    await waitFor(() => expect(listing).toHaveBeenCalledWith('/root/documents'));
+  });
+
+  it('CTRL + ALT + C copies', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    pressCode('C');
+    await tick();
+    expect(get(clipboard)).toEqual(['/root/notes.txt']);
+  });
+
+  it('CTRL + ALT + V pastes', async () => {
+    await openAndRender();
+    clipboard.set(['/root/notes.txt']);
+    await tick();
+    pressCode('V');
+    await waitFor(() =>
+      expect(submitCopyTask).toHaveBeenCalledWith(['/root/notes.txt'], ROOT)
+    );
+  });
+
+  it('CTRL + ALT + X cuts', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    pressCode('X');
+    await tick();
+    expect(get(cutMode)).toBe(true);
+  });
+
+  it('CTRL + ALT + D opens the delete confirmation', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    pressCode('D');
+    await waitFor(() => expect(screen.getByTestId('delete-dialog')).toBeInTheDocument());
+  });
+
+  it('CTRL + ALT + A selects all', async () => {
+    await openAndRender();
+    pressCode('A');
+    await tick();
+    expect(screen.getByRole('table').querySelectorAll('tbody tr.row.selected')).toHaveLength(4);
+  });
+
+  it('CTRL + ALT + I opens the information dialog', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    pressCode('I');
+    await waitFor(() => expect(screen.getByTestId('info-dialog')).toBeInTheDocument());
+    expect(fetchInfo).toHaveBeenCalledWith(['/root/notes.txt']);
+  });
+
+  it('CTRL + ALT + L downloads', async () => {
+    const realLocation = window.location;
+    const fake = Object.create(Object.getPrototypeOf(realLocation)) as Location & { assign: MockInstance };
+    fake.assign = vi.fn();
+    Object.defineProperty(window, 'location', { value: fake, configurable: true });
+    try {
+      (downloadFile as Mock).mockReset();
+      (downloadFile as Mock).mockResolvedValue('tok-code');
+      await openAndRender();
+      clickRow('notes.txt');
+      await tick();
+      pressCode('L');
+      await waitFor(() => expect(downloadFile).toHaveBeenCalledWith('/root/notes.txt'));
+    } finally {
+      Object.defineProperty(window, 'location', { value: realLocation, configurable: true });
+    }
+  });
+
+  it('CTRL + ALT + N starts a new directory', async () => {
+    await openAndRender();
+    pressCode('N');
+    await waitFor(() => expect(screen.getByPlaceholderText('New directory')).toBeInTheDocument());
+  });
+
+  it('CTRL + ALT + T toggles the tasks list', async () => {
+    await openAndRender();
+    pressCode('T');
+    await tick();
+    expect(get(taskPanelOpen)).toBe(true);
+  });
+
+  it('keeps CTRL + ALT + ArrowUp working (arrows are unaffected by AltGr)', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    fireEvent.keyDown(document.body, { key: 'ArrowUp', code: 'ArrowUp', ctrlKey: true, altKey: true });
+    await waitFor(() => expect(currentStorePath()).toBe(ROOT));
   });
 });
