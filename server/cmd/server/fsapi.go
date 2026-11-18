@@ -4,6 +4,7 @@ import (
   "encoding/json"
   "errors"
   "net/http"
+  "os"
   "path/filepath"
   "strings"
 
@@ -249,6 +250,46 @@ func serveFsInfo(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
     items = append(items, info)
   }
   writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// fsValidatePathRequest is the JSON body for path validation.
+type fsValidatePathRequest struct {
+  Path string `json:"path"`
+}
+
+// serveFsValidatePath validates that a path is within the allowed roots and exists.
+func serveFsValidatePath(w http.ResponseWriter, r *http.Request, cfg fsConfig) {
+  r.Body = http.MaxBytesReader(w, r.Body, maxFsRequestSize)
+  var req fsValidatePathRequest
+  if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+    writeError(w, http.StatusBadRequest, "the 'path' request field is required")
+    return
+  }
+  if req.Path == "" {
+    writeError(w, http.StatusBadRequest, "the 'path' request field is required")
+    return
+  }
+
+  roots := fs.NewRoots(pathsOf(cfg)...)
+  canonical, err := roots.Resolve(req.Path)
+  if err != nil {
+    status, message := fsStatus(err)
+    writeError(w, status, message)
+    return
+  }
+
+  // Check if the path exists and is a directory
+  info, err := os.Stat(canonical)
+  if err != nil {
+    writeError(w, http.StatusNotFound, "path does not exist")
+    return
+  }
+  if !info.IsDir() {
+    writeError(w, http.StatusBadRequest, "path is not a directory")
+    return
+  }
+
+  writeJSON(w, http.StatusOK, map[string]any{"valid": true, "path": canonical})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

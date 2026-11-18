@@ -296,15 +296,15 @@
     font-size: 13px;
     font-weight: 600;
     color: #fff;
-    background: var(--accent-strong);
-    border: 1px solid var(--accent-strong);
+    background: var(--accent);
+    border: 1px solid var(--accent);
     border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-decompress:hover {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
     box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
   }
   .dlg-decompress:active {

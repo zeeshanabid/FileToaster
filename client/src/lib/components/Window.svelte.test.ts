@@ -2176,12 +2176,105 @@ describe('Window context menu', () => {
     await waitFor(() => expect(currentStorePath()).toBe(ROOT));
   });
 
-  it('disables “Up one directory” at the root and in non-empty menus', async () => {
+  it('disables "Up one directory" at the root and in non-empty menus', async () => {
     await openAndRender();
     await rightClickEmpty();
     expect(menuItem('up')).toBeDisabled();
     await rightClickRow('notes.txt');
     expect(menuItem('up')).toBeDisabled();
+  });
+
+  it('opens "Open in new window" for a single directory via tree context menu', async () => {
+    await openAndRender();
+    await rightClickTree('/root/documents');
+    expect(menuItem('open-new-window')).not.toBeDisabled();
+    fireEvent.click(menuItem('open-new-window'));
+    await waitFor(() => expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument());
+    // A new window should be opened with the documents path
+    const list = get(windows);
+    expect(list.length).toBe(2);
+    const newWin = list[list.length - 1];
+    expect(newWin.path).toBe('/root/documents');
+    // name should be the root's display name
+    expect(newWin.name).toBe('Documents');
+  });
+
+  it('opens "Open in new window" for a single directory via list row context menu', async () => {
+    await openAndRender();
+    await rightClickRow('documents');
+    expect(menuItem('open-new-window')).not.toBeDisabled();
+    fireEvent.click(menuItem('open-new-window'));
+    await waitFor(() => expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument());
+    // A new window should be opened with the documents path
+    const list = get(windows);
+    expect(list.length).toBe(2);
+    const newWin = list[list.length - 1];
+    expect(newWin.path).toBe('/root/documents');
+    // name should be the root's display name
+    expect(newWin.name).toBe('Documents');
+  });
+
+  it('disables "Open in new window" for a file and for a multi-selection', async () => {
+    await openAndRender();
+    await rightClickRow('notes.txt');
+    expect(menuItem('open-new-window')).toBeDisabled();
+    clickRow('notes.txt');
+    clickRow('documents', 'ctrl');
+    await rightClickRow('notes.txt');
+    expect(menuItem('open-new-window')).toBeDisabled();
+  });
+
+  it('opens "Open in new window" with correct rootPath so tree shows full path from root', async () => {
+    await openAndRender();
+    await rightClickTree('/root/documents');
+    fireEvent.click(menuItem('open-new-window'));
+    await waitFor(() => expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument());
+    
+    // A new window should be opened with the documents path and original rootPath
+    const list = get(windows);
+    expect(list.length).toBe(2);
+    const newWin = list[list.length - 1];
+    expect(newWin.path).toBe('/root/documents');
+    expect(newWin.rootPath).toBe('/root');
+    // name should be the root's display name
+    expect(newWin.name).toBe('Documents');
+  });
+
+  it('expands tree to show full path from root when opening subdirectory in new window', async () => {
+    await openAndRender();
+    // Navigate to a deeper directory first
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    await rightClickTree('/root/documents/work');
+    fireEvent.click(menuItem('open-new-window'));
+    await waitFor(() => expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument());
+    
+    // A new window should be opened with the work path and original rootPath
+    const list = get(windows);
+    expect(list.length).toBe(2);
+    const newWin = list[list.length - 1];
+    expect(newWin.path).toBe('/root/documents/work');
+    expect(newWin.rootPath).toBe('/root');
+    // name should be the root's display name
+    expect(newWin.name).toBe('Documents');
+    
+    // Render the new window and verify tree is expanded to show root -> documents -> work
+    const newWinId = newWin.id;
+    renderComp(Window, { window: newWin });
+    
+    // Wait for tree to load - find the tree for the new window
+    await waitFor(() => {
+      const trees = document.querySelectorAll('[aria-label="Folder tree"]');
+      const newTree = Array.from(trees).find(t => t.querySelector('[data-tree-active="/root/documents/work"]'));
+      expect(newTree).toBeTruthy();
+    });
+    
+    // Verify the active node is 'work' in the new window's tree
+    const trees = document.querySelectorAll('[aria-label="Folder tree"]');
+    const newTree = Array.from(trees).find(t => t.querySelector('[data-tree-active="/root/documents/work"]'));
+    expect(newTree).toBeTruthy();
+    const activeNode = newTree!.querySelector('.trow.active[data-tree-active="/root/documents/work"]');
+    expect(activeNode).toBeTruthy();
   });
 
   it('selects all items via the empty-space context menu', async () => {
@@ -2511,5 +2604,49 @@ describe('Window tree — press-to-navigate', () => {
     await tick();
     await tick();
     expect(currentStorePath()).toBe('/root/photos');
+  });
+});
+
+describe('Window status bar — copy path button', () => {
+  beforeEach(() => {
+    vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+  });
+
+  it('shows the copy path button next to the path', async () => {
+    await openAndRender();
+    const copyBtn = screen.getByLabelText('Copy path');
+    expect(copyBtn).toBeInTheDocument();
+  });
+
+  it('copies the current path to clipboard on click', async () => {
+    await openAndRender();
+    const copyBtn = screen.getByLabelText('Copy path');
+    fireEvent.click(copyBtn);
+    await tick();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('/root');
+  });
+
+  it('copies the navigated path after navigation', async () => {
+    await openAndRender();
+    await clickNode('/root/documents');
+    const copyBtn = screen.getByLabelText('Copy path');
+    fireEvent.click(copyBtn);
+    await tick();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('/root/documents');
+  });
+
+  it('flashes a success message on copy', async () => {
+    await openAndRender();
+    const copyBtn = screen.getByLabelText('Copy path');
+    fireEvent.click(copyBtn);
+    await waitFor(() => expect(screen.getByText('Path copied to clipboard.')).toBeInTheDocument());
+  });
+
+  it('flashes an error message if clipboard write fails', async () => {
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('permission denied'));
+    await openAndRender();
+    const copyBtn = screen.getByLabelText('Copy path');
+    fireEvent.click(copyBtn);
+    await waitFor(() => expect(screen.getByText('Failed to copy path.')).toBeInTheDocument());
   });
 });

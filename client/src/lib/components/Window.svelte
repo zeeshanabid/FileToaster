@@ -5,6 +5,7 @@
     closeWindow,
     displayName,
     focusWindow,
+    openWindow,
     reloadWindowsForPath,
     toggleMinimize,
     updateWindow,
@@ -336,6 +337,16 @@ import { formatSize, formatDate } from '$lib/fs/format';
         // single folder target.
         void navigate(menuContextPath);
         break;
+      case 'open-new-window':
+        // Open the directory in a new window with the original root path
+        // so the tree shows the full path from the root
+        if (menuSelection.length === 1 && menuSelection[0].type === 'dir') {
+          const targetPath = menuSelection[0].path;
+          const rootPath = winProp.rootPath;
+          // Use the root's display name (winProp.name) not the target directory's name
+          openWindow({ name: winProp.name, path: targetPath, rootPath });
+        }
+        break;
       case 'up':
         goUp();
         break;
@@ -451,6 +462,17 @@ import { formatSize, formatDate } from '$lib/fs/format';
         status = null;
         statusTimer = null;
       }, 4000);
+    }
+  }
+
+  // Copy the current window's path to the system clipboard.
+  async function copyPathToClipboard() {
+    if (!win) return;
+    try {
+      await navigator.clipboard.writeText(win.path);
+      flash('Path copied to clipboard.');
+    } catch {
+      flash('Failed to copy path.');
     }
   }
 
@@ -1759,6 +1781,9 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       </svg>
     </span>
     <span class="spath-val" title={winProp.path}>{winProp.path}</span>
+    <button class="copy-path" type="button" title="Copy path to clipboard" aria-label="Copy path" onclick={copyPathToClipboard}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M9 9h10v10H9Z" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+    </button>
     {#if status}
       <span class="status-msg">{status}</span>
     {/if}
@@ -2306,6 +2331,27 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
+  }
+  .copy-path {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 100ms ease, color 100ms ease;
+    flex: none;
+  }
+  .copy-path:hover {
+    background: var(--surface);
+    color: var(--accent-strong);
+  }
+  .copy-path:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
   }
   .count {
     margin-left: auto;

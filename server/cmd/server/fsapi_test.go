@@ -375,3 +375,124 @@ func TestServeFsMkdirRequiresAuth(t *testing.T) {
     }
   })
 }
+
+// validatePathBody marshals a fsValidatePathRequest into a JSON request body.
+func validatePathBody(path string) *bytes.Reader {
+  b, _ := json.Marshal(fsValidatePathRequest{Path: path})
+  return bytes.NewReader(b)
+}
+
+func TestServeFsValidatePath(t *testing.T) {
+  cfg := buildTestConfig(t)
+  guard := newTestGuard(t)
+  cookie := signedSession(t, guard)
+  handler := guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    serveFsValidatePath(w, r, cfg)
+  }))
+
+  root := cfg.AllowedPaths[0].Path
+  sub := filepath.Join(root, "sub")
+
+  t.Run("validates existing directory within root", func(t *testing.T) {
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", validatePathBody(sub))
+    req.AddCookie(cookie)
+    handler.ServeHTTP(rec, req)
+    if rec.Code != http.StatusOK {
+      t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+    }
+    var body struct {
+      Valid bool   `json:"valid"`
+      Path  string `json:"path"`
+    }
+    if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+      t.Fatal(err)
+    }
+    if !body.Valid {
+      t.Error("valid = false, want true")
+    }
+    if body.Path != sub {
+      t.Errorf("path = %q, want %q", body.Path, sub)
+    }
+  })
+
+  t.Run("validates root directory itself", func(t *testing.T) {
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", validatePathBody(root))
+    req.AddCookie(cookie)
+    handler.ServeHTTP(rec, req)
+    if rec.Code != http.StatusOK {
+      t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+    }
+    var body struct {
+      Valid bool   `json:"valid"`
+      Path  string `json:"path"`
+    }
+    if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+      t.Fatal(err)
+    }
+    if !body.Valid {
+      t.Error("valid = false, want true")
+    }
+    if body.Path != root {
+      t.Errorf("path = %q, want %q", body.Path, root)
+    }
+  })
+
+  t.Run("rejects path outside roots", func(t *testing.T) {
+    outside := filepath.Join(filepath.Dir(root), "outside")
+    if err := os.MkdirAll(outside, 0o755); err != nil {
+      t.Fatal(err)
+    }
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", validatePathBody(outside))
+    req.AddCookie(cookie)
+    handler.ServeHTTP(rec, req)
+    if rec.Code != http.StatusForbidden {
+      t.Errorf("status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+    }
+  })
+
+  t.Run("rejects non-existent path", func(t *testing.T) {
+    nonexistent := filepath.Join(root, "does-not-exist")
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", validatePathBody(nonexistent))
+    req.AddCookie(cookie)
+    handler.ServeHTTP(rec, req)
+    // EvalSymlinks fails for non-existent paths, resulting in 400
+    if rec.Code != http.StatusBadRequest {
+      t.Errorf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+    }
+  })
+
+  t.Run("rejects file path (not a directory)", func(t *testing.T) {
+    filePath := filepath.Join(root, "a.txt")
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", validatePathBody(filePath))
+    req.AddCookie(cookie)
+    handler.ServeHTTP(rec, req)
+    if rec.Code != http.StatusBadRequest {
+      t.Errorf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+    }
+  })
+
+  t.Run("requires auth", func(t *testing.T) {
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", validatePathBody(root))
+    // No cookie
+    handler.ServeHTTP(rec, req)
+    if rec.Code != http.StatusUnauthorized {
+      t.Errorf("status = %d, want 401", rec.Code)
+    }
+  })
+
+  t.Run("requires path field", func(t *testing.T) {
+    rec := httptest.NewRecorder()
+    req := httptest.NewRequest(http.MethodPost, "/api/fs/validate-path", bytes.NewReader([]byte(`{}`)))
+    req.AddCookie(cookie)
+    handler.ServeHTTP(rec, req)
+    if rec.Code != http.StatusBadRequest {
+      t.Errorf("status = %d, want 400", rec.Code)
+    }
+  })
+}

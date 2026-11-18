@@ -5,6 +5,9 @@
   import { initTasks, shutdownTasks } from '$lib/store/tasks';
   import WindowButton from './WindowButton.svelte';
   import RunningTaskIcon from './RunningTaskIcon.svelte';
+  import Portal from './Portal.svelte';
+  import { openWindow } from '$lib/store/windows';
+  import { isWithin } from '$lib/fs/paths';
 
   // Callback to open the change-password dialog. The dialog itself is owned by
   // the page root so it renders outside this taskbar's stacking context.
@@ -19,6 +22,111 @@
   async function handleLogout() {
     await logout();
   }
+
+  // Open path modal state
+  let openPathModal = $state(false);
+  let openPathInput = $state('');
+  let openPathError = $state<string | null>(null);
+  let openPathInputEl: HTMLInputElement | null = $state(null);
+
+  // Roots are needed for validation - fetch them
+  let roots = $state<Array<{ name: string; path: string }>>([]);
+  let rootsLoaded = $state(false);
+
+  onMount(async () => {
+    try {
+      const res = await fetch('/api/fs/roots', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const body = await res.json();
+        if (body.allowed_paths) {
+          roots = body.allowed_paths;
+        }
+      }
+    } catch {
+      // Ignore - roots will be empty
+    } finally {
+      rootsLoaded = true;
+    }
+  });
+
+  function openOpenPathModal() {
+    openPathInput = '';
+    openPathError = null;
+    openPathModal = true;
+  }
+
+  function closeOpenPathModal() {
+    openPathModal = false;
+    openPathInput = '';
+    openPathError = null;
+  }
+
+  async function confirmOpenPath() {
+    const path = openPathInput.trim();
+    if (!path) {
+      openPathError = 'Please enter a path.';
+      return;
+    }
+
+    // Client-side validation: check if path is within any allowed root
+    const isAllowed = roots.some((root) => isWithin(path, root.path));
+    if (!isAllowed) {
+      openPathError = 'The path is outside the allowed folders.';
+      return;
+    }
+
+    // Server-side validation
+    try {
+      const res = await fetch('/api/fs/validate-path', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        openPathError = data.error ?? 'Invalid path or outside allowed folders.';
+        return;
+      }
+    } catch {
+      openPathError = 'Failed to validate path with server.';
+      return;
+    }
+
+    // Path is valid, open new window
+    closeOpenPathModal();
+    // Find the root this path belongs to
+    const root = roots.find((r) => isWithin(path, r.path));
+    if (root) {
+      openWindow({ name: root.name, path, rootPath: root.path });
+    } else {
+      // Fallback: use the first root
+      openWindow({ name: roots[0]?.name ?? 'Files', path, rootPath: roots[0]?.path ?? path });
+    }
+  }
+
+  function onModalKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      confirmOpenPath();
+    } else if (e.key === 'Escape') {
+      closeOpenPathModal();
+    }
+  }
+
+  function onInputFocus() {
+    openPathInputEl?.focus();
+  }
+
+  // Focus the input when the modal opens
+  $effect(() => {
+    if (openPathModal) {
+      onInputFocus();
+    }
+  });
 </script>
 
 <div class="taskbar" role="toolbar" aria-label="FileToaster taskbar">
@@ -40,6 +148,17 @@
   <div class="system" role="group" aria-label="System controls">
     <RunningTaskIcon />
     <div class="divider" aria-hidden="true"></div>
+    <button type="button" class="system-btn" title="Open path in new window" aria-label="Open path in new window" onclick={openOpenPathModal}>
+      <span class="system-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H7l-2-2H3a2 2 0 0 0-2 2z" />
+          <path d="M17 4v4h4" />
+          <path d="M21 3v5h-5" />
+          <path d="M14 14l7-7" />
+        </svg>
+      </span>
+    </button>
+    <div class="divider" aria-hidden="true"></div>
     <button type="button" class="system-btn" title="Change password" aria-label="Change password" onclick={onChangePassword}>
       <span class="system-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
@@ -59,6 +178,58 @@
     </button>
   </div>
 </div>
+
+{#if openPathModal}
+  <Portal>
+    <div 
+      class="modal-backdrop" 
+      role="button" 
+      tabindex="0" 
+      aria-label="Close modal" 
+      onclick={closeOpenPathModal} 
+      onkeydown={(e) => e.key === 'Escape' && closeOpenPathModal()}
+    >
+      <div 
+        class="modal" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-labelledby="open-path-title" 
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === 'Escape' && closeOpenPathModal()}
+      >
+        <header class="modal-header">
+          <h2 id="open-path-title">Open Path in New Window</h2>
+          <button class="modal-close" type="button" aria-label="Close" onclick={closeOpenPathModal}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
+          </button>
+        </header>
+        <div class="modal-body">
+          <label for="open-path-input" class="modal-label">Enter an absolute path within the allowed folders:</label>
+          <input
+            id="open-path-input"
+            class="modal-input"
+            bind:this={openPathInputEl}
+            bind:value={openPathInput}
+            type="text"
+            placeholder="/path/to/directory"
+            onkeydown={onModalKeydown}
+            onfocus={onInputFocus}
+            autocomplete="off"
+            spellcheck="false"
+          />
+          {#if openPathError}
+            <div class="modal-error">{openPathError}</div>
+          {/if}
+        </div>
+        <footer class="modal-footer">
+          <button class="modal-btn cancel" type="button" onclick={closeOpenPathModal}>Cancel</button>
+          <button class="modal-btn confirm" type="button" onclick={confirmOpenPath}>Open</button>
+        </footer>
+      </div>
+    </div>
+  </Portal>
+{/if}
 
 <style>
   .taskbar {
@@ -173,5 +344,137 @@
   .system-mark svg {
     width: 18px;
     height: 18px;
+  }
+
+  /* Open Path Modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 120ms ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-window);
+    width: 100%;
+    max-width: 480px;
+    margin: 24px;
+    overflow: hidden;
+    animation: slideUp 150ms ease;
+  }
+  @keyframes slideUp {
+    from { transform: translateY(16px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-header h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .modal-close {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 100ms ease, color 100ms ease;
+  }
+  .modal-close:hover {
+    background: var(--surface-soft);
+    color: var(--text);
+  }
+  .modal-body {
+    padding: 20px;
+    gap: 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+  .modal-input {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    transition: border-color 100ms ease, box-shadow 100ms ease;
+  }
+  .modal-input:focus {
+    border-color: var(--accent-strong);
+    box-shadow: 0 0 0 3px var(--accent-strong-transparent);
+  }
+  .modal-error {
+    color: var(--alert);
+    font-size: 12px;
+    margin-top: -8px;
+  }
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .modal-btn {
+    height: 32px;
+    padding: 0 16px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 100ms ease, color 100ms ease;
+  }
+  .modal-btn.cancel {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .modal-btn.cancel:hover {
+    background: var(--surface-soft);
+  }
+  .modal-btn.confirm {
+    background: var(--accent-strong);
+    border: none;
+    color: #fff;
+  }
+  .modal-btn.confirm:hover {
+    background: var(--accent);
+  }
+  .modal-btn:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
   }
 </style>

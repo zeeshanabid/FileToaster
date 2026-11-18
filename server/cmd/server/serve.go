@@ -78,6 +78,9 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
   mux.Handle("POST /api/fs/info", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     serveFsInfo(w, r, fsCfg)
   })))
+  mux.Handle("POST /api/fs/validate-path", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    serveFsValidatePath(w, r, fsCfg)
+  })))
 
   // Single-file download (tokenized): POST /api/downloads confines the selected
   // path to the allowed roots, issues a one-time fixed-length token, and returns

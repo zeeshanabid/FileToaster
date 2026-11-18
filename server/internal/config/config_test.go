@@ -236,7 +236,7 @@ func TestResolveConfigPath_AutoCreate(t *testing.T) {
   if cfg.Debug {
     t.Error("auto-created debug should default to false")
   }
-  if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0].Path != filepath.Join(home, "filetoaster-data") {
+  if len(cfg.AllowedPaths) != 1 || cfg.AllowedPaths[0].Name != "Home" || cfg.AllowedPaths[0].Path != home {
     t.Errorf("auto-created allowed_paths = %v", cfg.AllowedPaths)
   }
 }

@@ -46,14 +46,14 @@ function generateWindowId(rootPath: string): string {
   return `${rootPath}-${Date.now()}-${windowIdCounter}-${randomPart}`;
 }
 
-export function openWindow(root: { name: string; path: string }) {
+export function openWindow(root: { name: string; path: string; rootPath?: string }) {
   windows.update((list) => {
     nextZ += 1;
     const offset = (list.length % 6) * 28;
     const opened: AppWindow = {
       id: generateWindowId(root.path),
       name: root.name,
-      rootPath: root.path,
+      rootPath: root.rootPath ?? root.path,
       path: root.path,
       x: 90 + offset,
       y: 70 + offset,

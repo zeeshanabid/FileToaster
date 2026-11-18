@@ -97,6 +97,7 @@
   const canUpload = $derived(kind === 'empty' || kind === 'folder');
   const canPasteHere = $derived(canPaste && (kind === 'empty' || kind === 'folder'));
   const canOpen = $derived(kind === 'folder' && selection.length === 1 && selection[0]?.type === 'dir');
+  const canOpenInNewWindow = $derived(kind === 'folder' && selection.length === 1 && selection[0]?.type === 'dir');
   const canGoUpHere = $derived(kind === 'empty' && canGoUp);
 
   // Icon markup (24x24 viewBox, stroke currentColor) reused from the toolbar so
@@ -128,6 +129,8 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3.2-6.9" /><path d="M21 4v5h-5" /></svg>';
   const OPEN =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H7l-2-2H3a2 2 0 0 0-2 2z" /><path d="M17 4v4h4" /></svg>';
+  const OPEN_NEW_WINDOW =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H7l-2-2H3a2 2 0 0 0-2 2z" /><path d="M17 4v4h4" /><path d="M21 3v5h-5" /><path d="M14 14l7-7" /></svg>';
   const UP =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>';
   const SELECT_ALL =
@@ -135,6 +138,7 @@
 
   const items = $derived<Array<MenuItem | MenuSeparator>>([
     { type: 'item', id: 'open', label: 'Open', action: 'open', svg: OPEN, enabled: canOpen },
+    { type: 'item', id: 'open-new-window', label: 'Open in new window', action: 'open-new-window', svg: OPEN_NEW_WINDOW, enabled: canOpenInNewWindow },
     { type: 'item', id: 'cut', label: 'Cut', action: 'cut', svg: CUT, enabled: canCutCopy },
     { type: 'item', id: 'copy', label: 'Copy', action: 'copy', svg: COPY, enabled: canCutCopy },
     { type: 'item', id: 'paste', label: 'Paste', action: 'paste', svg: PASTE, enabled: canPasteHere },

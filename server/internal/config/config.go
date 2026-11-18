@@ -193,17 +193,13 @@ func ResolveConfigPath(explicit string) (string, bool, error) {
 }
 
 // WriteDefaultConfig writes a default config to path with a generated session
-// secret, a default served root at <home>/filetoaster-data (created if needed),
+// secret, a default served root at the user's home directory (name: "Home"),
 // and the default admin credentials (admin / hashed "admin"). It returns the
 // path written.
 func WriteDefaultConfig(path string) (string, error) {
   home, err := os.UserHomeDir()
   if err != nil {
     return "", fmt.Errorf("locate home directory: %w", err)
-  }
-  dataDir := filepath.Join(home, "filetoaster-data")
-  if err := os.MkdirAll(dataDir, 0o755); err != nil {
-    return "", fmt.Errorf("create allowed path %q: %w", dataDir, err)
   }
   tmpDir := defaultTmpDir()
   secret, err := generateSecret()
@@ -220,7 +216,7 @@ addr: ":8080"
 # Directories the server serves. Each entry has a display name and either an
 # absolute path or an env var name (resolved to a single absolute directory).
 allowed_paths:
-    - name: Files
+    - name: Home
       path: %s
 max_parallel_tasks: 4
 # Graceful shutdown: seconds to let running operations finish after a shutdown
@@ -253,7 +249,7 @@ session_secret: %s
 # or by replacing admin_password_hash here and restarting the server.
 admin_user: admin
 admin_password_hash: %s
-`, dataDir, tmpDir, secret, adminHash)
+`, home, tmpDir, secret, adminHash)
 
   if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
     return "", fmt.Errorf("create config dir %q: %w", filepath.Dir(path), err)
