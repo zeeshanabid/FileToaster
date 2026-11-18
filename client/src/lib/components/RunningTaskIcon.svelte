@@ -126,21 +126,33 @@
     gap: 7px;
     height: 38px;
     padding: 0 12px;
-    background: rgba(255, 255, 255, 0.07);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
     color: var(--taskbar-text);
     cursor: pointer;
+    transition: all 150ms ease;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   }
   .tasks-button:hover,
   .tasks-button.open {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow:
+      0 2px 10px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  .tasks-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   .tasks-icon {
     display: grid;
     place-items: center;
     width: 18px;
     height: 18px;
+    color: currentColor;
+    opacity: 0.9;
   }
   .tasks-icon svg {
     width: 17px;
@@ -151,36 +163,53 @@
     height: 18px;
     padding: 0 5px;
     border-radius: 9px;
-    background: var(--alert);
+    background: linear-gradient(135deg, var(--alert), var(--alert-strong));
     color: #fff;
     font-size: 11px;
     font-weight: 700;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    box-shadow: 0 2px 8px rgba(251, 113, 133, 0.35);
   }
   .popover {
     position: absolute;
     bottom: 54px;
     right: 0;
-    width: 340px;
-    max-height: 480px;
+    width: 360px;
+    max-height: 500px;
     overflow: auto;
     background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 14px;
     box-shadow: var(--shadow-popover);
-    padding: 12px;
+    padding: 14px;
     z-index: 50;
+    animation: popover-in 140ms ease-out;
+  }
+  @keyframes popover-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
   .popover-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-faint);
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
   }
   .counts {
     text-transform: none;
@@ -191,17 +220,18 @@
   .empty {
     font-size: 13px;
     color: var(--text-faint);
-    padding: 8px 0;
+    padding: 16px 0;
+    text-align: center;
   }
   .task {
-    padding: 8px 2px;
+    padding: 10px 4px;
     border-top: 1px solid var(--border);
   }
   .task:first-child {
     border-top: none;
   }
   .task.terminal {
-    opacity: 0.75;
+    opacity: 0.7;
   }
   .task-row {
     display: flex;
@@ -232,7 +262,7 @@
     color: var(--text-muted);
   }
   .status-finished {
-    color: var(--success, #4ade80);
+    color: var(--ok-strong);
   }
   .status-failed,
   .status-cancelled {
@@ -249,6 +279,7 @@
     border-radius: 6px;
     color: var(--text-muted);
     cursor: pointer;
+    transition: all 120ms ease;
   }
   .cancel:hover {
     background: var(--alert);
@@ -263,13 +294,14 @@
     border-radius: 999px;
     background: var(--surface-inset);
     overflow: hidden;
-    margin-top: 7px;
+    margin-top: 8px;
   }
   .fill {
     height: 100%;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
     border-radius: inherit;
-    transition: width 120ms ease-out;
+    transition: width 180ms ease-out;
+    box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
   }
   .meta {
     display: flex;

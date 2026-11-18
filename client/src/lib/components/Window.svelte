@@ -6,6 +6,7 @@
     displayName,
     focusWindow,
     reloadWindowsForPath,
+    toggleMinimize,
     updateWindow,
     windows,
     type AppWindow
@@ -1407,11 +1408,18 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       <img src="/filetoaster-directory.svg" alt="" />
     </span>
     <span class="title" title={`${title} — ${winProp.path}`}>{title}</span>
-    <button class="close" type="button" onclick={() => closeWindow(winProp.id)} aria-label="Close window">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
-        <path d="M7 7l10 10M17 7L7 17" />
-      </svg>
-    </button>
+    <div class="window-controls">
+      <button class="minimize" type="button" onclick={() => toggleMinimize(winProp.id)} aria-label="Minimize window">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
+          <path d="M5 12h14" />
+        </svg>
+      </button>
+      <button class="close" type="button" onclick={() => closeWindow(winProp.id)} aria-label="Close window">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
+          <path d="M7 7l10 10M17 7L7 17" />
+        </svg>
+      </button>
+    </div>
   </header>
 
    <div class="toolbar">
@@ -1849,22 +1857,46 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
      width: 27px;
      height: 27px;
    }
-  .title {
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .close {
-    display: grid;
-    place-items: center;
-    margin-left: auto;
-    width: 30px;
-    height: 30px;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    color: var(--text-muted);
-    cursor: pointer;
-  }
+.title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .minimize {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .minimize:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    .minimize svg {
+      width: 14px;
+      height: 14px;
+    }
+    .close {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
   .close:hover {
     background: var(--alert);
     color: #fff;
