@@ -2323,3 +2323,193 @@ describe('Window reload — task completion', () => {
   });
 });
 
+// Regression: when the configured allowed root is the filesystem root ("/"),
+// naive `root + '/'` checks produced "//", so every tree click (and every jump
+// to a deeper folder) silently no-oped and the window stayed on the previously
+// opened directory.
+describe('Window tree — filesystem root anchor', () => {
+  type Row = { path: string; name: string; type: 'file' | 'dir'; size: number; created: string; modified: string };
+  const ROOT_FS: Record<string, Row[]> = {
+    '/': [
+      { path: '/data', name: 'data', type: 'dir', size: 0, created: '', modified: '' },
+      { path: '/home', name: 'home', type: 'dir', size: 0, created: '', modified: '' }
+    ],
+    '/data': [
+      { path: '/data/docs', name: 'docs', type: 'dir', size: 0, created: '', modified: '' }
+    ],
+    '/data/docs': [
+      { path: '/data/docs/archive', name: 'archive', type: 'dir', size: 0, created: '', modified: '' }
+    ],
+    '/data/docs/archive': [
+      { path: '/data/docs/archive/2024', name: '2024', type: 'dir', size: 0, created: '', modified: '' }
+    ],
+    '/data/docs/archive/2024': [],
+    '/home': [
+      { path: '/home/readme.txt', name: 'readme.txt', type: 'file', size: 4, created: '', modified: '' }
+    ]
+  };
+
+  async function expand(name: string, child: string): Promise<void> {
+    const row = within(tree()).getByTitle(name).closest('.trow') as HTMLElement;
+    fireEvent.click(row.querySelector('.twisty') as Element);
+    await waitFor(() => expect(within(tree()).getByTitle(child)).toBeInTheDocument());
+  }
+
+  it('opens a root-level folder after expanding several levels, and jumps deep directly', async () => {
+    (fetchListing as Mock).mockImplementation(async (path: string) => ({
+      path,
+      entries: ROOT_FS[path] ?? []
+    }));
+    openWindow({ name: 'Files', path: '/' });
+    const list = get(windows);
+    id = list[list.length - 1].id;
+    renderComp(Window, { window: list[list.length - 1] });
+    await waitFor(() => expect(within(tree()).getByTitle('/data')).toBeInTheDocument());
+
+    await expand('/data', '/data/docs');
+    await expand('/data/docs', '/data/docs/archive');
+    await expand('/data/docs/archive', '/data/docs/archive/2024');
+
+    // Root-level folder click must open it, not revert to the previous folder.
+    fireEvent.click(within(tree()).getByTitle('/home'));
+    await waitFor(() => expect(currentStorePath()).toBe('/home'));
+    expect(within(screen.getByRole('table')).getByText('readme.txt')).toBeInTheDocument();
+
+    // A deeply nested folder must open in one direct click as well.
+    fireEvent.click(within(tree()).getByTitle('/data/docs/archive/2024'));
+    await waitFor(() => expect(currentStorePath()).toBe('/data/docs/archive/2024'));
+  });
+});
+
+// Regression: tree rows used to navigate from the synthesized `click` only.
+// Expanding a deep branch renders per-directory "Loading…" rows and re-renders
+// the tree, so the row under the pointer can move between mousedown and mouseup.
+// The browser then retargets the click to an ancestor <li> that has no handler,
+// the navigation is dropped, and the window stays on the previously opened
+// folder (which looks like the selection "jumping back"). Rows now navigate on
+// the initial press, with the trailing click deduplicated.
+describe('Window tree — press-to-navigate', () => {
+  function node(path: string): HTMLElement {
+    return within(tree()).getByTitle(path) as HTMLElement;
+  }
+
+  async function expandTwisty(path: string, child: string): Promise<void> {
+    fireEvent.click(node(path).querySelector('.twisty') as Element);
+    await waitFor(() => expect(within(tree()).getByTitle(child)).toBeInTheDocument());
+  }
+
+  // Deeper fixture so a real 3+ level chain exists under the normal root.
+  const DEEP: typeof FS = {
+    ...FS,
+    '/root/documents/work': [
+      { path: '/root/documents/work/projects', name: 'projects', type: 'dir', size: 0, created: '', modified: '' }
+    ],
+    '/root/documents/work/projects': [
+      { path: '/root/documents/work/projects/archive', name: 'archive', type: 'dir', size: 0, created: '', modified: '' }
+    ],
+    '/root/documents/work/projects/archive': []
+  };
+  function useDeepFixture(): void {
+    (fetchListing as Mock).mockImplementation(async (path: string) => ({
+      path,
+      entries: DEEP[path] ?? []
+    }));
+  }
+
+  it('navigates on mousedown and ignores the trailing mouse click', async () => {
+    await openAndRender();
+    (fetchListing as Mock).mockClear();
+
+    const documents = node('/root/documents');
+    fireEvent.mouseDown(documents.querySelector('.tname') as Element, { button: 0 });
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+
+    // A real mouse click follows the press (detail > 0); it must not navigate
+    // again and must not issue another listing request.
+    const calls = (fetchListing as Mock).mock.calls.length;
+    fireEvent.click(documents.querySelector('.tname') as Element, { detail: 1 });
+    await tick();
+    expect((fetchListing as Mock).mock.calls.length).toBe(calls);
+    expect(currentStorePath()).toBe('/root/documents');
+  });
+
+  it('opens a root-level folder after several levels are expanded', async () => {
+    await openAndRender();
+    useDeepFixture();
+    await expandTwisty('/root/documents', '/root/documents/work');
+    await expandTwisty('/root/documents/work', '/root/documents/work/projects');
+    await expandTwisty('/root/documents/work/projects', '/root/documents/work/projects/archive');
+    await expandTwisty('/root/photos', '/root/photos/2023');
+
+    fireEvent.mouseDown(node('/root/photos').querySelector('.tname') as Element, { button: 0 });
+    await waitFor(() => expect(currentStorePath()).toBe('/root/photos'));
+    expect(within(screen.getByRole('table')).getByText('2023')).toBeInTheDocument();
+  });
+
+  it('jumps to a deep folder directly from a fully expanded tree', async () => {
+    await openAndRender();
+    useDeepFixture();
+    await expandTwisty('/root/documents', '/root/documents/work');
+    await expandTwisty('/root/documents/work', '/root/documents/work/projects');
+    await expandTwisty('/root/documents/work/projects', '/root/documents/work/projects/archive');
+
+    fireEvent.mouseDown(
+      node('/root/documents/work/projects/archive').querySelector('.tname') as Element,
+      { button: 0 }
+    );
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents/work/projects/archive'));
+  });
+
+  it('keeps deep rows full-width clickable: children render in a nested list', async () => {
+    await openAndRender();
+    useDeepFixture();
+    await expandTwisty('/root/documents', '/root/documents/work');
+    await expandTwisty('/root/documents/work', '/root/documents/work/projects');
+    await expandTwisty('/root/documents/work/projects', '/root/documents/work/projects/archive');
+
+    // Children live in a nested <ul>, not directly inside a padded <li>, so the
+    // row button still spans the whole tree width at any depth.
+    const childList = node('/root/documents/work/projects/archive').closest('.tchildren');
+    expect(childList).not.toBeNull();
+    expect(node('/root/documents').closest('.trow')?.getAttribute('style')).toBeNull();
+    expect(node('/root/documents').style.paddingLeft).toBe('20px');
+    expect(node('/root/documents/work').style.paddingLeft).toBe('32px');
+    expect(node('/root/documents/work/projects').style.paddingLeft).toBe('44px');
+    expect(node('/root/documents/work/projects/archive').style.paddingLeft).toBe('56px');
+  });
+
+  it('does not navigate when the press lands on the expand twisty', async () => {
+    await openAndRender();
+    fireEvent.mouseDown(node('/root/documents').querySelector('.twisty') as Element, { button: 0 });
+    await tick();
+    expect(currentStorePath()).toBe('/root');
+  });
+
+  it('lets the newest press win even when an older deep navigation resolves later', async () => {
+    await openAndRender();
+    await expandTwisty('/root/documents', '/root/documents/work');
+
+    let resolveDeep!: (listing: { path: string; entries: unknown[] }) => void;
+    const deep = new Promise<{ path: string; entries: unknown[] }>((resolve) => {
+      resolveDeep = resolve;
+    });
+    (fetchListing as Mock).mockImplementation((path: string) => {
+      if (path === '/root/documents/work') return deep;
+      return Promise.resolve({ path, entries: FS[path] ?? [] });
+    });
+
+    // Start a slow deep navigation, then press a root-level folder before it
+    // settles. The newer press must be the folder the window ends up showing.
+    fireEvent.mouseDown(
+      node('/root/documents/work').querySelector('.tname') as Element,
+      { button: 0 }
+    );
+    fireEvent.mouseDown(node('/root/photos').querySelector('.tname') as Element, { button: 0 });
+    await waitFor(() => expect(currentStorePath()).toBe('/root/photos'));
+
+    resolveDeep({ path: '/root/documents/work', entries: FS['/root/documents/work'] });
+    await tick();
+    await tick();
+    expect(currentStorePath()).toBe('/root/photos');
+  });
+});

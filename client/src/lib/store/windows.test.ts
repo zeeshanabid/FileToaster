@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { get, writable } from 'svelte/store';
-import { openWindow, closeWindow, updateWindow, findWindowsByPath, reloadWindowsForPath, windows, type AppWindow } from './windows';
+import { openWindow, closeWindow, updateWindow, findWindowsByPath, reloadWindowsForPath, displayName, windows, type AppWindow } from './windows';
 
 // Reset the module-level windows store between tests so state does not leak.
 function resetWindows() {
@@ -112,5 +112,23 @@ describe('reloadWindowsForPath', () => {
   it('does not dispatch when no windows match', () => {
     reloadWindowsForPath('/tmp/win-reload-none');
     expect(dispatchEventSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('filesystem root windows', () => {
+  it('labels a direct child of / with its own name', () => {
+    openWindow({ name: 'Files', path: '/' });
+    const win = get(windows).find((w) => w.rootPath === '/')!;
+    updateWindow(win.id, { path: '/data' });
+    const updated = get(windows).find((w) => w.id === win.id)!;
+    expect(displayName(updated)).toBe('data');
+    closeWindow(win.id);
+  });
+
+  it('matches a child path when the window root is /', () => {
+    openWindow({ name: 'Files', path: '/' });
+    const win = get(windows).find((w) => w.rootPath === '/')!;
+    expect(findWindowsByPath('/data/docs')).toContain(win.id);
+    closeWindow(win.id);
   });
 });

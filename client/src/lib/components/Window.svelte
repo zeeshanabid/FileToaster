@@ -32,6 +32,7 @@ import {
   submitDecompressTask
 } from '$lib/store/tasks';
 import { isArchiveFile } from '$lib/fs/archive';
+import { basename, isWithin } from '$lib/fs/paths';
 import FileIcon from './FileIcon.svelte';
 import ContextMenu from './ContextMenu.svelte';
 import InfoDialog from './InfoDialog.svelte';
@@ -150,10 +151,6 @@ import { formatSize, formatDate } from '$lib/fs/format';
   function dirname(p: string): string {
     const i = p.lastIndexOf('/');
     return i <= 0 ? '/' : p.slice(0, i);
-  }
-  function basename(p: string): string {
-    const i = p.lastIndexOf('/');
-    return i <= 0 ? p : p.slice(i + 1);
   }
 
   // --- data: main listing view state (derived from the store's `path`) ---
@@ -1067,26 +1064,49 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
 
   // Navigate to `path`: it becomes the active folder (store `path`), the tree
   // expands root..path (lazy child-load, cached), and the main listing reloads.
+  // `navSeq` makes the last requested navigation win: expanding a deep branch
+  // can take several sequential loads, and a slower, older request must never
+  // land after a newer click and pull the window back to the previous folder.
+  let navSeq = 0;
   async function navigate(path: string): Promise<void> {
-    if (!win) return;
-    const root = win.rootPath;
-    if (path !== root && !path.startsWith(root + '/')) return;
-    // Leaving the current folder discards any prior selection so the toolbar
-    // reflects only the newly opened directory (its action buttons re-enable
-    // based on an empty selection and the info badge resets) and nothing stays
-    // highlighted in the main view.
+    const root = winProp.rootPath;
+    if (!isWithin(path, root)) return;
+    const seq = ++navSeq;
     clearSelection();
     try {
       mainLoading = true;
       mainError = null;
-      const listing = await tree.navigate(win.id, path, root);
+      const listing = await tree.navigate(winProp.id, path, root);
+      if (seq !== navSeq) return;
       entries = listing.entries;
-      updateWindow(win.id, { path });
+      updateWindow(winProp.id, { path });
+      frame += 1;
     } catch (err) {
+      if (seq !== navSeq) return;
       mainError = err instanceof Error ? err.message : 'could not open this folder';
     } finally {
-      mainLoading = false;
+      if (seq === navSeq) mainLoading = false;
     }
+  }
+
+  // Tree rows must act on the initial press, not on the synthesized `click`.
+  // Expanding a deep branch renders per-directory "Loading…" nodes and the tree
+  // re-renders on focus/navigation, so between mousedown and mouseup the row
+  // under the pointer can move or be replaced. The browser then retargets the
+  // click to an ancestor <li> that has no handler, the navigation is silently
+  // dropped, and the window keeps showing the previously opened folder. Starting
+  // the navigation on mousedown registers the choice before any re-render can
+  // shift the row. The trailing pointer `click` is ignored (real mouse clicks
+  // carry detail > 0); keyboard activation produces detail === 0 and still
+  // navigates.
+  function onTreeRowMouseDown(e: MouseEvent, dir: string) {
+    if (e.button !== 0) return;
+    if ((e.target as Element | null)?.closest?.('.twisty')) return;
+    void navigate(dir);
+  }
+  function onTreeRowClick(e: MouseEvent, dir: string) {
+    if (e.detail !== 0) return;
+    void navigate(dir);
   }
 
   // Move up one directory from the currently opened folder (the toolbar "up"
@@ -1094,7 +1114,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   function goUp() {
     if (!win || !win.path || win.path === win.rootPath) return;
     const parent = dirname(win.path);
-    if (parent !== win.rootPath && !parent.startsWith(win.rootPath + '/')) {
+    if (!isWithin(parent, win.rootPath)) {
       void navigate(win.rootPath);
       return;
     }
@@ -1132,7 +1152,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   function onReloadEvent(e: CustomEvent) {
     const { windowId, path } = e.detail;
     if (windowId !== winProp.id) return;
-    if (win && (win.path === path || path.startsWith(win.path + '/'))) {
+    if (win && isWithin(path, win.path)) {
       void reload(path);
     }
   }
@@ -1617,13 +1637,14 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
           class="trow"
           class:active={win && win.path === dir}
           data-tree-active={win && win.path === dir ? dir : undefined}
-          style="padding-left:{8 + depth * 12}px"
         >
           <button
             type="button"
             class="tnode"
             title={dir}
-            onclick={() => navigate(dir)}
+            style="padding-left:{8 + depth * 12}px"
+            onmousedown={(e) => onTreeRowMouseDown(e, dir)}
+            onclick={(e) => onTreeRowClick(e, dir)}
             oncontextmenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -1646,9 +1667,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
             {:else if s.error}
               <span class="tchild t-error">{s.error}</span>
             {:else}
-              {#each s.kids as child (child.path)}
-                {@render treeRow(child.path, depth + 1)}
-              {/each}
+              <ul class="tchildren">
+                {#each s.kids as child (child.path)}
+                  {@render treeRow(child.path, depth + 1)}
+                {/each}
+              </ul>
             {/if}
           {/if}
         </li>
@@ -2066,6 +2089,16 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     border-radius: 2px;
   }
   .tree-root {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  /* Children live in a real nested list with no padding of its own; the
+     indentation is applied to the row button instead. Nesting padded <li>s
+     directly shrank every level (299 → 291 → … → 71px), so deep rows were only
+     clickable across a narrow sliver and their hover/active highlight stopped
+     early. */
+  .tchildren {
     list-style: none;
     margin: 0;
     padding: 0;

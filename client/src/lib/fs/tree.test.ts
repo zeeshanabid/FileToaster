@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FileTree, chainTo } from '$lib/fs/tree';
+import { isWithin } from '$lib/fs/paths';
 import type { Entry, Listing } from '$lib/fs/api';
 
 // --- in-memory fixture: a small directory tree -------------------------------
@@ -24,7 +25,14 @@ const FS: Record<string, Entry[]> = {
   ],
   '/root/photos/2023': [
     { path: '/root/photos/2023/vacation.jpg', name: 'vacation.jpg', type: 'file', size: 20, created: '', modified: '' }
-  ]
+  ],
+  '/': [
+    { path: '/data', name: 'data', type: 'dir', size: 0, created: '', modified: '' }
+  ],
+  '/data': [
+    { path: '/data/docs', name: 'docs', type: 'dir', size: 0, created: '', modified: '' }
+  ],
+  '/data/docs': []
 };
 
 // loader(paths?) returns a fake fetch that serves the fixture, optionally
@@ -62,6 +70,33 @@ describe('chainTo', () => {
   });
   it('stays inside the root for an unrooted path', () => {
     expect(chainTo('/other/work', ROOT)).toEqual([ROOT, '/root/work']);
+  });
+  it('handles the filesystem root without producing double slashes', () => {
+    expect(chainTo('/', '/')).toEqual(['/']);
+    expect(chainTo('/a', '/')).toEqual(['/', '/a']);
+    expect(chainTo('/a/b/c', '/')).toEqual(['/', '/a', '/a/b', '/a/b/c']);
+  });
+});
+
+describe('isWithin', () => {
+  it('accepts the root itself and nested paths', () => {
+    expect(isWithin('/root', '/root')).toBe(true);
+    expect(isWithin('/root/documents', '/root')).toBe(true);
+  });
+  it('rejects siblings and unrelated paths', () => {
+    expect(isWithin('/rooted', '/root')).toBe(false);
+    expect(isWithin('/other', '/root')).toBe(false);
+  });
+  it('treats / as containing every absolute path', () => {
+    expect(isWithin('/', '/')).toBe(true);
+    expect(isWithin('/data', '/')).toBe(true);
+    expect(isWithin('/data/docs', '/')).toBe(true);
+    expect(isWithin('relative', '/')).toBe(false);
+  });
+  it('tolerates a root with a trailing slash', () => {
+    expect(isWithin('/data/docs', '/data/')).toBe(true);
+    expect(isWithin('/data', '/data/')).toBe(true);
+    expect(isWithin('/database', '/data/')).toBe(false);
   });
 });
 
@@ -115,6 +150,13 @@ describe('FileTree', () => {
       '/root/photos',
       '/root/photos/2023'
     ]);
+  });
+
+  it('expands the full chain when the anchor is the filesystem root', async () => {
+    const f = new FileTree(makeLoader().fn);
+    const listing = await f.navigate(W, '/data/docs', '/');
+    expect(listing.path).toBe('/data/docs');
+    expect([...expandedSet(f)!].sort()).toEqual(['/', '/data', '/data/docs']);
   });
 
   it('records a per-directory error (non-fatal) when a folder cannot be listed', async () => {

@@ -1,4 +1,5 @@
 import { writable, type Writable } from 'svelte/store';
+import { basename, isWithin } from '$lib/fs/paths';
 
 export interface AppWindow {
   id: string;
@@ -23,11 +24,6 @@ export const windows: Writable<AppWindow[]> = writable([]);
 
 let nextZ = 10;
 let windowIdCounter = 0;
-
-function basename(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i <= 0 ? p : p.slice(i + 1);
-}
 
 // The label for a window's taskbar button and title bar: the root label while
 // the root is open, otherwise the basename of the currently opened directory.
@@ -79,7 +75,7 @@ export function findWindowsByPath(targetPath: string): string[] {
       .filter((w) => {
         // Reload if the window's current path is the target path or a parent of it
         // (since changes in a child directory affect the parent's listing)
-        return w.path === targetPath || targetPath.startsWith(w.path + '/');
+        return isWithin(targetPath, w.path);
       })
       .map((w) => w.id);
     return list;

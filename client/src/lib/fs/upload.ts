@@ -27,6 +27,7 @@ import {
   chunkCountForFile,
   DEFAULT_CHUNK_SIZE
 } from '$lib/fs/api';
+import { basename, relativeUnder } from '$lib/fs/paths';
 
 // UploadApi abstracts the network calls so the manager can be exercised in tests
 // with an in-memory fake that never touches the server.
@@ -74,10 +75,9 @@ export function uploadStoreKey(taskID: string): string {
 // actually rooted at `root` falls back to its basename so a stray path still
 // yields a usable destination name.
 export function relUnder(path: string, root: string): string {
-  if (path === root) return '';
-  if (path.startsWith(root + '/')) return path.slice(root.length + 1);
-  const i = path.lastIndexOf('/');
-  return i <= 0 ? path : path.slice(i + 1);
+  const rel = relativeUnder(path, root);
+  if (rel !== null) return rel;
+  return basename(path);
 }
 
 // manifestForSelection builds an UploadManifest from the selected entries of a

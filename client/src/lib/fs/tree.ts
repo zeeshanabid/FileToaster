@@ -5,11 +5,7 @@
 // the real /api/fs fetch but can be replaced (e.g. in tests).
 
 import { fetchListing, type Entry, type Listing } from '$lib/fs/api';
-
-function basename(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i <= 0 ? p : p.slice(i + 1);
-}
+import { basename, joinPath, relativeUnder } from '$lib/fs/paths';
 
 function byName(a: Entry, b: Entry): number {
   return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
@@ -20,12 +16,12 @@ function byName(a: Entry, b: Entry): number {
 // root (basename fallback) so the tree never renders a node outside the window.
 export function chainTo(path: string, root: string): string[] {
   if (path === root) return [root];
-  const rel = path.startsWith(root + '/') ? path.slice(root.length + 1) : basename(path);
+  const rel = relativeUnder(path, root) ?? basename(path);
   const parts = rel.split('/').filter(Boolean);
   const chain = [root];
   let acc = root;
   for (const part of parts) {
-    acc = acc + '/' + part;
+    acc = joinPath(acc, part);
     chain.push(acc);
   }
   return chain;
