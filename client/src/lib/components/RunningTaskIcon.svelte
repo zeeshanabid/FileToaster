@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen } from '$lib/store/tasks';
+  import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, clearCompletedTasks } from '$lib/store/tasks';
   import { formatRate, formatSize } from '$lib/fs/format';
   import type { Task } from '$lib/fs/api';
   import { uploadManager } from '$lib/fs/upload';
@@ -103,6 +103,21 @@
           <span class="counts">
             {$combinedRunningCount} running{#if $combinedQueuedCount > 0}, {$combinedQueuedCount} queued{/if}
           </span>
+        {/if}
+        {#if $combinedTaskList.some(t => t.status === 'finished' || t.status === 'cancelled')}
+          <button
+            class="clear-btn"
+            type="button"
+            aria-label="Clear completed tasks"
+            title="Clear completed tasks"
+            onclick={clearCompletedTasks}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+              <path d="M3 6h18" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+          </button>
         {/if}
       </div>
       {#if $combinedTaskList.length === 0}
@@ -369,6 +384,27 @@
   .resume svg {
     width: 16px;
     height: 16px;
+  }
+  .clear-btn {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .clear-btn:hover {
+    background: var(--alert);
+    color: #fff;
+  }
+  .clear-btn svg {
+    width: 14px;
+    height: 14px;
   }
   .bar {
     height: 7px;

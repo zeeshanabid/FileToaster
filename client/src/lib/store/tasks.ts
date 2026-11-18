@@ -26,6 +26,9 @@ import { reloadWindowsForPath } from '$lib/store/windows';
 // (oldest first) and the running / queued counts used by the taskbar badge.
 const tasksMap = writable<Record<string, Task>>({});
 
+// Export for testing
+export { tasksMap };
+
 export type { Task } from '$lib/fs/api';
 
 function toList(map: Record<string, Task>): Task[] {
@@ -286,6 +289,45 @@ export function submitMoveTask(paths: string[], dest: string) {
 // cancelTaskAction asks the server to stop a queued or running task.
 export function cancelTaskAction(id: string) {
   return apiCancel(id);
+}
+
+// clearCompletedTasks removes finished and cancelled tasks from the task list.
+// It does not remove running or queued tasks. It also clears corresponding
+// localStorage entries for upload tasks.
+export function clearCompletedTasks() {
+  // Clear SSE tasks (finished/cancelled)
+  tasksMap.update((map) => {
+    const newMap: Record<string, Task> = {};
+    for (const [id, task] of Object.entries(map)) {
+      if (task.status === 'running' || task.status === 'queued') {
+        newMap[id] = task;
+      } else if (task.type === 'upload') {
+        // For upload tasks, extract the original taskID from display ID (e.g., "staging-xxx" -> "xxx")
+        const originalTaskID = id.replace(/^(staging|finalizing)-/, '');
+        try {
+          localStorage.removeItem(uploadStoreKey(originalTaskID));
+        } catch {
+          // ignore
+        }
+        // Also clear from uploadManager
+        uploadManager.clear(originalTaskID);
+      }
+    }
+    return newMap;
+  });
+
+  // Clear upload staging tasks (finished/cancelled/failed)
+  // uploadManager.sessions are the source of truth for upload tasks
+  for (const [taskID, state] of uploadManager.sessions) {
+    if (state.phase === 'done' || state.phase === 'failed' || state.phase === 'cancelled') {
+      try {
+        localStorage.removeItem(uploadStoreKey(taskID));
+      } catch {
+        // ignore
+      }
+      uploadManager.clear(taskID);
+    }
+  }
 }
 
 // taskLabel derives a one-line description for a task record, reading its meta

@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { parseSSEMessage, taskLabel, getAffectedPaths, ingestStateToTasks, uploadSessionVisible } from '$lib/store/tasks';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { get } from 'svelte/store';
+import { parseSSEMessage, taskLabel, getAffectedPaths, ingestStateToTasks, uploadSessionVisible, clearCompletedTasks, tasksMap } from '$lib/store/tasks';
 import type { Task } from '$lib/fs/api';
 import type { IngestState } from '$lib/fs/upload';
+import { uploadManager } from '$lib/fs/upload';
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'type' | 'status'>): Task {
   const now = new Date().toISOString();
@@ -234,5 +236,139 @@ describe('upload session → taskbar task', () => {
   it('does not show a finished session', () => {
     expect(uploadSessionVisible(ingest({ phase: 'done' }))).toBe(false);
     expect(ingestStateToTasks(ingest({ phase: 'done' }))).toHaveLength(0);
+  });
+});
+
+describe('clearCompletedTasks', () => {
+  const mockLocalStorage = {
+    store: {} as Record<string, string>,
+    getItem(key: string) {
+      return this.store[key] ?? null;
+    },
+    setItem(key: string, value: string) {
+      this.store[key] = value;
+    },
+    removeItem(key: string) {
+      delete this.store[key];
+    },
+    clear() {
+      this.store = {};
+    },
+    get length() {
+      return Object.keys(this.store).length;
+    },
+    key(i: number) {
+      return Object.keys(this.store)[i] ?? null;
+    }
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', mockLocalStorage);
+    mockLocalStorage.clear();
+    uploadManager.sessions.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('removes finished and cancelled tasks, keeps running and queued', async () => {
+    const now = new Date().toISOString();
+    const tasks: Record<string, Task> = {
+      'task-1': { id: 'task-1', type: 'copy', status: 'running', progress: 50, created: now, updated: now, bytes: { total: 100, done: 50, filesTotal: 1, filesDone: 0, ratePerSec: 0 } },
+      'task-2': { id: 'task-2', type: 'delete', status: 'finished', progress: 100, created: now, updated: now, bytes: { total: 100, done: 100, filesTotal: 1, filesDone: 1, ratePerSec: 0 } },
+      'task-3': { id: 'task-3', type: 'move', status: 'cancelled', progress: 0, created: now, updated: now, bytes: { total: 100, done: 0, filesTotal: 1, filesDone: 0, ratePerSec: 0 } },
+      'task-4': { id: 'task-4', type: 'compress', status: 'queued', progress: 0, created: now, updated: now, bytes: { total: 100, done: 0, filesTotal: 1, filesDone: 0, ratePerSec: 0 } },
+      'task-5': { id: 'task-5', type: 'decompress', status: 'failed', progress: 0, created: now, updated: now, bytes: { total: 100, done: 0, filesTotal: 1, filesDone: 0, ratePerSec: 0 } },
+    };
+
+    tasksMap.set(tasks);
+
+    clearCompletedTasks();
+
+    const result = get(tasksMap);
+    expect(Object.keys(result)).toEqual(['task-1', 'task-4']);
+    expect(result['task-1'].status).toBe('running');
+    expect(result['task-4'].status).toBe('queued');
+  });
+
+  it('clears localStorage for finished upload tasks', async () => {
+    const now = new Date().toISOString();
+    const tasks: Record<string, Task> = {
+      'staging-upload-1': { id: 'staging-upload-1', type: 'upload', status: 'finished', progress: 100, created: now, updated: now, bytes: { total: 100, done: 100, filesTotal: 1, filesDone: 1, ratePerSec: 0 }, meta: { staging: 'upload-1', dest: '/dest', phase: 'finalizing', files: 1 } },
+    };
+
+    mockLocalStorage.setItem('filetoaster-upload:upload-1', '{"data": "test"}');
+
+    tasksMap.set(tasks);
+
+    clearCompletedTasks();
+
+    expect(mockLocalStorage.getItem('filetoaster-upload:upload-1')).toBeNull();
+  });
+
+  it('clears localStorage for cancelled upload tasks', async () => {
+    const now = new Date().toISOString();
+    const tasks: Record<string, Task> = {
+      'staging-upload-2': { id: 'staging-upload-2', type: 'upload', status: 'cancelled', progress: 50, created: now, updated: now, bytes: { total: 100, done: 50, filesTotal: 1, filesDone: 0, ratePerSec: 0 }, meta: { staging: 'upload-2', dest: '/dest', phase: 'staging', files: 1 } },
+    };
+
+    mockLocalStorage.setItem('filetoaster-upload:upload-2', '{"data": "test"}');
+
+    tasksMap.set(tasks);
+
+    clearCompletedTasks();
+
+    expect(mockLocalStorage.getItem('filetoaster-upload:upload-2')).toBeNull();
+  });
+
+  it('clears uploadManager sessions in done/failed/cancelled phase', async () => {
+    const state: IngestState = {
+      taskID: 'upload-3',
+      dest: '/dest',
+      chunkSize: 1,
+      files: [{ rel: 'a', size: 4, chunks: 4 }],
+      dirs: [],
+      received: [new Uint8Array(4)],
+      present: [true, true, false, false],
+      phase: 'cancelled',
+      error: null,
+      finalizeID: null,
+      bytesSent: 2,
+      startTime: Date.now() - 1000,
+      lastNotifyTime: Date.now(),
+      lastBytesSent: 0,
+    };
+    uploadManager.sessions.set('upload-3', state);
+    mockLocalStorage.setItem('filetoaster-upload:upload-3', '{"data": "test"}');
+
+    clearCompletedTasks();
+
+    expect(uploadManager.sessions.has('upload-3')).toBe(false);
+    expect(mockLocalStorage.getItem('filetoaster-upload:upload-3')).toBeNull();
+  });
+
+  it('keeps uploadManager sessions in staging/finalizing phase', async () => {
+    const state: IngestState = {
+      taskID: 'upload-4',
+      dest: '/dest',
+      chunkSize: 1,
+      files: [{ rel: 'a', size: 4, chunks: 4 }],
+      dirs: [],
+      received: [new Uint8Array(4)],
+      present: [true, true, false, false],
+      phase: 'staging',
+      error: null,
+      finalizeID: null,
+      bytesSent: 2,
+      startTime: Date.now() - 1000,
+      lastNotifyTime: Date.now(),
+      lastBytesSent: 0,
+    };
+    uploadManager.sessions.set('upload-4', state);
+
+    clearCompletedTasks();
+
+    expect(uploadManager.sessions.has('upload-4')).toBe(true);
   });
 });
