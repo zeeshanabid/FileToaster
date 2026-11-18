@@ -262,9 +262,15 @@
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .cancel:hover {
     background: rgba(255, 255, 255, 0.16);
+    border-color: var(--accent-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
+  .cancel:active {
+    transform: scale(0.98);
   }
   .apply {
     height: 40px;
@@ -276,12 +282,18 @@
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
+    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
   }
   .apply:hover:not(:disabled) {
     filter: brightness(1.07);
+    box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.4);
+  }
+  .apply:active:not(:disabled) {
+    transform: scale(0.98);
   }
   .apply:disabled {
     opacity: 0.65;
     cursor: progress;
+    transform: none;
   }
 </style>

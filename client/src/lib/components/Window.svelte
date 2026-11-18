@@ -1741,43 +1741,53 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="resize" onpointerdown={onResizePointerDown} aria-label="Resize window"></div>
 
-  {#if infoOpen}
-    <InfoDialog items={infoItems ?? []} onClose={closeInfo} />
+{#if infoOpen}
+    <Portal>
+      <InfoDialog items={infoItems ?? []} onClose={closeInfo} />
+    </Portal>
   {/if}
 
   {#if deleteOpen}
-    <ConfirmDelete entries={deleteEntries} onClose={cancelDelete} onConfirm={confirmDelete} />
+    <Portal>
+      <ConfirmDelete entries={deleteEntries} onClose={cancelDelete} onConfirm={confirmDelete} />
+    </Portal>
   {/if}
 
-   {#if moveOpen}
-     <ConfirmMove entries={$cutEntries} onClose={() => (moveOpen = false)} onConfirm={confirmMove} />
-   {/if}
-
-    {#if dropChoiceOpen && pendingDrop}
+  {#if moveOpen}
     <Portal>
-      <ConfirmDropMode
-        entries={pendingDrop.items}
-        dest={pendingDrop.dest}
-        onClose={() => (dropChoiceOpen = false)}
-        onChoose={(mode) => { executeDrop(pendingDrop!.items, pendingDrop!.dest, mode); dropChoiceOpen = false; }}
-      />
+      <ConfirmMove entries={$cutEntries} onClose={() => (moveOpen = false)} onConfirm={confirmMove} />
     </Portal>
-    {/if}
+  {/if}
+
+  {#if dropChoiceOpen && pendingDrop}
+  <Portal>
+    <ConfirmDropMode
+      entries={pendingDrop.items}
+      dest={pendingDrop.dest}
+      onClose={() => (dropChoiceOpen = false)}
+      onChoose={(mode) => { executeDrop(pendingDrop!.items, pendingDrop!.dest, mode); dropChoiceOpen = false; }}
+    />
+  </Portal>
+  {/if}
 
   {#if compressOpen}
-    <ConfirmCompress
-      entries={selectionEntries()}
-      onClose={cancelCompress}
-      onConfirm={confirmCompress}
-    />
+    <Portal>
+      <ConfirmCompress
+        entries={selectionEntries()}
+        onClose={cancelCompress}
+        onConfirm={confirmCompress}
+      />
+    </Portal>
   {/if}
 
   {#if decompressOpen}
-    <ConfirmDecompress
-      entries={decompressEntries}
-      onClose={cancelDecompress}
-      onConfirm={confirmDecompress}
-    />
+    <Portal>
+      <ConfirmDecompress
+        entries={decompressEntries}
+        onClose={cancelDecompress}
+        onConfirm={confirmDecompress}
+      />
+    </Portal>
   {/if}
 
   <ContextMenu

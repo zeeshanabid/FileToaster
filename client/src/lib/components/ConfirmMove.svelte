@@ -249,10 +249,16 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-cancel:hover {
     color: var(--accent-strong);
-    border-color: var(--border);
+    border-color: var(--accent-strong);
+    background: var(--surface-soft);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  .dlg-cancel:active {
+    transform: scale(0.98);
   }
   .dlg-move {
     height: 32px;
@@ -265,10 +271,20 @@
     border: 1px solid var(--alert);
     border-radius: 8px;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-move:hover {
     background: var(--alert-strong);
     border-color: var(--alert-strong);
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+  }
+  .dlg-move:active {
+    transform: scale(0.98);
+  }
+  .dlg-move:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
   }
   @media (max-width: 560px) {
     .warning,

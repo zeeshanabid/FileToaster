@@ -295,10 +295,15 @@
     border: 1px solid var(--accent-strong);
     border-radius: 8px;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-ok:hover {
     background: var(--accent);
     border-color: var(--accent);
+    box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
+  }
+  .dlg-ok:active {
+    transform: scale(0.98);
   }
   @media (max-width: 560px) {
     .summary {

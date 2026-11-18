@@ -275,10 +275,16 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-cancel:hover {
     color: var(--accent-strong);
-    border-color: var(--border);
+    border-color: var(--accent-strong);
+    background: var(--surface-soft);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  .dlg-cancel:active {
+    transform: scale(0.98);
   }
   .dlg-compress {
     height: 32px;
@@ -291,10 +297,20 @@
     border: 1px solid var(--accent-strong);
     border-radius: 8px;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-compress:hover {
     background: var(--accent);
     border-color: var(--accent);
+    box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
+  }
+  .dlg-compress:active {
+    transform: scale(0.98);
+  }
+  .dlg-compress:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
   }
   @media (max-width: 560px) {
     .warning {
