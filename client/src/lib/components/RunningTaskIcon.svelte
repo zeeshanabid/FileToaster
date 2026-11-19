@@ -159,8 +159,9 @@
       {#if $combinedTaskList.length === 0}
         <div class="empty">No tasks yet.</div>
       {:else}
-        {#each $combinedTaskList as task (task.id)}
-          <div class="task" class:terminal={task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled'}>
+        <div class="task-list">
+          {#each $combinedTaskList as task (task.id)}
+            <div class="task" class:terminal={task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled'}>
             <div class="task-row">
               <span class="task-name" title={taskLabel(task)}>{taskLabel(task)}</span>
               <span class="status status-{task.status}">{statusLabel(task.status)}</span>
@@ -217,6 +218,7 @@
             {/if}
           </div>
         {/each}
+        </div>
       {/if}
     </div>
   {/if}
@@ -329,11 +331,15 @@
     padding: 16px 0;
     text-align: center;
   }
+  .task-list {
+    display: flex;
+    flex-direction: column;
+  }
   .task {
     padding: 10px 4px;
     border-top: 1px solid var(--border);
   }
-  .task:first-child {
+  .task-list .task:first-child {
     border-top: none;
   }
   .task.terminal {
