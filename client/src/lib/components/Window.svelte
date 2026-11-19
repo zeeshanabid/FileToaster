@@ -875,7 +875,6 @@ async function onPickFolder() {
         const st = uploadManager.state(taskID);
         uploadState = st ? { taskID: st.taskID, phase: st.phase } : { taskID, phase: 'staging' };
         flash(`Uploading… (task ${taskID}).`);
-        taskPanelOpen.set(true);
       }
     } catch (err) {
       flash(err instanceof Error ? err.message : 'could not upload');
