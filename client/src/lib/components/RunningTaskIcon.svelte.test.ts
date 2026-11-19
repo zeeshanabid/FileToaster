@@ -6,7 +6,7 @@ import { fireEvent, screen, within } from '@testing-library/dom';
 import type { Task } from '$lib/fs/api';
 import { formatRate, formatSize } from '$lib/fs/format';
 import { uploadManager } from '$lib/fs/upload';
-import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen } from '$lib/store/tasks';
+import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, taskNotification } from '$lib/store/tasks';
 import RunningTaskIcon from './RunningTaskIcon.svelte';
 
 // The component reads its live data from $lib/store/tasks. These stores are
@@ -21,6 +21,7 @@ vi.mock('$lib/store/tasks', async () => {
   const queuedCountStore = writable<number>(0);
   const activeCountStore = writable<number>(0);
   const taskPanelOpenStore = writable<boolean>(false);
+  const taskNotificationStore = writable<{ taskId: string; label: string } | null>(null);
   return {
     taskList: taskListStore,
     runningCount: runningCountStore,
@@ -31,6 +32,7 @@ vi.mock('$lib/store/tasks', async () => {
     combinedQueuedCount: derived(queuedCountStore, ($q) => $q),
     combinedActiveCount: derived(activeCountStore, ($a) => $a),
     taskPanelOpen: taskPanelOpenStore,
+    taskNotification: taskNotificationStore,
     taskLabel: (t: Task) => (t.type === 'copy' ? 'Copy' : t.type),
     cancelTaskAction: vi.fn(async () => {})
   };

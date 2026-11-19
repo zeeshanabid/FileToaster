@@ -207,6 +207,40 @@ describe('live SSE task progress', () => {
     expect(reloadSpy).toHaveBeenCalledWith('/data');
   });
 
+  it('triggers reload with the extract directory when decompress finishes', async () => {
+    await tick();
+
+    push(copyTask({
+      id: 'task-decompress',
+      type: 'decompress',
+      status: 'finished',
+      progress: 100,
+      bytes: { total: 100, done: 100, filesTotal: 2, filesDone: 2, ratePerSec: 100 },
+      meta: { format: 'zip', archive: '/root/archive.zip', extractDir: '/root/extracted', into: 'extracted' }
+    }));
+    await tick();
+    await delay();
+
+    expect(reloadSpy).toHaveBeenCalledWith('/root/extracted');
+  });
+
+  it('triggers reload with the upload destination when upload finalize finishes', async () => {
+    await tick();
+
+    push(copyTask({
+      id: 'task-upload-finalize',
+      type: 'upload',
+      status: 'finished',
+      progress: 100,
+      bytes: { total: 100, done: 100, filesTotal: 3, filesDone: 3, ratePerSec: 100 },
+      meta: { staging: 'staging-1', dest: '/root/uploads', phase: 'finalizing', files: 3 }
+    }));
+    await tick();
+    await delay();
+
+    expect(reloadSpy).toHaveBeenCalledWith('/root/uploads');
+  });
+
   it('triggers reload for a failed task terminal state', async () => {
     await tick();
 

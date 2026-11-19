@@ -19,6 +19,7 @@ import {
 import { archiveStem } from '$lib/fs/archive';
 import { uploadStoreKey, uploadManager, type IngestState, globalChunkSpan } from '$lib/fs/upload';
 import { reloadWindowsForPath } from '$lib/store/windows';
+import { showTaskToast, taskNotification } from '$lib/store/notifications';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
 // by an initial snapshot from /api/tasks and then by deltas over the SSE stream
@@ -27,7 +28,7 @@ import { reloadWindowsForPath } from '$lib/store/windows';
 const tasksMap = writable<Record<string, Task>>({});
 
 // Export for testing
-export { tasksMap };
+export { tasksMap, taskNotification, showTaskToast };
 
 export type { Task } from '$lib/fs/api';
 
@@ -445,11 +446,36 @@ function connect() {
 function handleMessage(message: string) {
   const task = parseSSEMessage(message);
   if (!task) return;
-  tasksMap.update((map) => ({ ...map, [task.id]: task }));
   
-  // Auto-open task panel when new task arrives
-  if (task.status === 'running' || task.status === 'queued') {
-    taskPanelOpen.set(true);
+  // Check if this is a new task (not already in the map)
+  let isNewTask = false;
+  let prevStatus: Task['status'] | undefined;
+  tasksMap.update((map) => {
+    prevStatus = map[task.id]?.status;
+    isNewTask = !map[task.id];
+    return { ...map, [task.id]: task };
+  });
+  
+  // Show toast for new active tasks (instead of auto-opening panel)
+  if (isNewTask && (task.status === 'running' || task.status === 'queued')) {
+    const label = taskLabel(task);
+    taskNotification.set({ taskId: task.id, label: `New task: ${label}` });
+    // Auto-clear after 3 seconds
+    setTimeout(() => {
+      taskNotification.update((n) => (n?.taskId === task.id ? null : n));
+    }, 3000);
+  }
+  
+  // Show toast for finished tasks
+  if (!isNewTask && prevStatus && prevStatus !== 'finished' && prevStatus !== 'failed' && prevStatus !== 'cancelled' &&
+      (task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled')) {
+    const label = taskLabel(task);
+    const statusText = task.status === 'finished' ? 'completed' : task.status;
+    taskNotification.set({ taskId: `finished-${task.id}`, label: `${label} ${statusText}` });
+    // Auto-clear after 4 seconds
+    setTimeout(() => {
+      taskNotification.update((n) => (n?.taskId === `finished-${task.id}` ? null : n));
+    }, 4000);
   }
   
   // An upload that reached a terminal status no longer has a resumable server

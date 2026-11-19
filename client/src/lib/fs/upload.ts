@@ -28,6 +28,7 @@ import {
   chunkCountForFile,
   DEFAULT_CHUNK_SIZE
 } from '$lib/fs/api';
+import { showTaskToast } from '$lib/store/notifications';
 import { basename, relativeUnder } from '$lib/fs/paths';
 
 // UploadApi abstracts the network calls so the manager can be exercised in tests
@@ -392,6 +393,9 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     this.sessions.set(taskID, state);
     this.persist(state);
     this.notify();
+    // Show toast for new upload
+    const n = files.length;
+    showTaskToast(`Upload started: ${n === 1 ? '1 file' : `${n} files`}`, `upload-${taskID}`);
     void this.uploadAll(state);
     return taskID;
   }

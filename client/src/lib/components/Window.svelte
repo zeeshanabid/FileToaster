@@ -1262,6 +1262,18 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
           e.preventDefault();
           taskPanelOpen.update((open) => !open);
           return;
+        case 'z':
+          e.preventDefault();
+          startCompress();
+          return;
+        case 'u':
+          e.preventDefault();
+          startDecompress();
+          return;
+        case 'm':
+          e.preventDefault();
+          startRename();
+          return;
         default:
           return;
       }

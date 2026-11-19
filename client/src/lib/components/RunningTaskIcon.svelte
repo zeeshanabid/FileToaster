@@ -1,22 +1,45 @@
 <script lang="ts">
   import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, clearCompletedTasks } from '$lib/store/tasks';
+  import { taskNotification } from '$lib/store/notifications';
   import { formatRate, formatSize } from '$lib/fs/format';
   import type { Task } from '$lib/fs/api';
   import { uploadManager } from '$lib/fs/upload';
+  import { onMount, onDestroy } from 'svelte';
 
   // Local open state, synced with the global taskPanelOpen store
   let open = $state(false);
+  let notification = $state<{ taskId: string; label: string } | null>(null);
+  let notificationTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // Sync with global store
   $effect(() => {
     open = $taskPanelOpen;
   });
 
-  // Auto-open panel when there are active tasks
+  // Subscribe to task notifications
   $effect(() => {
-    if ($combinedActiveCount > 0 && !open) {
-      taskPanelOpen.set(true);
-    }
+    const unsubscribe = taskNotification.subscribe((value) => {
+      if (value && !open) {
+        notification = value;
+        // Clear any existing timeout
+        if (notificationTimeout) {
+          clearTimeout(notificationTimeout);
+        }
+        // Auto-hide after 3 seconds
+        notificationTimeout = setTimeout(() => {
+          notification = null;
+          notificationTimeout = null;
+        }, 3000);
+      } else {
+        notification = null;
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (notificationTimeout) {
+        clearTimeout(notificationTimeout);
+      }
+    };
   });
 
   function togglePanel() {
@@ -94,6 +117,19 @@
       <span class="badge" title={$combinedActiveCount + " task" + ($combinedActiveCount === 1 ? '' : 's') + " active"}>{$combinedActiveCount}</span>
     {/if}
   </button>
+
+  {#if notification}
+    <div class="task-notification" role="status" aria-live="polite" aria-atomic="true">
+      <span class="notification-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+          <path d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" />
+          <path d="M9 14l2 2 4-4" />
+        </svg>
+      </span>
+      <span class="notification-text">{notification.label}</span>
+    </div>
+  {/if}
 
   {#if open}
     <div class="popover" role="dialog" aria-label="Tasks">
@@ -437,5 +473,50 @@
   .rate {
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+  }
+  .task-notification {
+    position: absolute;
+    bottom: 54px;
+    right: 0;
+    min-width: 200px;
+    max-width: 320px;
+    padding: 10px 14px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-popover);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    z-index: 55;
+    animation: notification-in 200ms ease-out;
+  }
+  @keyframes notification-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  .notification-icon {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    color: var(--accent-strong);
+  }
+  .notification-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

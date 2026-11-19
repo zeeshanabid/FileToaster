@@ -27,12 +27,14 @@ vi.mock('$lib/store/tasks', async () => {
   const { writable, derived } = await import('svelte/store');
   const activeCountStore = writable(0);
   const taskPanelOpenStore = writable(false);
+  const taskNotificationStore = writable<{ taskId: string; label: string } | null>(null);
   return {
     initTasks: vi.fn(),
     shutdownTasks: vi.fn(),
     activeCount: activeCountStore,
     combinedActiveCount: derived(activeCountStore, ($a: number) => $a),
     taskPanelOpen: taskPanelOpenStore,
+    taskNotification: taskNotificationStore,
     clipboard: writable([]),
     cutMode: writable(false),
     cutEntries: writable([]),

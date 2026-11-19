@@ -65,6 +65,7 @@ vi.mock('$lib/store/tasks', async () => {
   const queuedCountStore = writable(0);
   const taskListStore = writable([]);
   const taskPanelOpenStore = writable(false);
+  const taskNotificationStore = writable<{ taskId: string; label: string } | null>(null);
   return {
     clipboard: store,
     cutMode,
@@ -78,6 +79,7 @@ vi.mock('$lib/store/tasks', async () => {
     combinedQueuedCount: derived(queuedCountStore, ($q: number) => $q),
     combinedTaskList: derived(taskListStore, ($t) => $t),
     taskPanelOpen: taskPanelOpenStore,
+    taskNotification: taskNotificationStore,
     cutEntries,
     setClipboard: vi.fn((paths: string[]) => {
       store.set(paths);
@@ -2920,6 +2922,30 @@ describe('Window keyboard — ctrl+alt actions', () => {
     await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
     press('ArrowUp');
     await waitFor(() => expect(currentStorePath()).toBe(ROOT));
+  });
+
+  it('CTRL + ALT + Z opens the compress dialog', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    press('z');
+    await waitFor(() => expect(screen.getByTestId('compress-dialog')).toBeInTheDocument());
+  });
+
+  it('CTRL + ALT + U opens the decompress dialog for an archive', async () => {
+    await openAndRender();
+    clickRow('myfiles.zip');
+    await tick();
+    press('u');
+    await waitFor(() => expect(screen.getByTestId('decompress-dialog')).toBeInTheDocument());
+  });
+
+  it('CTRL + ALT + M opens the rename dialog', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await tick();
+    press('m');
+    await waitFor(() => expect(screen.getByPlaceholderText('Rename')).toBeInTheDocument());
   });
 });
 
