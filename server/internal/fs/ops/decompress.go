@@ -248,7 +248,7 @@ func writeZipEntry(ctx context.Context, zf *zip.File, root string, prog *task.Pr
 		return err
 	}
 	defer rc.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), mode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, mode)
@@ -323,7 +323,7 @@ func runTar(ctx context.Context, archive, root string, prog *task.Progression, g
 				return terr
 			}
 			mode := os.FileMode(hdr.Mode).Perm()
-			if err := os.MkdirAll(filepath.Dir(dst), mode); err != nil {
+            if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return err
 			}
 			out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, mode)

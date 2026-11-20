@@ -229,9 +229,11 @@ func dirSwap(src, dst string, size int64, prog *task.Progression) error {
 		return err
 	}
 	if err := os.RemoveAll(dst); err != nil {
+		// RemoveAll failed (e.g., read-only directory): roll back by renaming
+		// the temp back to the original source location so src is intact.
+		_ = os.Rename(tmpName, src)
 		return err
 	}
-	// tmp still holds src if this fails, so the source stays recoverable.
 	if err := os.Rename(tmpName, dst); err != nil {
 		return err
 	}
@@ -319,7 +321,7 @@ func copyFileBytes(ctx context.Context, src, dst string, info os.FileInfo, prog 
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), info.Mode().Perm()); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, info.Mode().Perm())

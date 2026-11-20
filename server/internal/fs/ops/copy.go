@@ -359,7 +359,7 @@ func copyFile(ctx context.Context, src, dst string, info os.FileInfo, prog *task
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), info.Mode().Perm()); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, info.Mode().Perm())
