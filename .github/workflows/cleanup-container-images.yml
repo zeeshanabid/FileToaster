@@ -51,7 +51,7 @@ jobs:
           keep_patch = int(os.environ.get('KEEP_PATCH_VERSIONS', '30'))
           keep_days = int(os.environ.get('KEEP_DAYS', '90'))
 
-          now = datetime.utcnow()
+          now = datetime.now(datetime.UTC)
           cutoff_date = now - timedelta(days=keep_days)
 
           major_versions = {}
