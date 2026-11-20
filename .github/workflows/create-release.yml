@@ -1,0 +1,205 @@
+name: Create a release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest commit message
+        id: commit
+        run: |
+          MSG=$(git log -1 --pretty=%B)
+          echo "message<<EOF" >> $GITHUB_OUTPUT
+          echo "$MSG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Extract type from conventional commit (first line before :)
+          TYPE=$(echo "$MSG" | head -1 | sed -E 's/^([a-z]+)(\(.+\))?!?:.*/\1/')
+          echo "type=$TYPE" >> $GITHUB_OUTPUT
+
+          # Check for breaking change
+          if echo "$MSG" | grep -qi "BREAKING CHANGE"; then
+            echo "breaking=true" >> $GITHUB_OUTPUT
+          else
+            echo "breaking=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Get subject (first line)
+          SUBJECT=$(echo "$MSG" | head -1)
+          echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+
+      - name: Determine version bump
+        id: version
+        run: |
+          # Get latest tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$LATEST_TAG" ]; then
+            # No tags exist, start at v0.0.1
+            NEW_VERSION="v0.0.1"
+            MAJOR_VERSION="0"
+          else
+            # Parse current version
+            MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f3)
+
+            TYPE="${{ steps.commit.outputs.type }}"
+            BREAKING="${{ steps.commit.outputs.breaking }}"
+
+            if [ "$BREAKING" = "true" ]; then
+              # Major version bump
+              NEW_VERSION="v$((MAJOR + 1)).0.0"
+              MAJOR_VERSION=$((MAJOR + 1))
+            elif [ "$TYPE" = "feat" ]; then
+              # Minor version bump
+              NEW_VERSION="v${MAJOR}.$((MINOR + 1)).0"
+              MAJOR_VERSION=$MAJOR
+            else
+              # Patch version bump (fix, docs, style, refactor, perf, test, chore, etc.)
+              NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+              MAJOR_VERSION=$MAJOR
+            fi
+          fi
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "major-version=v$MAJOR_VERSION" >> $GITHUB_OUTPUT
+          # Extract minor version (e.g., v1.1 from v1.1.1)
+          MINOR_VERSION=$(echo "$NEW_VERSION" | cut -d. -f1,2)
+          echo "minor-version=$MINOR_VERSION" >> $GITHUB_OUTPUT
+          echo "latest-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+          echo "Latest tag: $LATEST_TAG"
+          echo "New version: $NEW_VERSION"
+          echo "Major version tag: v$MAJOR_VERSION"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.4'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Run Go tests
+        run: |
+          export PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local
+          cd server && go test ./...
+
+      - name: Run Go vet
+        run: |
+          export PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local
+          cd server && go vet ./...
+
+      - name: Install frontend dependencies
+        run: |
+          cd client && npm ci
+
+      - name: Run frontend tests
+        run: |
+          cd client && npm run test
+
+      - name: Run frontend typecheck
+        run: |
+          cd client && npm run check
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.minor-version }}
+            type=raw,value=${{ steps.version.outputs.major-version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+		  platforms: linux/amd64,linux/arm64
+
+      - name: Create Git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
+      - name: Update major version tag
+        run: |
+          git tag -fa "${{ steps.version.outputs.major-version }}" -m "Major version ${{ steps.version.outputs.major-version }} (points to ${{ steps.version.outputs.version }})"
+          git push origin -f "${{ steps.version.outputs.major-version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            **Changes:**
+            ${{ steps.commit.outputs.subject }}
+
+            **Full commit message:**
+            ${{ steps.commit.outputs.message }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update major version release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.major-version }}
+          name: ${{ steps.version.outputs.major-version }} (latest)
+          body: |
+            This tag tracks the latest release in the ${{ steps.version.outputs.major-version }} series.
+
+            Current version: ${{ steps.version.outputs.version }}
+
+            See [${{ steps.version.outputs.version }}](../../releases/tag/${{ steps.version.outputs.version }}) for full release notes.
+          draft: false
+          prerelease: false
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

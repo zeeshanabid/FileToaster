@@ -1,5 +1,5 @@
 # Build stage: compile frontend and Go binary
-FROM golang:1.27.4-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm AS builder
 
 # Install Node.js for frontend build
 RUN apt-get update && apt-get install -y --no-install-recommends \
