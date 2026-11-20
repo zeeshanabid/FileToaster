@@ -76,7 +76,9 @@ FileToaster is a modern, self-hosted file manager built for homelabs and persona
 
 ## 🐳 Docker & Docker Run
 
-### Quick Start
+The container uses Alpine Linux with a flexible entrypoint that supports the **PUID/PGID** pattern. By default it runs as UID:GID **65532** (the standard nonroot user), but you can override this to run as your host user.
+
+### Quick Start (default nonroot user)
 
 ```bash
 docker run -d \
@@ -85,20 +87,33 @@ docker run -d \
   ghcr.io/zeeshanabid/filetoaster:latest
 ```
 
-### Persistent Config on Volume
+### Run as Your Host User (recommended for bind mounts)
 
-Store config and upload staging on a named volume or host path owned by the nonroot user (UID:GID 65532:65532):
+Pass `PUID` and `PGID` to match your host user — this makes bind-mounted volumes directly writable without permission issues:
 
 ```bash
-# Create config directory with correct permissions
-mkdir -p /home/nonroot/.filetoaster
-chown -R 65532:65532 /home/nonroot/.filetoaster
+docker run -d \
+  --name filetoaster \
+  -p 8080:8080 \
+  -e PUID="$(id -u)" \
+  -e PGID="$(id -g)" \
+  -e FILETOASTER_SESSION_SECRET="$(openssl rand -hex 32)" \
+  -e FILETOASTER_ADMIN_PASSWORD="changeme" \
+  -v /path/to/your/data:/data \
+  -v "/home/$(whoami)/.filetoaster":"/home/$(whoami)/.filetoaster" \
+  ghcr.io/zeeshanabid/filetoaster:latest
+```
 
+### Persistent Config with Named Volume
+
+Use a Docker named volume for config/upload staging (managed by Docker with correct permissions):
+
+```bash
 docker run -d \
   --name filetoaster \
   -p 8080:8080 \
   -v /mnt/data:/data \
-  -v filetoaster-config:/home/nonroot/.filetoaster \
+  -v filetoaster-config:/home/filetoaster/.filetoaster \
   -e FILETOASTER_SESSION_SECRET="$(openssl rand -hex 32)" \
   -e FILETOASTER_ADMIN_PASSWORD="changeme" \
   ghcr.io/zeeshanabid/filetoaster:latest
@@ -111,7 +126,7 @@ docker run -d \
 | Username | `admin` |
 | Password | `admin` (change immediately via **Change Password** in UI or set `FILETOASTER_ADMIN_PASSWORD`) |
 
-> **⚠️ Important**: The container runs as nonroot (UID:GID 65532:65532). Ensure your mounted volumes are writable by this user.
+> **⚠️ Important**: If you **don't** pass `PUID`/`PGID`, the container runs as UID:GID **65532:65532** (the built-in nonroot user). Ensure your mounted volumes are writable by this user, or use the `PUID`/`PGID` override above to match your host user.
 
 ---
 
