@@ -9,6 +9,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: cleanup-container-images
+  cancel-in-progress: true
+
 env:
   KEEP_MAJOR_VERSIONS: '2'
   KEEP_MINOR_VERSIONS: '10'
