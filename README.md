@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="#features--goals"><strong>Features</strong></a> •
+  <a href="#features-goals"><strong>Features</strong></a> •
   <a href="#limitations"><strong>Limitations</strong></a> •
-  <a href="#docker--docker-run"><strong>Docker</strong></a> •
+  <a href="#docker-docker-run"><strong>Docker</strong></a> •
   <a href="#other-installation-methods"><strong>Install</strong></a> •
   <a href="#configuration"><strong>Config</strong></a> •
   <a href="#security"><strong>Security</strong></a> •
@@ -20,17 +20,17 @@
 
 ---
 
-## 📸 Screenshot
+## Screenshot
 
 ![FileToaster Screenshot](screenshot.jpg)
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Features & Goals](#features--goals)
+- [Features & Goals](#features-goals)
 - [Limitations](#limitations)
-- [Docker & Docker Run](#docker--docker-run)
+- [Docker & Docker Run](#docker-docker-run)
 - [Other Installation Methods](#other-installation-methods)
 - [Configuration](#configuration)
   - [Config File Parameters](#config-file-parameters)
@@ -43,7 +43,7 @@
 
 ---
 
-## ✨ Features & Goals
+## Features & Goals
 
 FileToaster is a modern, self-hosted file manager built for homelabs and personal infrastructure. It combines a beautiful SvelteKit frontend with a high-performance Go backend, all packaged as a single embedded binary.
 
@@ -65,7 +65,7 @@ FileToaster is a modern, self-hosted file manager built for homelabs and persona
 
 ---
 
-## ⚠️ Limitations
+## Limitations
 
 - **Large Directories**: Very large numbers of files or directories (hundreds of thousands+) may hit performance limits in directory listing and tree rendering.
 - **No Database**: All task state is in-memory and resets on server restart (by design for simplicity).
@@ -74,9 +74,11 @@ FileToaster is a modern, self-hosted file manager built for homelabs and persona
 
 ---
 
-## 🐳 Docker & Docker Run
+## Docker & Docker Run
 
-### Quick Start
+The container uses Alpine Linux with a flexible entrypoint that supports the **PUID/PGID** pattern. By default it runs as UID:GID **65532** (the standard nonroot user), but you can override this to run as your host user.
+
+### Quick Start (default nonroot user)
 
 ```bash
 docker run -d \
@@ -85,20 +87,33 @@ docker run -d \
   ghcr.io/zeeshanabid/filetoaster:latest
 ```
 
-### Persistent Config on Volume
+### Run as Your Host User (recommended for bind mounts)
 
-Store config and upload staging on a named volume or host path owned by the nonroot user (UID:GID 65532:65532):
+Pass `PUID` and `PGID` to match your host user — this makes bind-mounted volumes directly writable without permission issues:
 
 ```bash
-# Create config directory with correct permissions
-mkdir -p /home/nonroot/.filetoaster
-chown -R 65532:65532 /home/nonroot/.filetoaster
+docker run -d \
+  --name filetoaster \
+  -p 8080:8080 \
+  -e PUID="$(id -u)" \
+  -e PGID="$(id -g)" \
+  -e FILETOASTER_SESSION_SECRET="$(openssl rand -hex 32)" \
+  -e FILETOASTER_ADMIN_PASSWORD="changeme" \
+  -v /path/to/your/data:/data \
+  -v "/home/$(whoami)/.filetoaster":"/home/filetoaster/.filetoaster" \
+  ghcr.io/zeeshanabid/filetoaster:latest
+```
 
+### Persistent Config with Named Volume
+
+Use a Docker named volume for config/upload staging (managed by Docker with correct permissions):
+
+```bash
 docker run -d \
   --name filetoaster \
   -p 8080:8080 \
   -v /mnt/data:/data \
-  -v filetoaster-config:/home/nonroot/.filetoaster \
+  -v filetoaster-config:/home/filetoaster/.filetoaster \
   -e FILETOASTER_SESSION_SECRET="$(openssl rand -hex 32)" \
   -e FILETOASTER_ADMIN_PASSWORD="changeme" \
   ghcr.io/zeeshanabid/filetoaster:latest
@@ -111,11 +126,11 @@ docker run -d \
 | Username | `admin` |
 | Password | `admin` (change immediately via **Change Password** in UI or set `FILETOASTER_ADMIN_PASSWORD`) |
 
-> **⚠️ Important**: The container runs as nonroot (UID:GID 65532:65532). Ensure your mounted volumes are writable by this user.
+> **⚠️ Important**: If you **don't** pass `PUID`/`PGID`, the container runs as UID:GID **65532:65532** (the built-in nonroot user). Ensure your mounted volumes are writable by this user, or use the `PUID`/`PGID` override above to match your host user.
 
 ---
 
-## 🛠️ Other Installation Methods
+## Other Installation Methods
 
 ### Build from Source
 
@@ -136,7 +151,7 @@ The binary will be at `server/bin/server` (or `server/bin/filetoaster` in Docker
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### Config File Resolution Order
 
@@ -223,13 +238,13 @@ All config parameters (except `admin_password_hash`, `admin_user`, `session_secr
 
 ---
 
-## 🔐 Change Password Caveat
+## Change Password Caveat
 
 > **⚠️ Important**: If `FILETOASTER_ADMIN_PASSWORD` is set in the environment, the **Change Password** feature in the UI will **not** override it. The environment variable always takes precedence at runtime. To change the password when using the env var, update the environment variable and restart the container/server.
 
 ---
 
-## ⭐ Show Your Support
+## Show Your Support
 
 If FileToaster helps you manage your files, please consider giving it a star!
 
@@ -237,7 +252,7 @@ If FileToaster helps you manage your files, please consider giving it a star!
 
 ---
 
-## 🔒 Security
+## Security
 
 If you discover a security vulnerability, please report it **privately** via GitHub Security Advisories instead of using the public issue tracker:
 
@@ -245,7 +260,7 @@ If you discover a security vulnerability, please report it **privately** via Git
 
 ---
 
-## 📄 License
+## License
 
 Copyright (c) 2026 Zeeshan Abid.
 
