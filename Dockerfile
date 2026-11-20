@@ -17,11 +17,11 @@ RUN cd client && npm run build
 RUN cp -r client/frontend-build server/frontend-build
 
 # Build Go binary (static, no cgo)
-RUN cd server && CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/server ./cmd/server
+RUN cd server && CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/filetoaster ./cmd/server
 
 # Runtime stage: distroless static nonroot
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /app
-COPY --from=builder /app/server/bin/server .
+COPY --from=builder /app/server/bin/filetoaster .
 EXPOSE 8080
-ENTRYPOINT ["./server"]
+ENTRYPOINT ["/app/filetoaster"]
