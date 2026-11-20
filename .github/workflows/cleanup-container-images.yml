@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
         run: |
-          versions=$(gh api "/users/$OWNER/packages/container/filetoaster/versions" --paginate --jq '.[] | {id: .id, name: .name, tags: .metadata.container.tags, created_at: .created_at}')
+          versions=$(gh api "/users/$OWNER/packages/container/filetoaster/versions" --paginate --jq '[.[] | {id: .id, name: .name, tags: .metadata.container.tags, created_at: .created_at}]')
           echo "versions<<EOF" >> $GITHUB_OUTPUT
           echo "$versions" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
