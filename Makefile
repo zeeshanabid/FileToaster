@@ -35,7 +35,10 @@ run: frontend
 test: test-client test-server
 
 # Run the client unit tests (vitest).
-test-client:
+deps-client:
+	cd client && npm ci
+
+test-client: deps-client
 	cd client && npm test
 
 # Stage the built client assets so the //go:embed directive resolves, then run
