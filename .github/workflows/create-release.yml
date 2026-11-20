@@ -49,8 +49,8 @@ jobs:
       - name: Determine version bump
         id: version
         run: |
-          # Get latest tag
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          # Get highest semantic version tag (v*.*.*)
+          LATEST_TAG=$(git tag -l 'v*.*.*' | sort -V | tail -1)
 
           if [ -z "$LATEST_TAG" ]; then
             # No tags exist, start at v0.0.1
