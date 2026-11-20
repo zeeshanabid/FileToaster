@@ -19,9 +19,17 @@ RUN cp -r client/frontend-build server/frontend-build
 # Build Go binary (static, no cgo)
 RUN cd server && CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/filetoaster ./cmd/server
 
-# Runtime stage: distroless static nonroot
-FROM gcr.io/distroless/static:nonroot
+# Runtime stage: Alpine with su-exec for PUID/PGID support
+FROM alpine:3.24
+
+# Install su-exec for privilege dropping
+RUN apk add --no-cache su-exec
+
 WORKDIR /app
+
 COPY --from=builder /app/server/bin/filetoaster .
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 8080
-ENTRYPOINT ["/app/filetoaster"]
+ENTRYPOINT ["/entrypoint.sh"]
