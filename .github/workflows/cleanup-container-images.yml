@@ -1,0 +1,161 @@
+name: Cleanup Container Images
+
+on:
+  schedule:
+    - cron: '0 11 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  KEEP_MAJOR_VERSIONS: '2'
+  KEEP_MINOR_VERSIONS: '10'
+  KEEP_PATCH_VERSIONS: '30'
+  KEEP_DAYS: '90'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Fetch container image versions
+        id: fetch-versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          versions=$(gh api "/users/$OWNER/packages/container/filetoaster/versions" --paginate --jq '.[] | {id: .id, name: .name, tags: .metadata.container.tags, created_at: .created_at}')
+          echo "versions<<EOF" >> $GITHUB_OUTPUT
+          echo "$versions" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Determine versions to delete
+        id: determine-deletions
+        run: |
+          python3 << 'PYEOF'
+          import json
+          import sys
+          import os
+          from datetime import datetime, timedelta
+          import re
+
+          versions_json = os.environ.get('VERSIONS_JSON', '[]')
+          versions = json.loads(versions_json)
+
+          keep_major = int(os.environ.get('KEEP_MAJOR_VERSIONS', '2'))
+          keep_minor = int(os.environ.get('KEEP_MINOR_VERSIONS', '10'))
+          keep_patch = int(os.environ.get('KEEP_PATCH_VERSIONS', '30'))
+          keep_days = int(os.environ.get('KEEP_DAYS', '90'))
+
+          now = datetime.utcnow()
+          cutoff_date = now - timedelta(days=keep_days)
+
+          major_versions = {}
+          minor_versions = {}
+          patch_versions = {}
+          untagged = []
+
+          for v in versions:
+              tags = v.get('tags', [])
+              created = datetime.fromisoformat(v['created_at'].replace('Z', '+00:00')).replace(tzinfo=None)
+
+              if not tags:
+                  untagged.append(v)
+                  continue
+
+              for tag in tags:
+                  if re.match(r'^v\d+$', tag):
+                      major = tag
+                      if major not in major_versions:
+                          major_versions[major] = []
+                      major_versions[major].append(v)
+                  elif re.match(r'^v\d+\.\d+$', tag):
+                      minor = tag
+                      if minor not in minor_versions:
+                          minor_versions[minor] = []
+                      minor_versions[minor].append(v)
+                  elif re.match(r'^v\d+\.\d+\.\d+$', tag):
+                      patch = tag
+                      if patch not in patch_versions:
+                          patch_versions[patch] = []
+                      patch_versions[patch].append(v)
+
+          for group in [major_versions, minor_versions, patch_versions]:
+              for key in group:
+                  group[key].sort(key=lambda x: x['created_at'], reverse=True)
+
+          keep_ids = set()
+
+          sorted_majors = sorted(major_versions.keys(), key=lambda x: int(x[1:]), reverse=True)
+          for major in sorted_majors[:keep_major]:
+              for v in major_versions[major]:
+                  keep_ids.add(v['id'])
+
+          sorted_minors = sorted(minor_versions.keys(),
+                                 key=lambda x: tuple(map(int, x[1:].split('.'))),
+                                 reverse=True)
+          for minor in sorted_minors[:keep_minor]:
+              for v in minor_versions[minor]:
+                  keep_ids.add(v['id'])
+
+          sorted_patches = sorted(patch_versions.keys(),
+                                  key=lambda x: tuple(map(int, x[1:].split('.'))),
+                                  reverse=True)
+          for patch in sorted_patches[:keep_patch]:
+              for v in patch_versions[patch]:
+                  keep_ids.add(v['id'])
+
+          for v in versions:
+              created = datetime.fromisoformat(v['created_at'].replace('Z', '+00:00')).replace(tzinfo=None)
+              if created > cutoff_date:
+                  keep_ids.add(v['id'])
+
+          to_delete = []
+          for v in versions:
+              if v['id'] not in keep_ids:
+                  to_delete.append(v)
+
+          for v in untagged:
+              if v['id'] not in keep_ids:
+                  to_delete.append(v)
+
+          print(f"Total versions: {len(versions)}")
+          print(f"Versions to keep: {len(keep_ids)}")
+          print(f"Versions to delete: {len(to_delete)}")
+          print(f"Retention: major={keep_major}, minor={keep_minor}, patch={keep_patch}, days={keep_days}")
+
+          for v in to_delete:
+              print(f"DELETE {v['id']} - tags: {v.get('tags', [])} - created: {v['created_at']}")
+
+          delete_ids = [v['id'] for v in to_delete]
+          print(f"delete_ids={json.dumps(delete_ids)}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"delete_ids={json.dumps(delete_ids)}\n")
+          PYEOF
+        env:
+          VERSIONS_JSON: ${{ steps.fetch-versions.outputs.versions }}
+          KEEP_MAJOR_VERSIONS: ${{ env.KEEP_MAJOR_VERSIONS }}
+          KEEP_MINOR_VERSIONS: ${{ env.KEEP_MINOR_VERSIONS }}
+          KEEP_PATCH_VERSIONS: ${{ env.KEEP_PATCH_VERSIONS }}
+          KEEP_DAYS: ${{ env.KEEP_DAYS }}
+
+      - name: Delete old container images
+        if: steps.determine-deletions.outputs.delete_ids != '[]'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DELETE_IDS: ${{ steps.determine-deletions.outputs.delete_ids }}
+        run: |
+          echo "$DELETE_IDS" | jq -r '.[]' | while read -r id; do
+            echo "Deleting version $id..."
+            gh api -X DELETE "/repos/$REPO/packages/container/filetoaster/versions/$id" || true
+          done
+
+      - name: Cleanup summary
+        run: |
+          echo "Container image cleanup completed"
