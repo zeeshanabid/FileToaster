@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, clearCompletedTasks } from '$lib/store/tasks';
-  import { taskNotification } from '$lib/store/notifications';
-  import { formatRate, formatSize } from '$lib/fs/format';
-  import type { Task } from '$lib/fs/api';
-  import { uploadManager } from '$lib/fs/upload';
-  import { onMount, onDestroy } from 'svelte';
+import { runningCount, queuedCount, activeCount, taskList, taskLabel, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, clearCompletedTasks } from '$lib/store/tasks';
+import { taskNotification } from '$lib/store/notifications';
+import { formatRate, formatSize } from '$lib/fs/format';
+import type { Task } from '$lib/fs/api';
+import { uploadManager } from '$lib/fs/upload';
+import { onMount, onDestroy } from 'svelte';
+import Portal from './Portal.svelte';
 
   // Local open state, synced with the global taskPanelOpen store
   let open = $state(false);
@@ -119,16 +120,18 @@
   </button>
 
   {#if notification}
-    <div class="task-notification" role="status" aria-live="polite" aria-atomic="true">
-      <span class="notification-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-          <path d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" />
-          <path d="M9 14l2 2 4-4" />
-        </svg>
-      </span>
-      <span class="notification-text">{notification.label}</span>
-    </div>
+    <Portal>
+      <div class="task-notification" role="status" aria-live="polite" aria-atomic="true">
+        <span class="notification-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+            <path d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" />
+            <path d="M9 14l2 2 4-4" />
+          </svg>
+        </span>
+        <span class="notification-text">{notification.label}</span>
+      </div>
+    </Portal>
   {/if}
 
   {#if open}
@@ -481,9 +484,9 @@
     font-variant-numeric: tabular-nums;
   }
   .task-notification {
-    position: absolute;
-    bottom: 54px;
-    right: 0;
+    position: fixed;
+    bottom: 82px;
+    right: 12px;
     min-width: 200px;
     max-width: 320px;
     padding: 10px 14px;
@@ -497,7 +500,7 @@
     gap: 8px;
     font-size: 12px;
     font-weight: 500;
-    z-index: 55;
+    z-index: 1000001;
     animation: notification-in 200ms ease-out;
   }
   @keyframes notification-in {
