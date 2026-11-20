@@ -44,7 +44,7 @@ jobs:
           import json
           import sys
           import os
-          from datetime import datetime, timedelta
+          from datetime import datetime, timedelta, timezone
           import re
 
           versions_json = os.environ.get('VERSIONS_JSON', '[]')
@@ -55,7 +55,7 @@ jobs:
           keep_patch = int(os.environ.get('KEEP_PATCH_VERSIONS', '30'))
           keep_days = int(os.environ.get('KEEP_DAYS', '90'))
 
-          now = datetime.now(datetime.UTC)
+          now = datetime.now(timezone.utc)
           cutoff_date = now - timedelta(days=keep_days)
 
           major_versions = {}
@@ -65,7 +65,7 @@ jobs:
 
           for v in versions:
               tags = v.get('tags', [])
-              created = datetime.fromisoformat(v['created_at'].replace('Z', '+00:00')).replace(tzinfo=None)
+              created = datetime.fromisoformat(v['created_at'].replace('Z', '+00:00'))
 
               if not tags:
                   untagged.append(v)
@@ -114,7 +114,7 @@ jobs:
                   keep_ids.add(v['id'])
 
           for v in versions:
-              created = datetime.fromisoformat(v['created_at'].replace('Z', '+00:00')).replace(tzinfo=None)
+              created = datetime.fromisoformat(v['created_at'].replace('Z', '+00:00'))
               if created > cutoff_date:
                   keep_ids.add(v['id'])
 
