@@ -7,6 +7,7 @@ import type { Task } from '$lib/fs/api';
 import { formatRate, formatSize } from '$lib/fs/format';
 import { uploadManager } from '$lib/fs/upload';
 import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, taskNotification } from '$lib/store/tasks';
+import { clearCompletedTasks } from '$lib/store/tasks';
 import RunningTaskIcon from './RunningTaskIcon.svelte';
 
 // The component reads its live data from $lib/store/tasks. These stores are
@@ -34,7 +35,8 @@ vi.mock('$lib/store/tasks', async () => {
     taskPanelOpen: taskPanelOpenStore,
     taskNotification: taskNotificationStore,
     taskLabel: (t: Task) => (t.type === 'copy' ? 'Copy' : t.type),
-    cancelTaskAction: vi.fn(async () => {})
+    cancelTaskAction: vi.fn(async () => {}),
+    clearCompletedTasks: vi.fn(async () => {})
   };
 });
 
@@ -194,5 +196,57 @@ describe('RunningTaskIcon — upload resume', () => {
     await tick();
 
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Resume upload' })).toBeInTheDocument();
+  });
+});
+
+describe('RunningTaskIcon — clear button visibility', () => {
+  it('shows clear button when there are finished tasks', async () => {
+    await openPanel();
+    tasks.set([copyTask({ status: 'finished', progress: 100 })]);
+    active.set(0);
+    await tick();
+
+    const clearBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear completed tasks' });
+    expect(clearBtn).toBeInTheDocument();
+  });
+
+  it('shows clear button when there are failed tasks', async () => {
+    await openPanel();
+    tasks.set([copyTask({ status: 'failed', progress: 100, error: 'boom' })]);
+    active.set(0);
+    await tick();
+
+    const clearBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear completed tasks' });
+    expect(clearBtn).toBeInTheDocument();
+  });
+
+  it('shows clear button when there are cancelled tasks', async () => {
+    await openPanel();
+    tasks.set([copyTask({ status: 'cancelled', progress: 50 })]);
+    active.set(0);
+    await tick();
+
+    const clearBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear completed tasks' });
+    expect(clearBtn).toBeInTheDocument();
+  });
+
+  it('hides clear button when only running tasks exist', async () => {
+    await openPanel();
+    tasks.set([copyTask({ status: 'running', progress: 50 })]);
+    active.set(1);
+    await tick();
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.querySelector('[aria-label="Clear completed tasks"]')).toBeNull();
+  });
+
+  it('hides clear button when only queued tasks exist', async () => {
+    await openPanel();
+    tasks.set([copyTask({ status: 'queued', progress: 0 })]);
+    active.set(1);
+    await tick();
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.querySelector('[aria-label="Clear completed tasks"]')).toBeNull();
   });
 });

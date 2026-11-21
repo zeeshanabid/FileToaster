@@ -143,7 +143,7 @@ import Portal from './Portal.svelte';
             {$combinedRunningCount} running{#if $combinedQueuedCount > 0}, {$combinedQueuedCount} queued{/if}
           </span>
         {/if}
-        {#if $combinedTaskList.some(t => t.status === 'finished' || t.status === 'cancelled')}
+        {#if $combinedTaskList.some(t => t.status === 'finished' || t.status === 'failed' || t.status === 'cancelled')}
           <button
             class="clear-btn"
             type="button"
