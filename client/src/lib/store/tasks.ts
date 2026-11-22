@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import { writable, derived, type Readable } from 'svelte/store';
 import {
   cancelTask as apiCancel,
+  clearServerTasks as apiClearServerTasks,
   listTasks,
   submitCopy,
   submitDelete,
@@ -26,6 +27,38 @@ import { showTaskToast, taskNotification } from '$lib/store/notifications';
 // at /api/events. The derived stores expose the data the UI needs: the full list
 // (oldest first) and the running / queued counts used by the taskbar badge.
 const tasksMap = writable<Record<string, Task>>({});
+
+// Ids removed by "Clear completed tasks". They are ignored if a delta or a late
+// snapshot arrives before the server-side clear lands, so a task the user just
+// cleared cannot flicker back into the panel during the same session. They are
+// also persisted, so an immediate refresh (before the delete request completes)
+// still hides them. The server deletes the terminal records too, which keeps
+// them gone for every client after a reload.
+const CLEARED_TASKS_KEY = 'filetoaster-cleared-task-ids';
+const clearedTaskIDs = new Set<string>();
+
+function loadClearedTaskIDs(): void {
+  if (!browser) return;
+  try {
+    const raw = localStorage.getItem(CLEARED_TASKS_KEY);
+    if (!raw) return;
+    const ids = JSON.parse(raw);
+    if (Array.isArray(ids)) {
+      for (const id of ids) if (typeof id === 'string') clearedTaskIDs.add(id);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function persistClearedTaskIDs(): void {
+  if (!browser) return;
+  try {
+    localStorage.setItem(CLEARED_TASKS_KEY, JSON.stringify([...clearedTaskIDs]));
+  } catch {
+    // ignore
+  }
+}
 
 // Export for testing
 export { tasksMap, taskNotification, showTaskToast };
@@ -54,8 +87,9 @@ export const failedCount: Readable<number> = derived(taskList, ($list, set) =>
   set($list.filter((t) => t.status === 'failed').length)
 );
 
-// Convert an upload staging session to Task-like objects for display in the taskbar
-// Returns an array because we now create separate tasks for staging and finalizing
+// Convert an upload staging session to Task-like objects for display in the
+// taskbar. A finalizing session produces no local task: the tracked server-side
+// finalize task replaces the staging entry once staging completes.
 export function ingestStateToTasks(state: IngestState): Task[] {
   const totalChunks = state.present.length;
   const doneChunks = state.present.filter((p) => p).length;
@@ -109,30 +143,6 @@ export function ingestStateToTasks(state: IngestState): Task[] {
         files: state.files.length
       } as UploadMeta
     });
-  } else if (state.phase === 'finalizing') {
-    // Finalizing task - shows finalizing progress
-    tasks.push({
-      id: `finalizing-${state.taskID}`,
-      type: 'upload',
-      status: 'running',
-      progress: 0, // finalizing doesn't have chunk progress
-      created: baseCreated,
-      updated: now,
-      error: state.error ?? undefined,
-      bytes: {
-        total: totalBytes,
-        done: totalBytes,
-        filesTotal,
-        filesDone,
-        ratePerSec: 0
-      },
-      meta: {
-        staging: state.taskID,
-        dest: state.dest,
-        phase: 'finalizing',
-        files: state.files.length
-      } as UploadMeta
-    });
   } else if (state.phase === 'cancelled' || state.phase === 'failed') {
     // A terminal-but-resumable session stays in the taskbar so the user can
     // resume it (the RunningTaskIcon shows a Resume button for these).
@@ -159,20 +169,20 @@ export function ingestStateToTasks(state: IngestState): Task[] {
       } as UploadMeta
     });
   }
-  
+  // A finalizing session has finished staging: it is intentionally not shown as
+  // a second, local task. The server-side finalize task replaces it via SSE (and
+  // reports its own failure/finish), so no stale "running" staging task is left
+  // behind when the finalize copy fails.
   return tasks;
 }
 
 // uploadSessionVisible reports whether a session should be shown in the taskbar.
 // Terminal-but-resumable sessions (cancelled/failed) stay visible so they can be
 // resumed; a session that finished or was cleared is gone from the map entirely.
+// A finalizing session is hidden because the tracked finalize task owns the
+// display from that point on.
 export function uploadSessionVisible(state: IngestState): boolean {
-  return (
-    state.phase === 'staging' ||
-    state.phase === 'finalizing' ||
-    state.phase === 'cancelled' ||
-    state.phase === 'failed'
-  );
+  return state.phase === 'staging' || state.phase === 'cancelled' || state.phase === 'failed';
 }
 
 // Reactive store for upload staging sessions (converted to Task-like objects)
@@ -292,43 +302,62 @@ export function cancelTaskAction(id: string) {
   return apiCancel(id);
 }
 
-// clearCompletedTasks removes finished and cancelled tasks from the task list.
-// It does not remove running or queued tasks. It also clears corresponding
-// localStorage entries for upload tasks.
+// clearCompletedTasks removes every task that is not actively running or
+// queued: finished, failed and cancelled tasks (including upload finalize tasks)
+// and any resumable/paused upload session, together with its persisted local
+// state. Only running and queued work survives a clear.
 export function clearCompletedTasks() {
-  // Clear SSE tasks (finished/cancelled)
+  loadClearedTaskIDs();
+  // Clear SSE tasks (everything not still running/queued) and remember their ids
+  // so a late SSE delta cannot put them back.
+  const removedIDs: string[] = [];
   tasksMap.update((map) => {
     const newMap: Record<string, Task> = {};
     for (const [id, task] of Object.entries(map)) {
       if (task.status === 'running' || task.status === 'queued') {
         newMap[id] = task;
-      } else if (task.type === 'upload') {
-        // For upload tasks, extract the original taskID from display ID (e.g., "staging-xxx" -> "xxx")
-        const originalTaskID = id.replace(/^(staging|finalizing)-/, '');
-        try {
-          localStorage.removeItem(uploadStoreKey(originalTaskID));
-        } catch {
-          // ignore
+      } else {
+        removedIDs.push(id);
+        if (task.type === 'upload') {
+          // Match the terminal upload task back to its local staging session so
+          // its localStorage bookmark is cleared too (clearByFinalizeID also
+          // discards the session and its persisted file bytes).
+          clearTerminalUploadSession(task);
         }
-        // Also clear from uploadManager
-        uploadManager.clear(originalTaskID);
       }
     }
     return newMap;
   });
+  for (const id of removedIDs) clearedTaskIDs.add(id);
+  persistClearedTaskIDs();
 
-  // Clear upload staging tasks (finished/cancelled/failed)
-  // uploadManager.sessions are the source of truth for upload tasks
-  for (const [taskID, state] of uploadManager.sessions) {
-    if (state.phase === 'done' || state.phase === 'failed' || state.phase === 'cancelled') {
-      try {
-        localStorage.removeItem(uploadStoreKey(taskID));
-      } catch {
-        // ignore
-      }
-      uploadManager.clear(taskID);
+  // Clear the local upload sessions too. Everything except an actively staging
+  // upload is terminal from the taskbar's point of view: a finalizing session's
+  // staging already finished (the server finalize task, if still running, is in
+  // tasksMap and is preserved above), and cancelled/failed sessions are paused.
+  for (const [taskID, state] of [...uploadManager.sessions]) {
+    if (state.phase === 'staging') continue;
+    try {
+      localStorage.removeItem(uploadStoreKey(taskID));
+    } catch {
+      // ignore
     }
+    uploadManager.clear(taskID);
   }
+
+  // Delete the terminal tasks server-side as well. The task list is rebuilt from
+  // the server snapshot on every page load, so without this the cleared tasks
+  // would reappear after a refresh. Running/queued tasks are left alone and any
+  // that finish later surface normally.
+  void apiClearServerTasks()
+    .then((ids) => {
+      for (const id of ids) clearedTaskIDs.add(id);
+      persistClearedTaskIDs();
+    })
+    .catch(() => {
+      // Offline/transient: the local panel is still cleared; a later refresh may
+      // restore server tasks until the clear succeeds.
+    });
 }
 
 // taskLabel derives a one-line description for a task record, reading its meta
@@ -397,6 +426,7 @@ let reconnectDelay = 2000;
 export function initTasks() {
   if (started || !browser) return;
   started = true;
+  loadClearedTaskIDs();
   refresh();
   connect();
 }
@@ -405,12 +435,58 @@ function refresh() {
   listTasks()
     .then((list) => {
       const map: Record<string, Task> = {};
-      for (const t of list) map[t.id] = t;
+      for (const t of list) {
+        // Ignore a terminal record the user cleared locally while the
+        // server-side delete was in flight.
+        if (clearedTaskIDs.has(t.id)) continue;
+        map[t.id] = t;
+        // A snapshot (e.g. after a reconnect) can already contain a terminal
+        // finalize task whose SSE delta was missed; clear the matching local
+        // staging session so it cannot linger as a hidden/resumable upload.
+        clearTerminalUploadSession(t);
+      }
       tasksMap.set(map);
     })
     .catch(() => {
       // Transient: the reconnect loop will retry the snapshot on next refresh.
     });
+}
+
+// clearTerminalUploadSession drops the local upload session that belongs to a
+// terminal finalize task. Staging is finished by the time that task exists and
+// the server has discarded the upload session, so a failed/cancelled finalize
+// must not leave the local staging task stuck in the task panel; keeping a
+// stale localStorage handle would also make it look resumable after a refresh.
+function clearTerminalUploadSession(task: Task): void {
+  if (task.type !== 'upload') return;
+  if (task.status !== 'finished' && task.status !== 'failed' && task.status !== 'cancelled') return;
+
+  // Local upload tasks are displayed as "staging-<sessionID>" /
+  // "finalizing-<sessionID>", so strip the display prefix to reach the session.
+  const localSessionID = task.id.replace(/^(staging|finalizing)-/, '');
+  if (localSessionID !== task.id) {
+    try {
+      localStorage.removeItem(uploadStoreKey(localSessionID));
+    } catch {
+      // ignore
+    }
+    uploadManager.clear(localSessionID);
+  }
+
+  // Clear the staging/finalizing local task by the finalize task ID. The
+  // finalize id is what the upload manager recorded when the server handed the
+  // staging dir over to the tracked copy op.
+  uploadManager.clearByFinalizeID(task.id);
+
+  // A server finalize task carries the staging directory path in meta.staging.
+  // Its basename is "filetoaster-<sessionID>"; this also lets a task that
+  // finished after a refresh (where the paused session was never loaded) clear
+  // any legacy bookmark and IndexedDB bytes left under the session id.
+  const meta = (task.meta ?? null) as UploadMeta | null;
+  const staging = typeof meta?.staging === 'string' ? meta.staging.split('/').filter(Boolean).pop() : '';
+  if (staging?.startsWith('filetoaster-')) {
+    uploadManager.clear(staging.slice('filetoaster-'.length));
+  }
 }
 
 function connect() {
@@ -446,6 +522,9 @@ function connect() {
 function handleMessage(message: string) {
   const task = parseSSEMessage(message);
   if (!task) return;
+  // A cleared terminal task must not be resurrected by a delta that was already
+  // in flight when the user pressed Clear.
+  if (clearedTaskIDs.has(task.id)) return;
   
   // Check if this is a new task (not already in the map)
   let isNewTask = false;
@@ -480,22 +559,12 @@ function handleMessage(message: string) {
   
   // An upload that reached a terminal status no longer has a resumable server
   // session; drop its remembered local handle so a stale localStorage entry
-  // never triggers a restart prompt later.
-  if (
-    task.type === 'upload' &&
-    (task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled')
-  ) {
-    // Only remove from localStorage on successful upload (finished)
-    if (task.status === 'finished') {
-      try {
-        localStorage.removeItem(uploadStoreKey(task.id));
-      } catch {
-        // ignore
-      }
-      // Clear the staging/finalizing local tasks by the finalize task ID
-      uploadManager.clearByFinalizeID(task.id);
-    }
-  }
+  // never triggers a restart prompt later. This includes failed and cancelled
+  // finalize tasks: staging finished before the finalize copy began, and the
+  // server drops the upload session when it submits that op, so a failed
+  // finalize must remove the local staging/finalizing task too instead of
+  // leaving it stuck as "running" in the task panel.
+  clearTerminalUploadSession(task);
   // When a task reaches a terminal state, reload any open windows showing
   // the affected directories so the UI reflects the changes.
   if (task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled') {

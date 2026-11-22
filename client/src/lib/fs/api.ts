@@ -232,6 +232,20 @@ export async function listTasks(): Promise<Task[]> {
   return (await res.json()).tasks;
 }
 
+// clearServerTasks permanently removes terminal tasks from the server's store so
+// a page refresh does not restore tasks the user cleared from the panel. Running
+// and queued tasks are left untouched. It returns the removed task ids.
+export async function clearServerTasks(): Promise<string[]> {
+  const res = await fetch('/api/tasks/clear', {
+    method: 'POST',
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    throw new ApiError(`could not clear tasks (${res.status})`);
+  }
+  return (await res.json()).cleared ?? [];
+}
+
 // submitCopy enqueues a copy task. It resolves to the server's response
 // ({ taskID } on success). Destination collisions are resolved server-side by
 // renaming, so the request never needs an overwrite decision and a 409 is never

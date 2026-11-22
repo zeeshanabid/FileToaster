@@ -106,6 +106,25 @@ func (s *Store) List() []*Task {
 	return out
 }
 
+// ClearTerminal removes every task in a terminal state (finished, failed or
+// cancelled) and returns the removed ids. Running and queued tasks are kept so
+// clearing the task panel never destroys active work. This is what makes a
+// cleared task stay gone across a browser refresh: the task list snapshot is
+// rebuilt from this store.
+func (s *Store) ClearTerminal() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := make([]string, 0)
+	for id, t := range s.tasks {
+		if t.Status.IsTerminal() {
+			delete(s.tasks, id)
+			removed = append(removed, id)
+		}
+	}
+	sort.Strings(removed)
+	return removed
+}
+
 // copyTask returns a shallow copy of a task for safe return to callers that must
 // not mutate the stored record.
 func copyTask(t *Task) *Task {

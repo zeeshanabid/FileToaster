@@ -7,10 +7,12 @@
 // worker slot; only the finalize copy does.
 //
 // Sessions survive a page refresh via localStorage (task id, manifest, and the
-// per-file received bytes so missing chunks can be re-sliced); they do NOT
-// survive a server restart (the in-memory server session is gone → the client
-// is told to restart). Manifest building and the chunk math are pure functions
-// at the top of this file so they can be unit-tested without a browser.
+// per-file present-chunk bitmap) plus IndexedDB (the live file bytes, so the
+// chunks the server is still missing can be re-sliced after the browser drops
+// its File objects); they do NOT survive a server restart (the in-memory server
+// session is gone → the client is told to restart). Manifest building and the
+// chunk math are pure functions at the top of this file so they can be
+// unit-tested without a browser.
 
 import type {
   CreateUploadRequest,
@@ -73,6 +75,124 @@ export const UPLOAD_STORAGE_PREFIX = 'filetoaster-upload:';
 export function uploadStoreKey(taskID: string): string {
   return UPLOAD_STORAGE_PREFIX + taskID;
 }
+
+// UploadBlobStore persists the live file bytes of an upload session. localStorage
+// can only hold the resumable manifest (paths, sizes, present chunk bitmap), not
+// the file contents, and a browser refresh drops the selected File/Blob objects.
+// Without the original bytes a client cannot rebuild the chunks the server is
+// still missing, which surfaced as "chunk N bytes are missing". Keeping the
+// blobs in IndexedDB (which structured-clones Blob/File to disk, not memory) lets
+// resume re-slice exactly the missing chunks — including the chunk that was in
+// flight when the page was refreshed — and skip the ones already present.
+export interface UploadBlobStore {
+  save(taskID: string, files: ReadonlyArray<UploadFile>): Promise<void>;
+  load(taskID: string): Promise<UploadFile[] | null>;
+  remove(taskID: string): Promise<void>;
+}
+
+const BLOB_DB_NAME = 'filetoaster-upload-blobs';
+const BLOB_STORE_NAME = 'sessions';
+const BLOB_DB_VERSION = 1;
+
+interface BlobRecord {
+  rel: string;
+  size: number;
+  chunks: number;
+  blob: Blob;
+}
+
+// IndexedDbUploadBlobStore stores each session's files in one object-store
+// record keyed by the session id. Every operation is best-effort: environments
+// without IndexedDB (SSR, tests) or with a full quota simply skip persistence, so
+// uploads never fail because the resumable bookmark could not be written.
+export class IndexedDbUploadBlobStore implements UploadBlobStore {
+  private dbPromise: Promise<IDBDatabase | null> | null = null;
+
+  private open(): Promise<IDBDatabase | null> {
+    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+    if (this.dbPromise) return this.dbPromise;
+    this.dbPromise = new Promise((resolve) => {
+      let req: IDBOpenDBRequest;
+      try {
+        req = indexedDB.open(BLOB_DB_NAME, BLOB_DB_VERSION);
+      } catch {
+        resolve(null);
+        return;
+      }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(BLOB_STORE_NAME)) {
+          db.createObjectStore(BLOB_STORE_NAME);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    });
+    return this.dbPromise;
+  }
+
+  private async run<T>(
+    mode: IDBTransactionMode,
+    op: (store: IDBObjectStore) => IDBRequest<T> | void
+  ): Promise<void> {
+    const db = await this.open();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(BLOB_STORE_NAME, mode);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+        op(tx.objectStore(BLOB_STORE_NAME));
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  async save(taskID: string, files: ReadonlyArray<UploadFile>): Promise<void> {
+    const records: BlobRecord[] = [];
+    for (const f of files) {
+      if (!f.blob) continue;
+      records.push({ rel: f.rel, size: f.size, chunks: f.chunks, blob: f.blob });
+    }
+    if (records.length === 0) return;
+    await this.run('readwrite', (store) => store.put(records, taskID));
+  }
+
+  async load(taskID: string): Promise<UploadFile[] | null> {
+    const db = await this.open();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(BLOB_STORE_NAME, 'readonly');
+        const req = tx.objectStore(BLOB_STORE_NAME).get(taskID);
+        req.onsuccess = () => {
+          const records = req.result as BlobRecord[] | undefined;
+          if (!records || records.length === 0) {
+            resolve(null);
+            return;
+          }
+          resolve(
+            records.map((r) => ({ rel: r.rel, size: r.size, chunks: r.chunks, blob: r.blob }))
+          );
+        };
+        req.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  async remove(taskID: string): Promise<void> {
+    await this.run('readwrite', (store) => store.delete(taskID));
+  }
+}
+
+// uploadBlobStore is the process-wide blob persistence used by the manager.
+export const uploadBlobStore = new IndexedDbUploadBlobStore();
 
 // relUnder returns `path` relative to `root` with forward slashes. Anything not
 // actually rooted at `root` falls back to its basename so a stray path still
@@ -247,6 +367,10 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
   // checks it as ordinary TypeScript.
   export class UploadManager {
     sessions = new Map<string, IngestState>();
+    // hydration tracks an in-flight blob restore per session so loadPersisted can
+    // start restoring the live bytes in the background while a later resume()
+    // joins the same operation instead of racing it.
+    private hydration = new Map<string, Promise<void>>();
     // Subscribers for reactive updates when sessions change
     private subscribers = new Set<() => void>();
     // Global chunk-upload concurrency pool shared by every session. `inflight`
@@ -273,7 +397,8 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     private concurrency = 8,
     private maxRetries = 3,
     private retryDelayMs = 250,
-    private defaultChunkSize: number = DEFAULT_CHUNK_SIZE
+    private defaultChunkSize: number = DEFAULT_CHUNK_SIZE,
+    private blobStore: UploadBlobStore = uploadBlobStore
   ) {}
 
   // configure overrides the chunk size and the global chunk-upload concurrency
@@ -396,8 +521,127 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     // Show toast for new upload
     const n = files.length;
     showTaskToast(`Upload started: ${n === 1 ? '1 file' : `${n} files`}`, `upload-${taskID}`);
-    void this.uploadAll(state);
+    void this.persistBlobsThenUpload(state);
     return taskID;
+  }
+
+  // persistBlobsThenUpload bookmarks the live file bytes before the first chunk
+  // is sent, then runs the upload. Storing the blobs first is what makes a
+  // refresh at any point during staging resumable: when the page reloads, the
+  // File objects are gone, but resume can reload them from IndexedDB and
+  // re-slice the chunks the server still needs (including the one that was in
+  // flight when the page refreshed). Persistence is best-effort, so a quota or
+  // missing IndexedDB never blocks the upload itself.
+  private async persistBlobsThenUpload(state: IngestState): Promise<void> {
+    try {
+      await this.blobStore.save(state.taskID, state.files);
+    } catch {
+      // Best-effort: the in-session resume path still works without the blobs.
+    }
+    await this.uploadAll(state);
+  }
+
+  // hydrateBlobs reloads the session's file bytes from the blob store so a
+  // session restored after a refresh (or a manager that no longer holds the live
+  // Blobs) can rebuild the chunks the server is missing instead of failing with
+  // "chunk N bytes are missing". Files that already carry a live Blob are left
+  // untouched; a stored entry is matched by its relative path.
+  private async hydrateBlobs(state: IngestState): Promise<void> {
+    if (state.files.every((f) => f.blob)) return;
+    let stored: UploadFile[] | null = null;
+    try {
+      stored = await this.blobStore.load(state.taskID);
+    } catch {
+      stored = null;
+    }
+    if (!stored) return;
+    const blobs = new Map<string, Blob>();
+    for (const f of stored) {
+      if (f.blob) blobs.set(f.rel, f.blob);
+    }
+    if (blobs.size === 0) return;
+    state.files = state.files.map((f) =>
+      f.blob ? f : blobs.has(f.rel) ? { ...f, blob: blobs.get(f.rel) } : f
+    );
+    // A hydrated live file no longer needs an assembled in-memory copy; slice
+    // the restored Blob instead (same path a live upload takes).
+    state.received = state.received.map((bytes, idx) =>
+      state.files[idx]?.blob ? new Uint8Array(0) : bytes
+    );
+  }
+
+  // ensureHydrated joins (or starts) the single blob-restore operation for a
+  // session, so eager hydration at page load and a later resume cannot race.
+  private ensureHydrated(state: IngestState): Promise<void> {
+    const existing = this.hydration.get(state.taskID);
+    if (existing) return existing;
+    const p = this.hydrateBlobs(state).finally(() => {
+      this.hydration.delete(state.taskID);
+    });
+    this.hydration.set(state.taskID, p);
+    return p;
+  }
+
+  // needsFiles reports whether a paused session is missing the original bytes
+  // for at least one chunk the server has not received yet. That happens when
+  // the browser was refreshed before the blobs could be persisted (quota,
+  // private mode, a very large file). Such a session can only be resumed after
+  // the user re-selects the files; sending the chunks without them would fail
+  // with "chunk N bytes are missing".
+  needsFiles(taskID: string): boolean {
+    const state = this.sessions.get(taskID);
+    if (!state) return false;
+    return state.files.some((f, idx) => {
+      if (f.blob) return false;
+      const restored = state.received[idx]?.length ?? 0;
+      return restored < f.size;
+    });
+  }
+
+  // needsFolderSelection reports whether the resumed manifest contains nested
+  // paths, so the re-selection picker must return webkitRelativePath values.
+  needsFolderSelection(taskID: string): boolean {
+    const state = this.sessions.get(taskID);
+    if (!state) return false;
+    return state.files.some((f) => f.rel.includes('/'));
+  }
+
+  // resumeWithFiles attaches the files the user re-selected after a refresh to
+  // a paused session (matching by relative path and size), then resumes it.
+  // The already-staged chunks are kept; only the missing ones are sent. It
+  // returns false when the selection does not match the interrupted manifest.
+  async resumeWithFiles(
+    taskID: string,
+    picked: ReadonlyArray<{ rel: string; size: number; blob: Blob }>
+  ): Promise<boolean> {
+    const state = this.sessions.get(taskID);
+    if (!state) return false;
+    if (state.phase !== 'cancelled' && state.phase !== 'failed') return false;
+    const byRel = new Map<string, { rel: string; size: number; blob: Blob }>();
+    for (const p of picked) byRel.set(p.rel, p);
+    state.files = state.files.map((f) => {
+      if (f.blob) return f;
+      const match = byRel.get(f.rel);
+      return match && match.size === f.size ? { ...f, blob: match.blob } : f;
+    });
+    state.received = state.received.map((bytes, idx) =>
+      state.files[idx]?.blob ? new Uint8Array(0) : bytes
+    );
+    // Any files still missing can also come from the blob store (e.g. the user
+    // re-selected only part of a mixed selection).
+    await this.ensureHydrated(state);
+    if (this.needsFiles(taskID)) {
+      state.phase = 'cancelled';
+      state.error = 'Select the interrupted files to resume this upload.';
+      this.persist(state);
+      this.notify();
+      return false;
+    }
+    // Refresh the resumable bookmark with the re-selected bytes so another
+    // page reload does not have to ask again.
+    void this.blobStore.save(taskID, state.files);
+    state.error = null;
+    return this.resumeSession(taskID);
   }
 
   // resume reloads a remembered session (after a refresh) from localStorage and
@@ -430,6 +674,18 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     };
     this.sessions.set(taskID, state);
     this.notify();
+    // Reload the original file bytes so the chunks still missing after the
+    // refresh can be re-sliced (present chunks are skipped by uploadAll).
+    await this.ensureHydrated(state);
+    if (this.needsFiles(taskID)) {
+      // The browser could not persist the file bytes; leave the session paused
+      // (not failed) so the UI can ask the user to re-select the files.
+      state.phase = 'cancelled';
+      state.error = 'Select the interrupted files to resume this upload.';
+      this.persist(state);
+      this.notify();
+      return true;
+    }
     // Clear any server-side abort before re-sending the missing chunks so the
     // server accepts them again. A session gone server-side (restart/swept)
     // rejects here; the re-sent chunks then 404 and the session settles as failed.
@@ -482,6 +738,9 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
         lastBytesSent: 0
       };
       this.sessions.set(taskID, state);
+      // Restore the live file bytes in the background so a Refresh then Resume
+      // (or Play) is seamless when IndexedDB did persist them.
+      void this.ensureHydrated(state);
       changed = true;
     }
     if (changed) this.notify();
@@ -515,6 +774,25 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     // Drop any waiters still queued from the previous attempt so the resumed
     // chunks do not duplicate them (and are not stuck behind them).
     this.dropWaitersFor(state);
+    state.phase = 'staging';
+    state.error = null;
+    // Reset start time for accurate speed calculation on resume
+    state.startTime = Date.now();
+    state.lastNotifyTime = Date.now();
+    state.lastBytesSent = state.bytesSent;
+    // A session restored after a refresh has no live File objects; reload the
+    // original bytes from IndexedDB so the missing chunks (including the one
+    // that was in flight when the page reloaded) can be re-sent.
+    await this.ensureHydrated(state);
+    if (this.needsFiles(taskID)) {
+      // Never start a transfer that would fail with "bytes are missing"; keep
+      // the session paused and let the UI request the files again.
+      state.phase = 'cancelled';
+      state.error = 'Select the interrupted files to resume this upload.';
+      this.persist(state);
+      this.notify();
+      return false;
+    }
     // Clear the server-side abort so the missing chunks are accepted again. An
     // aborted session refuses chunks until this succeeds; if the session is gone
     // server-side the re-sent chunks 404 and the session settles as failed.
@@ -523,12 +801,6 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     } catch {
       // fall through — uploadAll surfaces any real failure via the session state
     }
-    state.phase = 'staging';
-    state.error = null;
-    // Reset start time for accurate speed calculation on resume
-    state.startTime = Date.now();
-    state.lastNotifyTime = Date.now();
-    state.lastBytesSent = state.bytesSent;
     this.persist(state);
     this.notify();
     void this.uploadAll(state);
@@ -553,6 +825,17 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
     const state = this.sessions.get(taskID);
     if (state) {
       this.discard(state);
+    } else {
+      // The session may already be gone from memory (e.g. a finalize task that
+      // finished after a refresh); still drop any persisted bookmark and bytes.
+      if (browserAvailable()) {
+        try {
+          localStorage.removeItem(uploadStoreKey(taskID));
+        } catch {
+          // ignore
+        }
+      }
+      void this.blobStore.remove(taskID);
     }
     this.notify();
   }
@@ -597,7 +880,29 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
         // ignore
       }
     }
+    // The session can no longer be resumed, so its persisted file bytes are
+    // dead weight; drop them instead of leaving multi-gigabyte blobs behind.
+    void this.blobStore.remove(state.taskID);
     this.sessions.delete(state.taskID);
+  }
+
+  // enterFinalizing marks a session as finalizing and drops everything that made
+  // it resumable: the persisted file bytes and the localStorage bookmark. Once
+  // the server owns the staging dir the client can no longer send chunks (the
+  // server has dropped the upload session), so a refresh during finalize is
+  // handled by the tracked finalize task rather than by resuming chunks. This
+  // also guarantees a finished upload leaves no local state behind.
+  private enterFinalizing(state: IngestState): void {
+    state.phase = 'finalizing';
+    void this.blobStore.remove(state.taskID);
+    if (browserAvailable()) {
+      try {
+        localStorage.removeItem(uploadStoreKey(state.taskID));
+      } catch {
+        // ignore
+      }
+    }
+    this.notify();
   }
 
   // uploadAll uploads every file, draining the per-file chunks through the
@@ -657,9 +962,7 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
         this.notify();
         if (resp.taskID) {
           state.finalizeID = resp.taskID;
-          state.phase = 'finalizing';
-          this.persist(state);
-          this.notify();
+          this.enterFinalizing(state);
         }
         return;
       } catch (err) {
@@ -685,8 +988,7 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
   // (the server finalized it and handed over the finalize task id).
   private checkCompleted(state: IngestState): void {
     if (state.finalizeID) {
-      state.phase = 'finalizing';
-      this.notify();
+      this.enterFinalizing(state);
       return;
     }
     if (state.phase !== 'staging') return;
@@ -696,8 +998,7 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
       // No finalize id was returned synchronously; the server finalized and
       // dropped the session. The finalize task will appear via SSE; the label
       // (phase "finalizing") picks it up from the terminal task meta.
-      state.phase = 'finalizing';
-      this.notify();
+      this.enterFinalizing(state);
     }
   }
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,42 @@ func TestTasksListAndGet(t *testing.T) {
 	}
 	if gotTask.ID != submitted.TaskID {
 		t.Fatalf("task id = %q, want %q", gotTask.ID, submitted.TaskID)
+	}
+}
+
+// TestServeClearTasksKeepsActive verifies the clear endpoint deletes terminal
+// records (so they do not return in a later snapshot after a browser refresh)
+// while leaving running work tracked.
+func TestServeClearTasksKeepsActive(t *testing.T) {
+	h := newCopyService(t.TempDir())
+	store := h.svc.Store()
+	store.Add(&task.Task{ID: "finished", Type: "upload", Status: task.StatusFinished})
+	store.Add(&task.Task{ID: "failed", Type: "upload", Status: task.StatusFailed})
+	store.Add(&task.Task{ID: "running", Type: "copy", Status: task.StatusRunning})
+	store.Add(&task.Task{ID: "queued", Type: "copy", Status: task.StatusQueued})
+
+	rec := httptest.NewRecorder()
+	h.srv.ServeClearTasks(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/clear", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var cleared struct {
+		Cleared []string `json:"cleared"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cleared); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !reflect.DeepEqual(cleared.Cleared, []string{"failed", "finished"}) {
+		t.Fatalf("cleared = %v, want [failed finished]", cleared.Cleared)
+	}
+	if got := h.svc.Get("finished"); got != nil {
+		t.Fatalf("finished task still present after clear: %+v", got)
+	}
+	if got := h.svc.Get("running"); got == nil || got.Status != task.StatusRunning {
+		t.Fatalf("running task was not preserved: %+v", got)
+	}
+	if got := h.svc.Get("queued"); got == nil || got.Status != task.StatusQueued {
+		t.Fatalf("queued task was not preserved: %+v", got)
 	}
 }
 

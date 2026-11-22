@@ -10,9 +10,10 @@ import {
   globalChunkFor,
   globalChunkSpan,
   type UploadApi,
+  type UploadBlobStore,
   type ManifestEntry
 } from '$lib/fs/upload';
-import { chunkCountForFile, DEFAULT_CHUNK_SIZE, type CreateUploadRequest, type UploadManifest, type UploadStatus } from '$lib/fs/api';
+import { chunkCountForFile, DEFAULT_CHUNK_SIZE, type CreateUploadRequest, type UploadFile, type UploadManifest, type UploadStatus } from '$lib/fs/api';
 
 beforeEach(() => {
   localStorage.clear();
@@ -242,6 +243,29 @@ async function waitForUploadStart(api: ReturnType<typeof fakeUpload>): Promise<v
   throw new Error('timed out waiting for upload to start');
 }
 
+// memoryBlobStore is an in-memory UploadBlobStore for refresh tests. It keeps
+// the session's live file blobs (including their bytes) across a simulated page
+// reload, mirroring IndexedDB in the browser.
+class MemoryBlobStore implements UploadBlobStore {
+  saved = new Map<string, UploadFile[]>();
+
+  async save(taskID: string, files: ReadonlyArray<UploadFile>): Promise<void> {
+    if (!files.some((f) => f.blob)) return;
+    this.saved.set(
+      taskID,
+      files.map((f) => ({ rel: f.rel, size: f.size, chunks: f.chunks, blob: f.blob }))
+    );
+  }
+
+  async load(taskID: string): Promise<UploadFile[] | null> {
+    return this.saved.get(taskID) ?? null;
+  }
+
+  async remove(taskID: string): Promise<void> {
+    this.saved.delete(taskID);
+  }
+}
+
 describe('UploadManager.startUpload', () => {
   it('creates a session with the manifest and uploads every chunk in order', async () => {
     const api = fakeUpload({ finalizeOnLast: true });
@@ -262,10 +286,11 @@ describe('UploadManager.startUpload', () => {
 
     // Every chunk of every file was uploaded exactly once.
     const key = (u: { fileIdx: number; chunkIdx: number }) => `${u.fileIdx}:${u.chunkIdx}`;
-    expect(api.uploads.map(key).sort()).toEqual(['0:0', '0:1', '1:0']);
+    await vi.waitFor(() => expect(api.uploads.map(key).sort()).toEqual(['0:0', '0:1', '1:0']));
 
-    // All chunks were persisted to the keyed storage entry.
-    expect(localStorage.getItem(uploadStoreKey('sess-1'))).not.toBeNull();
+    // Once staging completes and finalize starts, the resumable bookmark is
+    // dropped: a finished upload must leave no localStorage/IndexedDB state.
+    expect(localStorage.getItem(uploadStoreKey('sess-1'))).toBeNull();
 
     // The session finalized once the last chunk completed.
     await waitFor(mgr, 'sess-1', 'finalizing');
@@ -719,6 +744,157 @@ describe('UploadManager concurrency pool', () => {
   });
 });
 
+describe('UploadManager refresh resume', () => {
+  it('resumes from the last successful chunk after a refresh using the stored file bytes', async () => {
+    // 8 bytes at a 4-byte chunk size => chunks "abcd" (sent) and "efgh"
+    // (in flight when the page is refreshed). After the reload the File object
+    // is gone; the blob store stands in for the browser's IndexedDB.
+    const file = new File(['abcdefgh'], 'a.bin');
+    const store = new MemoryBlobStore();
+    const api1 = fakeUpload({ hangAt: { fileIdx: 0, chunkIdx: 1 } });
+    // Use a unique session id so a manager still running from another test
+    // cannot clear this test's localStorage bookmark.
+    api1.createUpload = async () => ({ taskID: 'sess-refresh-live' });
+    const mgr1 = new UploadManager(api1, 1, 3, 0, DEFAULT_CHUNK_SIZE, store);
+    const taskID = (await mgr1.startUpload(
+      '/root/out',
+      {
+        files: [{ rel: 'a.bin', size: 8, chunks: 2, blob: file }],
+        dirs: []
+      },
+      4
+    )) as string;
+
+    // The first chunk completed and was persisted; the second is still hanging.
+    await vi.waitFor(() => expect(mgr1.state(taskID)?.present).toEqual([true, false]));
+    expect(store.saved.has(taskID)).toBe(true);
+
+    // Simulate a browser refresh: a new manager with no in-memory sessions,
+    // sharing only the persisted manifest (localStorage) and the blob store.
+    const api2 = fakeUpload({ finalizeOnLast: true });
+    const mgr2 = new UploadManager(api2, 1, 3, 0, DEFAULT_CHUNK_SIZE, store);
+    mgr2.loadPersisted();
+    expect(mgr2.state(taskID)?.phase).toBe('cancelled');
+
+    expect(await mgr2.resumeSession(taskID)).toBe(true);
+
+    // It re-sends only the missing/in-flight chunk, not the one the server has,
+    // and completes without the former "chunk N bytes are missing" failure.
+    await waitFor(mgr2, taskID, 'finalizing');
+    expect(api2.uploads.map((u) => u.chunkIdx)).toEqual([1]);
+    expect(api2.uploads[0].size).toBe(4);
+    expect(mgr2.state(taskID)?.error).toBeNull();
+  });
+
+  it('releases the stored file bytes once finalizing starts', async () => {
+    const file = new File(['abcdefgh'], 'b.bin');
+    const store = new MemoryBlobStore();
+    const api = fakeUpload({ finalizeOnLast: true });
+    const mgr = new UploadManager(api, 2, 3, 0, DEFAULT_CHUNK_SIZE, store);
+    const taskID = (await mgr.startUpload(
+      '/root/out',
+      { files: [{ rel: 'b.bin', size: 8, chunks: 2, blob: file }], dirs: [] },
+      4
+    )) as string;
+    expect(store.saved.has(taskID)).toBe(true);
+    await waitFor(mgr, taskID, 'finalizing');
+    // Finalize owns the staging dir now; the resumable bookmark and the
+    // IndexedDB file bytes are both cleared, so a finished upload leaves no
+    // local state behind.
+    await vi.waitFor(() => expect(store.saved.has(taskID)).toBe(false));
+    expect(localStorage.getItem(uploadStoreKey(taskID))).toBeNull();
+  });
+
+  it('keeps the stored bytes on abort so the upload is still resumable', async () => {
+    const file = new File(['abcdefgh'], 'c.bin');
+    const store = new MemoryBlobStore();
+    const api = fakeUpload({ hangAt: { fileIdx: 0, chunkIdx: 1 } });
+    const mgr = new UploadManager(api, 1, 3, 0, DEFAULT_CHUNK_SIZE, store);
+    const taskID = (await mgr.startUpload(
+      '/root/out',
+      { files: [{ rel: 'c.bin', size: 8, chunks: 2, blob: file }], dirs: [] },
+      4
+    )) as string;
+    await vi.waitFor(() => expect(mgr.state(taskID)?.present).toEqual([true, false]));
+    await mgr.abort(taskID);
+    expect(mgr.state(taskID)?.phase).toBe('cancelled');
+    // Abort is resumable: neither the manifest nor the file bytes are dropped.
+    expect(localStorage.getItem(uploadStoreKey(taskID))).not.toBeNull();
+    expect(store.saved.has(taskID)).toBe(true);
+  });
+
+  it('stays paused and asks for the files when a refresh lost the bytes, instead of failing', async () => {
+    // A persisted live session (no blob, empty assembled bytes) whose blob store
+    // entry is gone: chunk 0 was sent, chunk 1 still needs the original bytes.
+    localStorage.setItem(
+      uploadStoreKey('sess-lost'),
+      JSON.stringify({
+        taskID: 'sess-lost',
+        dest: '/root/out',
+        chunkSize: 4,
+        files: [{ rel: 'a.bin', size: 8, chunks: 2 }],
+        dirs: [],
+        present: [true, false],
+        received: [[]],
+        phase: 'staging'
+      })
+    );
+    const store = new MemoryBlobStore();
+    const api = fakeUpload({ finalizeOnLast: true });
+    const mgr = new UploadManager(api, 1, 3, 0, DEFAULT_CHUNK_SIZE, store);
+    mgr.loadPersisted();
+    await vi.waitFor(() => expect(mgr.needsFiles('sess-lost')).toBe(true));
+
+    // Resuming without bytes must not start a transfer that fails with
+    // "chunk N bytes are missing"; the session stays paused and resumable.
+    expect(await mgr.resumeSession('sess-lost')).toBe(false);
+    expect(api.uploads).toHaveLength(0);
+    expect(mgr.state('sess-lost')?.phase).toBe('cancelled');
+    expect(mgr.state('sess-lost')?.error).toMatch(/select the interrupted files/i);
+
+    // Re-selecting the same file supplies the missing bytes; only chunk 1 is
+    // re-sent and the upload finishes.
+    const file = new File(['abcdefgh'], 'a.bin');
+    expect(await mgr.resumeWithFiles('sess-lost', [{ rel: 'a.bin', size: 8, blob: file }])).toBe(true);
+    await waitFor(mgr, 'sess-lost', 'finalizing');
+    expect(api.uploads.map((u) => u.chunkIdx)).toEqual([1]);
+    expect(mgr.state('sess-lost')?.error).toBeNull();
+  });
+
+  it('rejects a re-selection that does not match the paused manifest', async () => {
+    localStorage.setItem(
+      uploadStoreKey('sess-mismatch'),
+      JSON.stringify({
+        taskID: 'sess-mismatch',
+        dest: '/root/out',
+        chunkSize: 4,
+        files: [{ rel: 'a.bin', size: 8, chunks: 2 }],
+        dirs: [],
+        present: [true, false],
+        received: [[]],
+        phase: 'staging'
+      })
+    );
+    const mgr = new UploadManager(
+      fakeUpload({ finalizeOnLast: true }),
+      1,
+      3,
+      0,
+      DEFAULT_CHUNK_SIZE,
+      new MemoryBlobStore()
+    );
+    mgr.loadPersisted();
+    await vi.waitFor(() => expect(mgr.needsFiles('sess-mismatch')).toBe(true));
+
+    expect(
+      await mgr.resumeWithFiles('sess-mismatch', [
+        { rel: 'other.bin', size: 8, blob: new File(['abcdefgh'], 'other.bin') }
+      ])
+    ).toBe(false);
+    expect(mgr.state('sess-mismatch')?.phase).toBe('cancelled');
+  });
+});
+
 describe('UploadManager.sendWithRetry retries', () => {
   it('retries a transiently failing chunk and eventually completes', async () => {    const api = fakeUpload({ finalizeOnLast: true, failFirst: 2 });
     const mgr = new UploadManager(api, 8, 3, 0);
@@ -761,7 +937,8 @@ describe('UploadManager.sendWithRetry retries', () => {
     const state = mgr.state(taskID as string);
     expect(state).toBeDefined();
     expect(state!.finalizeID).toBe('task-final');
-    expect(localStorage.getItem(uploadStoreKey(taskID as string))).not.toBeNull();
+    // Finalizing already dropped the resumable bookmark.
+    expect(localStorage.getItem(uploadStoreKey(taskID as string))).toBeNull();
     
     // Clear by finalizeID (as the server finalize task would do)
     mgr.clearByFinalizeID('task-final');

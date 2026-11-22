@@ -636,6 +636,14 @@ func (s *Server) ServeTasksList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": s.svc.Snapshot()})
 }
 
+// ServeClearTasks removes every terminal task (finished, failed or cancelled)
+// from the store, leaving running and queued work in place. Clients call this
+// when the user clears the task panel so the cleared records are not restored by
+// a later page refresh (the list snapshot is served from this store).
+func (s *Server) ServeClearTasks(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"cleared": s.svc.ClearCompleted()})
+}
+
 // ServeTask returns a single task by id.
 func (s *Server) ServeTask(w http.ResponseWriter, r *http.Request) {
 	id := path.Base(r.URL.Path)

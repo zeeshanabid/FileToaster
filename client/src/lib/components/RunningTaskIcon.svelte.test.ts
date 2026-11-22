@@ -6,7 +6,8 @@ import { fireEvent, screen, within } from '@testing-library/dom';
 import type { Task } from '$lib/fs/api';
 import { formatRate, formatSize } from '$lib/fs/format';
 import { uploadManager } from '$lib/fs/upload';
-import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen, taskNotification } from '$lib/store/tasks';
+import { taskList, runningCount, queuedCount, activeCount, cancelTaskAction, combinedTaskList, combinedRunningCount, combinedQueuedCount, combinedActiveCount, taskPanelOpen } from '$lib/store/tasks';
+import { taskNotification } from '$lib/store/notifications';
 import { clearCompletedTasks } from '$lib/store/tasks';
 import RunningTaskIcon from './RunningTaskIcon.svelte';
 
@@ -90,6 +91,8 @@ beforeEach(() => {
   running.set(0);
   queued.set(0);
   active.set(0);
+  taskPanelOpen.set(false);
+  taskNotification.set(null);
   (cancelTaskAction as unknown as Mock).mockClear();
 });
 afterEach(() => {
@@ -157,6 +160,23 @@ describe('RunningTaskIcon — progress bar and stats', () => {
     // The rate cell only renders while running.
     expect(tasksPanel.querySelector('.rate')).toBeNull();
   });
+
+  it('does not let a visible toast block opening the task panel', async () => {
+    taskNotification.set({ taskId: 'toast-1', label: 'Upload started' });
+    mountComp();
+    await tick();
+
+    // The toast portal is pass-through so its full-viewport host does not eat
+    // clicks meant for the taskbar button underneath it.
+    await vi.waitFor(() => expect(document.querySelector('.window-portal')).not.toBeNull());
+    const portal = document.querySelector('.window-portal');
+    expect(portal).toHaveClass('passthrough');
+    expect(screen.getByText('Upload started')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tasks' }));
+    await tick();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
 });
 
 describe('RunningTaskIcon — upload resume', () => {
@@ -196,6 +216,106 @@ describe('RunningTaskIcon — upload resume', () => {
     await tick();
 
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Resume upload' })).toBeInTheDocument();
+  });
+
+  it('shows no Resume button for a failed finalize task (staging has no session left)', async () => {
+    await openPanel();
+    tasks.set([
+      copyTask({
+        id: 'task-finish-failed',
+        type: 'upload',
+        status: 'failed',
+        error: 'could not copy the staged upload',
+        meta: { staging: '/tmp/filetoaster-abc', dest: '/root/out', phase: 'finalizing', files: 1 }
+      })
+    ]);
+    active.set(0);
+    await tick();
+
+    expect(within(screen.getByRole('dialog')).queryByRole('button', { name: 'Resume upload' })).toBeNull();
+  });
+
+  it('asks for the files when a refreshed upload lost its bytes, then resumes with them', async () => {
+    const needsSpy = vi.spyOn(uploadManager, 'needsFiles').mockReturnValue(true);
+    const folderSpy = vi.spyOn(uploadManager, 'needsFolderSelection').mockReturnValue(false);
+    const resumeSpy = vi.spyOn(uploadManager, 'resumeSession').mockResolvedValue(true);
+    const pickedSpy = vi.spyOn(uploadManager, 'resumeWithFiles').mockResolvedValue(true);
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+
+    await openPanel();
+    tasks.set([
+      copyTask({
+        id: 'staging-sess-lost',
+        type: 'upload',
+        status: 'cancelled',
+        meta: { staging: 'sess-lost', dest: '/root/out', phase: 'cancelled', files: 1 }
+      })
+    ]);
+    active.set(0);
+    await tick();
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Resume upload' }));
+    await tick();
+    // The picker opens synchronously; no transfer is started without the bytes.
+    expect(clickSpy).toHaveBeenCalled();
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    const input = document.querySelector('.resume-input') as HTMLInputElement;
+    const file = new File(['abc'], 'a.bin');
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    fireEvent.change(input);
+    await vi.waitFor(() =>
+      expect(pickedSpy).toHaveBeenCalledWith('sess-lost', [{ rel: 'a.bin', size: 3, blob: file }])
+    );
+
+    needsSpy.mockRestore();
+    folderSpy.mockRestore();
+    resumeSpy.mockRestore();
+    pickedSpy.mockRestore();
+    clickSpy.mockRestore();
+  });
+});
+
+describe('RunningTaskIcon — upload cancel', () => {
+  it('aborts a local staging task through the upload manager', async () => {
+    const abortSpy = vi.spyOn(uploadManager, 'abort').mockResolvedValue();
+    await openPanel();
+    tasks.set([
+      copyTask({
+        id: 'staging-sess-cancel',
+        type: 'upload',
+        status: 'running',
+        meta: { staging: 'sess-cancel', dest: '/root/out', phase: 'staging', files: 1 }
+      })
+    ]);
+    active.set(1);
+    await tick();
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel task' }));
+    await tick();
+    expect(abortSpy).toHaveBeenCalledWith('sess-cancel');
+    expect(cancelTaskAction as unknown as Mock).not.toHaveBeenCalled();
+    abortSpy.mockRestore();
+  });
+
+  it('cancels a server finalize task by its task id', async () => {
+    await openPanel();
+    tasks.set([
+      copyTask({
+        id: 'task-finalize-running',
+        type: 'upload',
+        status: 'running',
+        meta: { staging: '/tmp/filetoaster-abc', dest: '/root/out', phase: 'finalizing', files: 1 }
+      })
+    ]);
+    active.set(1);
+    await tick();
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel task' }));
+    await tick();
+    // The meta staging value is a directory path for a finalize task, so the
+    // cancel must go to the tracked task rather than the upload manager.
+    expect(cancelTaskAction).toHaveBeenCalledWith('task-finalize-running');
   });
 });
 
