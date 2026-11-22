@@ -131,6 +131,7 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	// Public so the SPA reads it before any session cookie exists.
 	mux.HandleFunc("GET /api/config", taskSrv.ServeConfig)
 	mux.Handle("GET /api/tasks", guard.Middleware(http.HandlerFunc(taskSrv.ServeTasksList)))
+	mux.Handle("POST /api/tasks/clear", guard.Middleware(http.HandlerFunc(taskSrv.ServeClearTasks)))
 	mux.Handle("GET /api/tasks/{id}", guard.Middleware(http.HandlerFunc(taskSrv.ServeTask)))
 	mux.Handle("POST /api/tasks/{id}/cancel", guard.Middleware(http.HandlerFunc(taskSrv.ServeCancel)))
 	mux.Handle("GET /api/events", guard.Middleware(http.HandlerFunc(taskSrv.ServeEvents)))

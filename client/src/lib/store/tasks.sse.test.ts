@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { get } from 'svelte/store';
 import { tick } from 'svelte';
-import { taskList, initTasks, shutdownTasks } from '$lib/store/tasks';
+import { taskList, initTasks, shutdownTasks, combinedTaskList, clearCompletedTasks } from '$lib/store/tasks';
+import { uploadManager, uploadStoreKey, type IngestState } from '$lib/fs/upload';
 import { listTasks, cancelTask, submitCopy } from '$lib/fs/api';
 import { reloadWindowsForPath } from '$lib/store/windows';
 import type { Task } from '$lib/fs/api';
@@ -12,6 +13,7 @@ import type { Task } from '$lib/fs/api';
 // the initial snapshot) and stub the global `fetch` used by the SSE connector.
   vi.mock('$lib/fs/api', () => ({
     listTasks: vi.fn(),
+    clearServerTasks: vi.fn(async () => []),
     cancelTask: vi.fn(),
     submitCopy: vi.fn(),
     createUpload: vi.fn(),
@@ -92,6 +94,8 @@ function delay(ms = 30) {
 }
 
 beforeEach(() => {
+    localStorage.clear();
+    uploadManager.sessions.clear();
     stubFetch();
     shutdownTasks();
     initTasks();
@@ -257,5 +261,100 @@ describe('live SSE task progress', () => {
     // should still be refreshed in the UI.
     expect(reloadSpy).toHaveBeenCalledTimes(1);
     expect(reloadSpy).toHaveBeenCalledWith('/dest');
+  });
+});
+
+describe('cleared task deltas', () => {
+  it('does not resurrect a cleared task when a late delta arrives', async () => {
+    await tick();
+    const finished = copyTask({ id: 'task-cleared', status: 'finished', progress: 100 });
+    push(finished);
+    await tick();
+    await delay();
+    expect(get(taskList).some((t) => t.id === 'task-cleared')).toBe(true);
+
+    clearCompletedTasks();
+    await tick();
+    expect(get(taskList).some((t) => t.id === 'task-cleared')).toBe(false);
+
+    // A delta that was already buffered when Clear was pressed must not put the
+    // removed task back into the panel.
+    push(finished);
+    await tick();
+    await delay();
+    expect(get(taskList).some((t) => t.id === 'task-cleared')).toBe(false);
+  });
+});
+
+describe('upload staging task cleanup', () => {
+  function uploadState(overrides: Partial<IngestState> = {}): IngestState {
+    const now = Date.now();
+    return {
+      taskID: 'sess-finalize',
+      dest: '/root/uploads',
+      chunkSize: 4,
+      files: [{ rel: 'a.txt', size: 4, chunks: 1 }],
+      dirs: [],
+      received: [new Uint8Array(0)],
+      present: [true],
+      phase: 'finalizing',
+      error: null,
+      finalizeID: 'task-upload-finalize',
+      bytesSent: 4,
+      startTime: now - 1000,
+      lastNotifyTime: now,
+      lastBytesSent: 0,
+      ...overrides
+    };
+  }
+
+  it('removes the local staging task when the finalize task fails', async () => {
+    await tick();
+
+    const state = uploadState();
+    uploadManager.sessions.set(state.taskID, state);
+    localStorage.setItem(uploadStoreKey(state.taskID), JSON.stringify({ phase: 'finalizing' }));
+
+    push(copyTask({
+      id: 'task-upload-finalize',
+      type: 'upload',
+      status: 'failed',
+      progress: 30,
+      bytes: { total: 100, done: 30, filesTotal: 1, filesDone: 0, ratePerSec: 0 },
+      error: 'could not copy the staged upload',
+      meta: { staging: state.taskID, dest: '/root/uploads', phase: 'finalizing', files: 1 }
+    }));
+    await tick();
+    await delay();
+
+    // Staging finished (its work is server-side now), so a failed finalize must
+    // not leave the local staging task stuck as running/resumable.
+    expect(uploadManager.sessions.has(state.taskID)).toBe(false);
+    expect(localStorage.getItem(uploadStoreKey(state.taskID))).toBeNull();
+    expect(get(combinedTaskList).some((t) => t.id === `staging-${state.taskID}`)).toBe(false);
+    // The failed finalize task itself stays visible as the terminal record.
+    expect(get(combinedTaskList).find((t) => t.id === 'task-upload-finalize')?.status).toBe('failed');
+  });
+
+  it('removes the local staging task when the finalize task is cancelled', async () => {
+    await tick();
+
+    const state = uploadState({ finalizeID: 'task-upload-cancel' });
+    uploadManager.sessions.set(state.taskID, state);
+    localStorage.setItem(uploadStoreKey(state.taskID), JSON.stringify({ phase: 'finalizing' }));
+
+    push(copyTask({
+      id: 'task-upload-cancel',
+      type: 'upload',
+      status: 'cancelled',
+      progress: 10,
+      bytes: { total: 100, done: 10, filesTotal: 1, filesDone: 0, ratePerSec: 0 },
+      meta: { staging: state.taskID, dest: '/root/uploads', phase: 'finalizing', files: 1 }
+    }));
+    await tick();
+    await delay();
+
+    expect(uploadManager.sessions.has(state.taskID)).toBe(false);
+    expect(localStorage.getItem(uploadStoreKey(state.taskID))).toBeNull();
   });
 });

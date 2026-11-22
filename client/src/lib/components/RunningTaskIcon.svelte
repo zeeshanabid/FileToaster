@@ -51,8 +51,10 @@ import Portal from './Portal.svelte';
 
   async function on_cancel(task: Task) {
     if (task.status !== 'running' && task.status !== 'queued') return;
-    // For upload staging tasks, use the upload manager's abort with the original task ID from meta
-    if (task.type === 'upload' && task.meta && (task.meta as any).staging) {
+    // Local staging tasks carry the session id in meta and are cancelled through
+    // the upload manager (the server has no tracked task for ingestion yet). A
+    // finalize task is a normal server task and must be cancelled by its id.
+    if (task.type === 'upload' && task.id.startsWith('staging-') && task.meta && (task.meta as any).staging) {
       const stagingTaskID = (task.meta as any).staging;
       try {
         await uploadManager.abort(stagingTaskID);
@@ -68,13 +70,65 @@ import Portal from './Portal.svelte';
     }
   }
 
+  // Hidden picker used only when a refreshed upload could not restore its file
+  // bytes (IndexedDB unavailable/full). Re-selecting the same files lets the
+  // upload continue from the chunks the server already has.
+  let resumeInput = $state<HTMLInputElement | null>(null);
+  let pendingResumeTaskID: string | null = null;
+
+  function openResumePicker(taskID: string) {
+    pendingResumeTaskID = taskID;
+    if (!resumeInput) return;
+    // Folder uploads need webkitRelativePath values so the re-selected files can
+    // be matched to the interrupted manifest by relative path.
+    (resumeInput as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory =
+      uploadManager.needsFolderSelection(taskID);
+    resumeInput.multiple = true;
+    resumeInput.value = '';
+    resumeInput.click();
+  }
+
+  async function onResumeFilesPicked() {
+    const taskID = pendingResumeTaskID;
+    pendingResumeTaskID = null;
+    const picked = resumeInput?.files ? Array.from(resumeInput.files) : [];
+    if (resumeInput) resumeInput.value = '';
+    if (!taskID || picked.length === 0) return;
+    try {
+      await uploadManager.resumeWithFiles(
+        taskID,
+        picked.map((f) => ({
+          rel: (f.webkitRelativePath || f.name).replace(/^\/+/, ''),
+          size: f.size,
+          blob: f
+        }))
+      );
+    } catch {
+      // Ignore transport errors
+    }
+  }
+
   async function on_resume(task: Task) {
     if (task.type !== 'upload') return;
     if (task.status !== 'cancelled' && task.status !== 'failed') return;
+    // Only a local staging task is resumable; a terminal finalize task has no
+    // upload session left behind it.
+    if (!task.id.startsWith('staging-')) return;
     const stagingTaskID = (task.meta as any)?.staging;
     if (!stagingTaskID) return;
+    // If the file bytes could not be restored after a refresh, ask for the files
+    // before starting (resuming without them would fail with "bytes are
+    // missing"). This runs synchronously in the click handler so the browser
+    // still treats the picker as user-initiated.
+    if (uploadManager.needsFiles(stagingTaskID)) {
+      openResumePicker(stagingTaskID);
+      return;
+    }
     try {
-      await uploadManager.resumeSession(stagingTaskID);
+      const resumed = await uploadManager.resumeSession(stagingTaskID);
+      if (!resumed && uploadManager.needsFiles(stagingTaskID)) {
+        openResumePicker(stagingTaskID);
+      }
     } catch {
       // Ignore transport errors
     }
@@ -120,7 +174,7 @@ import Portal from './Portal.svelte';
   </button>
 
   {#if notification}
-    <Portal>
+    <Portal passthrough>
       <div class="task-notification" role="status" aria-live="polite" aria-atomic="true">
         <span class="notification-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
@@ -133,6 +187,16 @@ import Portal from './Portal.svelte';
       </div>
     </Portal>
   {/if}
+
+  <input
+    bind:this={resumeInput}
+    class="resume-input"
+    type="file"
+    multiple
+    tabindex="-1"
+    aria-hidden="true"
+    onchange={onResumeFilesPicked}
+  />
 
   {#if open}
     <div class="popover" role="dialog" aria-label="Tasks">
@@ -180,7 +244,7 @@ import Portal from './Portal.svelte';
                     <path d="M7 7l10 10M17 7L7 17" />
                   </svg>
                 </button>
-              {:else if task.type === 'upload' && (task.status === 'cancelled' || task.status === 'failed')}
+              {:else if task.type === 'upload' && task.id.startsWith('staging-') && (task.status === 'cancelled' || task.status === 'failed')}
                 <button
                   class="resume"
                   type="button"
@@ -212,7 +276,7 @@ import Portal from './Portal.svelte';
               </div>
             {:else}
               <div class="meta {task.status}">
-                {#if task.status === 'failed' && task.error}
+                {#if (task.status === 'failed' || task.status === 'cancelled') && task.error}
                   <span class="err">{task.error}</span>
                 {:else}
                   <span>{statusLabel(task.status)}</span>
@@ -230,6 +294,14 @@ import Portal from './Portal.svelte';
 <style>
   .tasks {
     position: relative;
+  }
+  .resume-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
   }
   .tasks-button {
     display: inline-flex;

@@ -237,6 +237,14 @@ describe('upload session → taskbar task', () => {
     expect(uploadSessionVisible(ingest({ phase: 'done' }))).toBe(false);
     expect(ingestStateToTasks(ingest({ phase: 'done' }))).toHaveLength(0);
   });
+
+  it('hands off from staging to the finalize task and shows no local finalizing task', () => {
+    // Staging is done: the tracked finalize task in the SSE stream owns the
+    // taskbar entry from here on. Keeping a local "finalizing" task would leave
+    // a duplicate/stale running task behind if the finalize copy failed.
+    expect(uploadSessionVisible(ingest({ phase: 'finalizing' }))).toBe(false);
+    expect(ingestStateToTasks(ingest({ phase: 'finalizing' }))).toHaveLength(0);
+  });
 });
 
 describe('clearCompletedTasks', () => {
@@ -264,6 +272,10 @@ describe('clearCompletedTasks', () => {
 
   beforeEach(() => {
     vi.stubGlobal('localStorage', mockLocalStorage);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ cleared: [] }) }))
+    );
     mockLocalStorage.clear();
     uploadManager.sessions.clear();
   });
@@ -290,6 +302,41 @@ describe('clearCompletedTasks', () => {
     expect(Object.keys(result)).toEqual(['task-1', 'task-4']);
     expect(result['task-1'].status).toBe('running');
     expect(result['task-4'].status).toBe('queued');
+  });
+
+  it('deletes cleared tasks on the server so a refresh does not restore them', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ cleared: ['task-2'] })
+    } as Response);
+    const now = new Date().toISOString();
+    tasksMap.set({
+      'task-2': {
+        id: 'task-2',
+        type: 'upload',
+        status: 'finished',
+        progress: 100,
+        created: now,
+        updated: now,
+        bytes: { total: 100, done: 100, filesTotal: 1, filesDone: 1, ratePerSec: 0 }
+      }
+    });
+
+    clearCompletedTasks();
+
+    await vi.waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/clear',
+        expect.objectContaining({ method: 'POST' })
+      )
+    );
+    expect(Object.keys(get(tasksMap))).toEqual([]);
+    // The cleared id is remembered locally too, so an immediate refresh (before
+    // the server delete finishes) cannot show it again.
+    expect(
+      JSON.parse(mockLocalStorage.getItem('filetoaster-cleared-task-ids') ?? '[]')
+    ).toContain('task-2');
   });
 
   it('clears localStorage for finished upload tasks', async () => {
@@ -348,8 +395,8 @@ describe('clearCompletedTasks', () => {
     expect(mockLocalStorage.getItem('filetoaster-upload:upload-3')).toBeNull();
   });
 
-  it('keeps uploadManager sessions in staging/finalizing phase', async () => {
-    const state: IngestState = {
+  it('keeps only staging uploadManager sessions and clears finalizing ones', async () => {
+    const base: IngestState = {
       taskID: 'upload-4',
       dest: '/dest',
       chunkSize: 1,
@@ -365,10 +412,63 @@ describe('clearCompletedTasks', () => {
       lastNotifyTime: Date.now(),
       lastBytesSent: 0,
     };
-    uploadManager.sessions.set('upload-4', state);
+    uploadManager.sessions.set('upload-4', base);
+    const finalizing: IngestState = {
+      ...base,
+      taskID: 'upload-5',
+      phase: 'finalizing',
+      finalizeID: 'task-finalize-5',
+      present: [true, true, true, true]
+    };
+    uploadManager.sessions.set('upload-5', finalizing);
+    mockLocalStorage.setItem('filetoaster-upload:upload-5', '{"data": "test"}');
 
     clearCompletedTasks();
 
+    // An actively staging upload is running and survives; a finalizing session
+    // has handed its work to the tracked finalize task and is not resumable.
     expect(uploadManager.sessions.has('upload-4')).toBe(true);
+    expect(uploadManager.sessions.has('upload-5')).toBe(false);
+    expect(mockLocalStorage.getItem('filetoaster-upload:upload-5')).toBeNull();
+  });
+
+  it('clears failed upload finalize tasks and their persisted state', async () => {
+    const now = new Date().toISOString();
+    const state: IngestState = {
+      taskID: 'upload-6',
+      dest: '/dest',
+      chunkSize: 1,
+      files: [{ rel: 'a', size: 4, chunks: 4 }],
+      dirs: [],
+      received: [new Uint8Array(4)],
+      present: [true, true, true, true],
+      phase: 'finalizing',
+      error: null,
+      finalizeID: 'task-finalize-6',
+      bytesSent: 4,
+      startTime: Date.now() - 1000,
+      lastNotifyTime: Date.now(),
+      lastBytesSent: 0,
+    };
+    uploadManager.sessions.set('upload-6', state);
+    mockLocalStorage.setItem('filetoaster-upload:upload-6', '{"data": "test"}');
+    tasksMap.set({
+      'task-finalize-6': {
+        id: 'task-finalize-6',
+        type: 'upload',
+        status: 'failed',
+        progress: 40,
+        created: now,
+        updated: now,
+        bytes: { total: 100, done: 40, filesTotal: 1, filesDone: 0, ratePerSec: 0 },
+        meta: { staging: '/tmp/filetoaster-upload-6', dest: '/dest', phase: 'finalizing', files: 1 }
+      }
+    });
+
+    clearCompletedTasks();
+
+    expect(Object.keys(get(tasksMap))).toEqual([]);
+    expect(uploadManager.sessions.has('upload-6')).toBe(false);
+    expect(mockLocalStorage.getItem('filetoaster-upload:upload-6')).toBeNull();
   });
 });

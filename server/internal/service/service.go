@@ -122,6 +122,12 @@ func (s *Service) Cancel(id string) error { return s.pool.Cancel(id) }
 // Snapshot returns all tasks in creation order.
 func (s *Service) Snapshot() []*task.Task { return s.store.List() }
 
+// ClearCompleted drops every terminal (finished, failed or cancelled) task from
+// the store, returning the removed ids. Running and queued tasks are untouched.
+// The in-memory store survives browser refreshes, so removing the records here
+// is what keeps a cleared task from reappearing on reload.
+func (s *Service) ClearCompleted() []string { return s.store.ClearTerminal() }
+
 // Get returns a single task by id, or nil.
 func (s *Service) Get(id string) *task.Task { return s.store.Get(id) }
 
