@@ -36,7 +36,7 @@ func newMoveEndpoint(t *testing.T, root string) moveEndpoint {
 	}
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
-	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 	registerMoveOp(svc, roots)
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	guard := newTestGuard(t)

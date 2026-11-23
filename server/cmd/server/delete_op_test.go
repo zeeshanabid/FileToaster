@@ -54,7 +54,7 @@ func newDeleteEndpoint(t *testing.T, root string) deleteEndpoint {
 	}
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
-	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 	registerDeleteOp(svc, roots)
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	guard := newTestGuard(t)
@@ -182,7 +182,7 @@ func TestServeDeleteCancellable(t *testing.T) {
 	}
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
-	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 	guard := newTestGuard(t)
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 

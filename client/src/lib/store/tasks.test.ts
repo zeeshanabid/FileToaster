@@ -471,4 +471,47 @@ describe('clearCompletedTasks', () => {
     expect(uploadManager.sessions.has('upload-6')).toBe(false);
     expect(mockLocalStorage.getItem('filetoaster-upload:upload-6')).toBeNull();
   });
+
+  it('removes cleared task IDs from localStorage after server confirms deletion (5s grace)', async () => {
+    vi.useFakeTimers();
+    
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ cleared: ['task-A', 'task-B'] })
+    } as Response);
+    const now = new Date().toISOString();
+    tasksMap.set({
+      'task-1': { id: 'task-1', type: 'copy', status: 'running', progress: 50, created: now, updated: now, bytes: { total: 100, done: 50, filesTotal: 1, filesDone: 0, ratePerSec: 0 } },
+      'task-A': { id: 'task-A', type: 'delete', status: 'finished', progress: 100, created: now, updated: now, bytes: { total: 100, done: 100, filesTotal: 1, filesDone: 1, ratePerSec: 0 } },
+      'task-B': { id: 'task-B', type: 'move', status: 'cancelled', progress: 0, created: now, updated: now, bytes: { total: 100, done: 0, filesTotal: 1, filesDone: 0, ratePerSec: 0 } },
+    });
+
+    clearCompletedTasks();
+
+    // Wait for the fetch promise to resolve
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    // IDs are immediately added to localStorage (local clear)
+    expect(
+      JSON.parse(mockLocalStorage.getItem('filetoaster-cleared-task-ids') ?? '[]')
+    ).toEqual(expect.arrayContaining(['task-A', 'task-B']));
+
+    // Before grace period: IDs still in localStorage
+    vi.advanceTimersByTime(4000);
+    expect(
+      JSON.parse(mockLocalStorage.getItem('filetoaster-cleared-task-ids') ?? '[]')
+    ).toEqual(expect.arrayContaining(['task-A', 'task-B']));
+
+    // After grace period (5s): only the server-returned IDs are removed
+    vi.advanceTimersByTime(2000); // total 6s
+    // Flush any pending microtasks
+    await vi.runAllTimersAsync();
+    const clearedIds = JSON.parse(mockLocalStorage.getItem('filetoaster-cleared-task-ids') ?? '[]');
+    // The specific IDs from server response should be gone
+    expect(clearedIds).not.toContain('task-A');
+    expect(clearedIds).not.toContain('task-B');
+
+    vi.useRealTimers();
+  });
 });

@@ -101,7 +101,10 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	// The task routes (copy, task snapshot/list, cancel, SSE progress) are all
 	// authenticated like the fs endpoints.
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
-	taskService := service.NewService(cfg.MaxParallelTasks, logger)
+	// Generate a unique instance ID for this server run to ensure task IDs are
+	// globally unique across restarts (prevents cleared-task localStorage collision).
+	instanceID := time.Now().UTC().Format("20060102T150405Z")
+	taskService := service.NewService(cfg.MaxParallelTasks, logger, instanceID)
 	registerCopyOp(taskService, roots)
 	registerMoveOp(taskService, roots)
 	registerDeleteOp(taskService, roots)
