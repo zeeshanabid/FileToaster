@@ -39,12 +39,13 @@ const (
 // that confines every source to the allowed folders, and the token registry that
 // maps a POSTed path to its one-time download token.
 type downloadConfig struct {
-	roots    func() *fs.Roots
-	registry *download.Registry
+	roots      func() *fs.Roots
+	registry   *download.Registry
+	bufferSize int64
 }
 
-func newDownloadConfig(roots func() *fs.Roots, registry *download.Registry) downloadConfig {
-	return downloadConfig{roots: roots, registry: registry}
+func newDownloadConfig(roots func() *fs.Roots, registry *download.Registry, bufferSize int64) downloadConfig {
+	return downloadConfig{roots: roots, registry: registry, bufferSize: bufferSize}
 }
 
 // copyBufferPool is the shared copy buffer the download handler streams through.
@@ -128,8 +129,7 @@ func serveDownloadToken(w http.ResponseWriter, r *http.Request, cfg downloadConf
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.WriteHeader(http.StatusOK)
 
-	buf := copyBufferPool.Get().([]byte)
-	defer copyBufferPool.Put(buf)
+	buf := make([]byte, cfg.bufferSize)
 	_, _ = io.CopyBuffer(w, f, buf)
 }
 

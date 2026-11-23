@@ -34,6 +34,19 @@ const (
 // matches copy's buffer so large-file compression stays throughput-bound.
 const compressBufferSize = 8 << 20
 
+// CompressConfig holds configuration for the compress operation.
+type CompressConfig struct {
+	// BufferSize is the per-file compress buffer size in bytes.
+	BufferSize int64
+}
+
+// DefaultCompressConfig returns the default compress configuration.
+func DefaultCompressConfig() *CompressConfig {
+	return &CompressConfig{
+		BufferSize: compressBufferSize,
+	}
+}
+
 // CompressArchive is the sentinel surfaced when a request names a format the
 // stdlib cannot write. Its message lists the accepted formats for the UI.
 var CompressArchiveFormatUnsupported = errors.New("unsupported format: supported: zip, tar.gz, tar")
@@ -257,7 +270,7 @@ func commonParentDir(paths []string) string {
 // The destination is excluded from its own walk (the directory-in-place case),
 // and a cancelled context is returned directly so the pool marks the task
 // cancelled.
-func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression) error {
+func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression, cfg *CompressConfig) error {
 	var totalBytes int64
 	var filesTotal int
 	for _, src := range plan.Sources {
@@ -277,7 +290,7 @@ func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression
 	archive := newArchive(plan, f)
 	defer f.Close()
 
-	buf := make([]byte, compressBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for _, src := range plan.Sources {
 		if err := ctx.Err(); err != nil {
 			return err

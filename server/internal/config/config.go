@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +97,19 @@ type Config struct {
 	// FILETOASTER_ADMIN_PASSWORD (env) always takes precedence over this field.
 	AdminPasswordHash string `yaml:"admin_password_hash"`
 
+	// CopyBufferSize is the per-file copy buffer size in bytes. Default 8 MiB.
+	CopyBufferSize int64 `yaml:"copy_buffer_size"`
+	// MoveBufferSize is the per-file move buffer size in bytes. Default 8 MiB.
+	MoveBufferSize int64 `yaml:"move_buffer_size"`
+	// CompressBufferSize is the per-file compress buffer size in bytes. Default 8 MiB.
+	CompressBufferSize int64 `yaml:"compress_buffer_size"`
+	// DecompressBufferSize is the per-file decompress buffer size in bytes. Default 8 MiB.
+	DecompressBufferSize int64 `yaml:"decompress_buffer_size"`
+	// FinalizeBufferSize is the per-file finalize buffer size in bytes. Default 8 MiB.
+	FinalizeBufferSize int64 `yaml:"finalize_buffer_size"`
+	// DownloadBufferSize is the per-file download buffer size in bytes. Default 8 MiB.
+	DownloadBufferSize int64 `yaml:"download_buffer_size"`
+
 	// Debug enables debug-level logging when true. Defaults to info logging.
 	Debug bool `yaml:"debug"`
 
@@ -129,6 +144,12 @@ func DefaultConfig() *Config {
 		UploadSweepInterval:       1,
 		UploadChunkSize:           4 << 20, // 4 MiB
 		UploadMaxConcurrentChunks: 4,
+		CopyBufferSize:            8 << 20, // 8 MiB
+		MoveBufferSize:            8 << 20, // 8 MiB
+		CompressBufferSize:        8 << 20, // 8 MiB
+		DecompressBufferSize:      8 << 20, // 8 MiB
+		FinalizeBufferSize:        8 << 20, // 8 MiB
+		DownloadBufferSize:        8 << 20, // 8 MiB
 	}
 }
 
@@ -224,6 +245,8 @@ max_parallel_tasks: 4
 shutdown_timeout_seconds: 30
 # Set to true to enable debug logging (defaults to info).
 debug: false
+# Set GOMAXPROCS to this value. 0 (the default) leaves it to the Go runtime.
+gomaxprocs: 0
 tmp_dir: %s
 # How many hours a staged upload is tolerated before the background sweep
 # removes its staging dir and session. Must be at least 1 hour; 0 or negative
@@ -241,6 +264,18 @@ upload_chunk_size: 4194304
 # browser to avoid resource-exhaustion failures when uploading large files.
 # Default 4.
 upload_max_concurrent_chunks: 4
+# Per-file copy buffer size in bytes. Default 8 MiB.
+copy_buffer_size: 8388608
+# Per-file move buffer size in bytes. Default 8 MiB.
+move_buffer_size: 8388608
+# Per-file compress buffer size in bytes. Default 8 MiB.
+compress_buffer_size: 8388608
+# Per-file decompress buffer size in bytes. Default 8 MiB.
+decompress_buffer_size: 8388608
+# Per-file finalize buffer size in bytes. Default 8 MiB.
+finalize_buffer_size: 8388608
+# Per-file download buffer size in bytes. Default 8 MiB.
+download_buffer_size: 8388608
 # Session secret signs the login cookie. A random value was generated here;
 # you can also override it via the FILETOASTER_SESSION_SECRET env var.
 session_secret: %s
@@ -328,20 +363,61 @@ func parseConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("config file %q is not readable: %w", path, err)
 	}
 
-	cfg := DefaultConfig()
+	// First, parse into a map to detect which fields are present in the file.
+	var raw map[string]any
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // reject unknown keys to catch typos early
-
-	if err := dec.Decode(cfg); err != nil {
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		if errors.Is(err, io.EOF) {
-			// Empty file: keep defaults and apply env overrides below.
+			raw = make(map[string]any)
 		} else {
 			return nil, fmt.Errorf("config file %q is not valid YAML or has the wrong structure: %w", path, err)
 		}
 	}
 
+	cfg := DefaultConfig()
+	// Now decode into the struct to get the values (with defaults for missing fields).
+	dec = yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			// Empty file: keep defaults.
+		} else {
+			return nil, fmt.Errorf("config file %q is not valid YAML or has the wrong structure: %w", path, err)
+		}
+	}
+
+	// Check for missing config fields and log warnings.
+	checkMissingConfigFields(raw, cfg)
+
 	cfg.SourcePath = path
 	return cfg, nil
+}
+
+// checkMissingConfigFields uses reflection to find all fields in Config that have
+// a yaml tag, and logs a warning for any that are missing from the raw config map.
+func checkMissingConfigFields(raw map[string]any, cfg *Config) {
+	defaults := DefaultConfig()
+	v := reflect.ValueOf(cfg).Elem()
+	t := v.Type()
+	defaultsV := reflect.ValueOf(defaults).Elem()
+
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		yamlTag := field.Tag.Get("yaml")
+		if yamlTag == "" || yamlTag == "-" {
+			continue
+		}
+		// Extract the yaml key name (before any comma options like ",omitempty")
+		key := strings.Split(yamlTag, ",")[0]
+
+		// Skip fields that are not in the raw map (i.e., not explicitly set in config file)
+		if _, ok := raw[key]; !ok {
+			// Get the default value for this field
+			defaultVal := defaultsV.Field(i).Interface()
+			slog.Warn("config value not set, using default", "key", key, "default", defaultVal)
+		}
+	}
 }
 
 // ChangeAdminPassword persists newHash as the admin password hash in the config
@@ -400,6 +476,36 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("FILETOASTER_UPLOAD_MAX_CONCURRENT_CHUNKS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.UploadMaxConcurrentChunks = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_COPY_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.CopyBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_MOVE_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.MoveBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_COMPRESS_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.CompressBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_DECOMPRESS_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.DecompressBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_FINALIZE_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.FinalizeBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_DOWNLOAD_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.DownloadBufferSize = n
 		}
 	}
 	if v := os.Getenv("FILETOASTER_SESSION_SECRET"); v != "" {
@@ -590,6 +696,24 @@ func (c *Config) Validate() error {
 	}
 	if c.UploadMaxConcurrentChunks < 1 {
 		errs = append(errs, "upload_max_concurrent_chunks must be at least 1")
+	}
+	if c.CopyBufferSize <= 0 {
+		errs = append(errs, "copy_buffer_size must be a positive number of bytes")
+	}
+	if c.MoveBufferSize <= 0 {
+		errs = append(errs, "move_buffer_size must be a positive number of bytes")
+	}
+	if c.CompressBufferSize <= 0 {
+		errs = append(errs, "compress_buffer_size must be a positive number of bytes")
+	}
+	if c.DecompressBufferSize <= 0 {
+		errs = append(errs, "decompress_buffer_size must be a positive number of bytes")
+	}
+	if c.FinalizeBufferSize <= 0 {
+		errs = append(errs, "finalize_buffer_size must be a positive number of bytes")
+	}
+	if c.DownloadBufferSize <= 0 {
+		errs = append(errs, "download_buffer_size must be a positive number of bytes")
 	}
 
 	if len(errs) > 0 {

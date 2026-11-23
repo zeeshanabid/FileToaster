@@ -30,14 +30,13 @@ type moveEndpoint struct {
 
 func newMoveEndpoint(t *testing.T, root string) moveEndpoint {
 	t.Helper()
-	cfg := &config.Config{
-		AllowedPaths:     []config.AllowedPath{{Name: "Files", Path: root}},
-		MaxParallelTasks: 4,
-	}
+	cfg := config.DefaultConfig()
+	cfg.AllowedPaths = []config.AllowedPath{{Name: "Files", Path: root}}
+	cfg.MaxParallelTasks = 4
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
 	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
-	registerMoveOp(svc, roots)
+	registerMoveOp(svc, roots, cfg)
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	guard := newTestGuard(t)
 	return moveEndpoint{

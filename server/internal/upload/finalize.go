@@ -27,6 +27,19 @@ type FinalizeMeta struct {
 // memory per worker.
 const finalizeBufferSize = 8 << 20
 
+// FinalizeConfig holds configuration for the finalize operation.
+type FinalizeConfig struct {
+	// BufferSize is the per-file finalize buffer size in bytes.
+	BufferSize int64
+}
+
+// DefaultFinalizeConfig returns the default finalize configuration.
+func DefaultFinalizeConfig() *FinalizeConfig {
+	return &FinalizeConfig{
+		BufferSize: finalizeBufferSize,
+	}
+}
+
 // Finalize copies the staged tree at stagingRoot into dest, recreating empty
 // directories and giving each copied file a unique destination (a colliding
 // nested file is renamed " (copy)", " (copy) 1", …) so nothing at the target is
@@ -34,7 +47,7 @@ const finalizeBufferSize = 8 << 20
 // op's Prepare). Progress is reported through prog. On success the staging dir is
 // removed (consumed); on failure it is kept so the copy can be retried (the age
 // sweep later reclaims it). A ctx cancellation aborts mid-copy.
-func Finalize(ctx context.Context, stagingRoot, dest string, prog *task.Progression) error {
+func Finalize(ctx context.Context, stagingRoot, dest string, prog *task.Progression, cfg *FinalizeConfig) error {
 	totalBytes, fileCount, err := countStaging(stagingRoot)
 	if err != nil {
 		return err
@@ -68,7 +81,7 @@ func Finalize(ctx context.Context, stagingRoot, dest string, prog *task.Progress
 			}
 			return os.MkdirAll(target, info.Mode().Perm())
 		}
-		return copyFileTo(ctx, path, uniqueDest(target), prog)
+		return copyFileTo(ctx, path, uniqueDest(target), prog, cfg)
 	})
 	if err != nil {
 		return err
@@ -101,7 +114,7 @@ func countStaging(root string) (int64, int, error) {
 
 // copyFileTo copies src to dst, reporting bytes as each buffer is transferred,
 // then recording one completed file.
-func copyFileTo(ctx context.Context, src, dst string, prog *task.Progression) error {
+func copyFileTo(ctx context.Context, src, dst string, prog *task.Progression, cfg *FinalizeConfig) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -114,7 +127,7 @@ func copyFileTo(ctx context.Context, src, dst string, prog *task.Progression) er
 	if err != nil {
 		return err
 	}
-	buf := make([]byte, finalizeBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()

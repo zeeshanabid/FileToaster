@@ -137,7 +137,7 @@ func TestCompressResolveNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(src, "a.zip")); string(b) != "old" {
@@ -318,7 +318,7 @@ func TestCompressRunFormatsExtractable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompressResolve: %v", err)
 			}
-			if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+			if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 				t.Fatalf("CompressRun: %v", err)
 			}
 
@@ -392,7 +392,7 @@ func TestCompressRunRecursiveDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestCompressRunWalkSkipsDestination(t *testing.T) {
 			{Path: root, IsDir: true, Prefix: "root/"},
 		},
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 
@@ -463,7 +463,7 @@ func TestCompressRunProgressCounts(t *testing.T) {
 	prog := &task.Progression{}
 	done := make(chan struct{})
 	go func() {
-		_ = CompressRun(context.Background(), plan, prog)
+		_ = CompressRun(context.Background(), plan, prog, DefaultCompressConfig())
 		close(done)
 	}()
 	select {
@@ -493,7 +493,7 @@ func TestCompressRunPreCancelled(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := CompressRun(ctx, plan, &task.Progression{}); !errors.Is(err, context.Canceled) {
+	if err := CompressRun(ctx, plan, &task.Progression{}, DefaultCompressConfig()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompressRun err = %v, want context.Canceled", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(src, "a.txt")); string(b) != "data" {
@@ -525,7 +525,7 @@ func TestCompressRunMidRunCancellation(t *testing.T) {
 		cancel() // stop as soon as the first chunk streams
 	})
 	go func() {
-		runErr = CompressRun(ctx, plan, prog)
+		runErr = CompressRun(ctx, plan, prog, DefaultCompressConfig())
 		close(done)
 	}()
 	select {
@@ -569,7 +569,7 @@ func TestCompressRunOriginalsReadonly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 
@@ -611,7 +611,7 @@ func TestCompressRunLeavesOriginalsAndCreatesOnlyArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 

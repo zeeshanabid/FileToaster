@@ -28,14 +28,13 @@ type downloadEndpoints struct {
 
 func newDownloadEndpoints(t *testing.T, root string) downloadEndpoints {
 	t.Helper()
-	cfg := &config.Config{
-		AllowedPaths:     []config.AllowedPath{{Name: "Files", Path: root}},
-		MaxParallelTasks: 4,
-	}
+	cfg := config.DefaultConfig()
+	cfg.AllowedPaths = []config.AllowedPath{{Name: "Files", Path: root}}
+	cfg.MaxParallelTasks = 4
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
 	reg := download.NewRegistry()
-	dlCfg := newDownloadConfig(roots, reg)
+	dlCfg := newDownloadConfig(roots, reg, cfg.DownloadBufferSize)
 	guard := newTestGuard(t)
 	return downloadEndpoints{
 		Post: guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

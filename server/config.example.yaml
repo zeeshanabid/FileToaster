@@ -55,6 +55,19 @@ upload_chunk_size: 4194304
 # Default 4.
 upload_max_concurrent_chunks: 4
 
+# Per-file copy buffer size in bytes. Default 8 MiB.
+copy_buffer_size: 8388608
+# Per-file move buffer size in bytes. Default 8 MiB.
+move_buffer_size: 8388608
+# Per-file compress buffer size in bytes. Default 8 MiB.
+compress_buffer_size: 8388608
+# Per-file decompress buffer size in bytes. Default 8 MiB.
+decompress_buffer_size: 8388608
+# Per-file finalize buffer size in bytes. Default 8 MiB.
+finalize_buffer_size: 8388608
+# Per-file download buffer size in bytes. Default 8 MiB.
+download_buffer_size: 8388608
+
 # How many hours a staged upload is tolerated before the background sweep removes
 # its staging dir and in-memory session. Must be at least 1 hour; 0 or negative
 # makes the sweep remove every staged upload at once, defeating resume.

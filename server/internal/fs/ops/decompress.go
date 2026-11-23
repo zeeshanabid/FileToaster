@@ -32,6 +32,19 @@ import (
 // matches copy's and compress's buffer so extraction stays throughput-bound.
 const decompressBufferSize = 8 << 20
 
+// DecompressConfig holds configuration for the decompress operation.
+type DecompressConfig struct {
+	// BufferSize is the per-file decompress buffer size in bytes.
+	BufferSize int64
+}
+
+// DefaultDecompressConfig returns the default decompress configuration.
+func DefaultDecompressConfig() *DecompressConfig {
+	return &DecompressConfig{
+		BufferSize: decompressBufferSize,
+	}
+}
+
 // DecompressUnsupportedFormat is the sentinel surfaced when a request names a
 // format the stdlib cannot read. Its message lists the accepted formats.
 var DecompressUnsupportedFormat = errors.New("this file type is not supported; supported: zip, tar.gz, tar")
@@ -170,14 +183,14 @@ func extractTarget(root, name string) (string, error) {
 // entry into plan.ExtractDir, reporting progress through prog. The archive is
 // never modified, renamed, or deleted. It returns a context error when cancelled
 // mid-extraction, leaving surviving targets in place.
-func DecompressRun(ctx context.Context, plan *DecompressPlan, prog *task.Progression) error {
+func DecompressRun(ctx context.Context, plan *DecompressPlan, prog *task.Progression, cfg *DecompressConfig) error {
 	switch plan.Format {
 	case formatZip:
-		return runZip(ctx, plan.Archive, plan.ExtractDir, prog)
+		return runZip(ctx, plan.Archive, plan.ExtractDir, prog, cfg)
 	case formatTargz:
-		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, true)
+		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, true, cfg)
 	case formatTar:
-		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, false)
+		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, false, cfg)
 	default:
 		return DecompressUnsupportedFormat
 	}
@@ -186,7 +199,7 @@ func DecompressRun(ctx context.Context, plan *DecompressPlan, prog *task.Progres
 // runZip reads the zip archive read-only, measuring exact byte/file totals up
 // front from the file headers, then writes each entry. Directory entries create
 // their folders; regular entries are streamed with an 8 MiB buffer.
-func runZip(ctx context.Context, archive, root string, prog *task.Progression) error {
+func runZip(ctx context.Context, archive, root string, prog *task.Progression, cfg *DecompressConfig) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -213,7 +226,7 @@ func runZip(ctx context.Context, archive, root string, prog *task.Progression) e
 	}
 	prog.SetTotal(totalBytes, filesTotal)
 
-	buf := make([]byte, decompressBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for _, zf := range zr.File {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -272,7 +285,7 @@ func writeZipEntry(ctx context.Context, zf *zip.File, root string, prog *task.Pr
 // runTar reads a tar or tar.gz archive read-only in two passes: the first counts
 // regular-file entries and sums their sizes for accurate totals, the second
 // streams each entry. Per-entry cancellation is checked before each entry.
-func runTar(ctx context.Context, archive, root string, prog *task.Progression, gzipped bool) error {
+func runTar(ctx context.Context, archive, root string, prog *task.Progression, gzipped bool, cfg *DecompressConfig) error {
 	total, files, err := countTarEntries(archive, gzipped)
 	if err != nil {
 		return err
@@ -296,7 +309,7 @@ func runTar(ctx context.Context, archive, root string, prog *task.Progression, g
 	}
 	tr := tar.NewReader(r)
 
-	buf := make([]byte, decompressBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

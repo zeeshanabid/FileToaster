@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"filetoaster/internal/config"
 	"filetoaster/internal/fs"
 	"filetoaster/internal/fs/ops"
 	"filetoaster/internal/service"
@@ -23,7 +24,7 @@ type decompressTaskRequest struct {
 // roots factory is captured so validation stays confined to the allowed folders,
 // and the runner closes over the resolved plan. Adding a new operation follows
 // the same shape: implement the work and Register it.
-func registerDecompressOp(svc *service.Service, roots func() *fs.Roots) {
+func registerDecompressOp(svc *service.Service, roots func() *fs.Roots, cfg *config.Config) {
 	svc.Register(service.DecompressOperation, service.Op{
 		Prepare: func(body []byte) (any, []byte, error) {
 			var req decompressTaskRequest
@@ -43,7 +44,7 @@ func registerDecompressOp(svc *service.Service, roots func() *fs.Roots) {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog)
+			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog, &ops.DecompressConfig{BufferSize: cfg.DecompressBufferSize})
 		},
 	})
 }

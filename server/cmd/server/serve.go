@@ -87,7 +87,7 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	// it; GET /downloads/{token} streams the file and consumes the token. Both are
 	// authenticated like the fs endpoints, and the streaming URL carries only the
 	// token, so no client path can reach it (traversal is impossible).
-	downloadCfg := newDownloadConfig(func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }, download.NewRegistry())
+	downloadCfg := newDownloadConfig(func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }, download.NewRegistry(), cfg.DownloadBufferSize)
 	mux.Handle("POST /api/downloads", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveDownloads(w, r, downloadCfg)
 	})))
@@ -105,12 +105,12 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	// globally unique across restarts (prevents cleared-task localStorage collision).
 	instanceID := time.Now().UTC().Format("20060102T150405Z")
 	taskService := service.NewService(cfg.MaxParallelTasks, logger, instanceID)
-	registerCopyOp(taskService, roots)
-	registerMoveOp(taskService, roots)
+	registerCopyOp(taskService, roots, cfg)
+	registerMoveOp(taskService, roots, cfg)
 	registerDeleteOp(taskService, roots)
-	registerCompressOp(taskService, roots)
-	registerDecompressOp(taskService, roots)
-	registerUploadOp(taskService, roots)
+	registerCompressOp(taskService, roots, cfg)
+	registerDecompressOp(taskService, roots, cfg)
+	registerUploadOp(taskService, roots, cfg)
 	// In-memory upload session registry: chunks stage here (under tmp_dir) while
 	// a client uploads, then a tracked finalize op copies staging into the target.
 	sessions := upload.NewRegistry()

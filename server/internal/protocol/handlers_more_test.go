@@ -160,7 +160,7 @@ func newMoveService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog)
+			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog, ops.DefaultMoveConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}
@@ -330,7 +330,7 @@ func newCompressService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog)
+			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog, ops.DefaultCompressConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}
@@ -457,7 +457,7 @@ func newDecompressService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog)
+			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog, ops.DefaultDecompressConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}

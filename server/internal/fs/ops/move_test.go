@@ -162,7 +162,7 @@ func TestMoveRunSingleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MoveResolve: %v", err)
 	}
-	if err := MoveRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := MoveRun(context.Background(), plan, &task.Progression{}, DefaultMoveConfig()); err != nil {
 		t.Fatalf("MoveRun: %v", err)
 	}
 	// Source gone, dest exists with the new content.
@@ -194,7 +194,7 @@ func TestMoveRunOverwriteFile(t *testing.T) {
 		t.Fatalf("MoveResolve: %v", err)
 	}
 	prog := &task.Progression{}
-	if err := MoveRun(context.Background(), plan, prog); err != nil {
+	if err := MoveRun(context.Background(), plan, prog, DefaultMoveConfig()); err != nil {
 		t.Fatalf("MoveRun: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dstDir, "a.txt")); err != nil || string(b) != "new" {
@@ -234,7 +234,7 @@ func TestMoveRunDirRecursive(t *testing.T) {
 	done := make(chan struct{})
 	prog.SetSink(func(bp task.ByteProgress) { /* observe */ })
 	go func() {
-		_ = MoveRun(context.Background(), plan, prog)
+		_ = MoveRun(context.Background(), plan, prog, DefaultMoveConfig())
 		close(done)
 	}()
 	select {
@@ -281,7 +281,7 @@ func TestMoveRunOverwriteDir(t *testing.T) {
 	if plan.Items[0].Dst != filepath.Join(dstDir, "src") {
 		t.Fatalf("Dst = %q, want %q", plan.Items[0].Dst, filepath.Join(dstDir, "src"))
 	}
-	if err := MoveRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := MoveRun(context.Background(), plan, &task.Progression{}, DefaultMoveConfig()); err != nil {
 		t.Fatalf("MoveRun: %v", err)
 	}
 	// The old destination contents are gone; the source's contents are in place.
@@ -317,7 +317,7 @@ func TestMoveRunMixedMultiple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MoveResolve: %v", err)
 	}
-	if err := MoveRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := MoveRun(context.Background(), plan, &task.Progression{}, DefaultMoveConfig()); err != nil {
 		t.Fatalf("MoveRun: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(src, "a.txt")); !os.IsNotExist(err) {
@@ -351,7 +351,7 @@ func TestMoveRunProgress(t *testing.T) {
 	done := make(chan struct{})
 	prog.SetSink(func(bp task.ByteProgress) { /* observe */ })
 	go func() {
-		_ = MoveRun(context.Background(), plan, prog)
+		_ = MoveRun(context.Background(), plan, prog, DefaultMoveConfig())
 		close(done)
 	}()
 	select {
@@ -384,7 +384,7 @@ func TestMoveRunCancellationPreCancelled(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = MoveRun(ctx, plan, &task.Progression{})
+	err = MoveRun(ctx, plan, &task.Progression{}, DefaultMoveConfig())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("MoveRun err = %v, want context.Canceled", err)
 	}
@@ -421,7 +421,7 @@ func TestMoveRunCancellationStopsFurtherMoves(t *testing.T) {
 		cancel() // stop as soon as the first item reports progress
 	})
 	go func() {
-		runErr = MoveRun(ctx, plan, prog)
+		runErr = MoveRun(ctx, plan, prog, DefaultMoveConfig())
 		close(done)
 	}()
 	select {
@@ -473,7 +473,7 @@ func TestMoveRunPartialFailure(t *testing.T) {
 		t.Fatalf("MoveResolve: %v", err)
 	}
 	prog := &task.Progression{}
-	runErr := MoveRun(context.Background(), plan, prog)
+	runErr := MoveRun(context.Background(), plan, prog, DefaultMoveConfig())
 
 	// The deletable sibling moved; the failed one is left intact at the source.
 	if _, err := os.Stat(filepath.Join(dstDir, "good.txt")); err != nil {
@@ -553,7 +553,7 @@ func TestCopyThenDeleteFresh(t *testing.T) {
 	prog := &task.Progression{}
 	var errs []error
 
-	if err := copyThenDelete(context.Background(), src, dst, prog, &errs); err != nil {
+	if err := copyThenDelete(context.Background(), src, dst, prog, &errs, DefaultMoveConfig()); err != nil {
 		t.Fatalf("copyThenDelete: %v", err)
 	}
 	// Source removed; recursive contents intact under dst.
@@ -581,7 +581,7 @@ func TestCopyThenDeleteOverwritesFile(t *testing.T) {
 	}
 	prog := &task.Progression{}
 	var errs []error
-	if err := copyThenDelete(context.Background(), file, dst, prog, &errs); err != nil {
+	if err := copyThenDelete(context.Background(), file, dst, prog, &errs, DefaultMoveConfig()); err != nil {
 		t.Fatalf("copyThenDelete: %v", err)
 	}
 	if b, err := os.ReadFile(dst); err != nil || string(b) != "new" {
@@ -612,7 +612,7 @@ func TestCopyThenDeletePartialFailure(t *testing.T) {
 	dst := filepath.Join(parent, "dst")
 	prog := &task.Progression{}
 	var errs []error
-	copyThenDelete(context.Background(), src, dst, prog, &errs)
+	copyThenDelete(context.Background(), src, dst, prog, &errs, DefaultMoveConfig())
 
 	if len(errs) != 1 {
 		t.Fatalf("errs = %v, want exactly one", errs)
