@@ -36,7 +36,7 @@ func newCopyEndpoint(t *testing.T, root string) copyEndpoint {
 	}
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
-	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 	registerCopyOp(svc, roots)
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	guard := newTestGuard(t)

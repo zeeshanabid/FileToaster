@@ -56,10 +56,12 @@ type Service struct {
 
 // NewService builds a service with a pool that runs at most maxParallel tasks at
 // once. The pool and its dispatcher start immediately; shut it down with Close.
-func NewService(maxParallel int, logger *slog.Logger) *Service {
+// instanceID is a unique identifier for this server instance (e.g., a startup
+// timestamp) used to make task IDs globally unique across restarts.
+func NewService(maxParallel int, logger *slog.Logger, instanceID string) *Service {
 	store := task.NewStore()
 	hub := task.NewHub()
-	pool := task.NewPool(store, hub, maxParallel, logger)
+	pool := task.NewPool(store, hub, maxParallel, logger, instanceID)
 	return &Service{
 		store:  store,
 		pool:   pool,

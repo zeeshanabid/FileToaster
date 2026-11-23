@@ -43,7 +43,7 @@ func newUploadEndpoint(t *testing.T, root, tmpDir string) uploadEndpoint {
 	}
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
-	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 	registerUploadOp(svc, roots)
 	sessions := upload.NewRegistry()
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)), protocol.WithUploadStaging(tmpDir, sessions, roots))

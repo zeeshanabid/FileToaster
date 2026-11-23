@@ -345,19 +345,25 @@ export function clearCompletedTasks() {
     uploadManager.clear(taskID);
   }
 
-  // Delete the terminal tasks server-side as well. The task list is rebuilt from
-  // the server snapshot on every page load, so without this the cleared tasks
-  // would reappear after a refresh. Running/queued tasks are left alone and any
-  // that finish later surface normally.
-  void apiClearServerTasks()
-    .then((ids) => {
-      for (const id of ids) clearedTaskIDs.add(id);
-      persistClearedTaskIDs();
-    })
-    .catch(() => {
-      // Offline/transient: the local panel is still cleared; a later refresh may
-      // restore server tasks until the clear succeeds.
-    });
+// Delete the terminal tasks server-side as well. The task list is rebuilt from
+	// the server snapshot on every page load, so without this the cleared tasks
+	// would reappear after a refresh. Running/queued tasks are left alone and any
+	// that finish later surface normally.
+	void apiClearServerTasks()
+		.then((ids) => {
+			// Server has confirmed deletion of these tasks. They are permanently
+			// gone and won't reappear in future snapshots/SSE. Remove them from
+			// localStorage to prevent unbounded growth. Keep a grace period
+			// in case any late SSE deltas are still in flight.
+			setTimeout(() => {
+				for (const id of ids) clearedTaskIDs.delete(id);
+				persistClearedTaskIDs();
+			}, 5000);
+		})
+		.catch(() => {
+			// Offline/transient: the local panel is still cleared; a later refresh may
+			// restore server tasks until the clear succeeds.
+		});
 }
 
 // taskLabel derives a one-line description for a task record, reading its meta

@@ -23,7 +23,7 @@ import (
 )
 
 func newTestService() *service.Service {
-	return service.NewService(4, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return service.NewService(4, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 }
 
 // --- Delete tests ---
@@ -1101,7 +1101,7 @@ func TestUploadProgress(t *testing.T) {
 
 func TestServiceStore(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := service.NewService(4, logger)
+	svc := service.NewService(4, logger, "test-instance")
 
 	store := svc.Store()
 	if store == nil {
@@ -1121,7 +1121,7 @@ func TestServiceStore(t *testing.T) {
 
 func TestServiceCancel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := service.NewService(4, logger)
+	svc := service.NewService(4, logger, "test-instance")
 
 	// Cancel unknown task
 	err := svc.Cancel("nonexistent")
@@ -1135,7 +1135,7 @@ func TestServiceCancel(t *testing.T) {
 
 func TestServiceSnapshot(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := service.NewService(4, logger)
+	svc := service.NewService(4, logger, "test-instance")
 
 	// Empty snapshot
 	snapshot := svc.Snapshot()
@@ -1167,7 +1167,7 @@ func TestServiceSnapshot(t *testing.T) {
 
 func TestServiceSubscribe(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := service.NewService(4, logger)
+	svc := service.NewService(4, logger, "test-instance")
 
 	sub := svc.Subscribe(nil)
 	if sub == nil {
@@ -1359,7 +1359,7 @@ func TestPoolCapacity(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	store := task.NewStore()
 	hub := task.NewHub()
-	pool := task.NewPool(store, hub, 4, logger)
+	pool := task.NewPool(store, hub, 4, logger, "test-instance")
 
 	cap := pool.Capacity()
 	if cap != 4 {

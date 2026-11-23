@@ -35,10 +35,10 @@ type job struct {
 // otherwise it waits in FIFO order. It also supports cancelling queued or
 // running work and draining gracefully on shutdown.
 type Pool struct {
-	store    *Store
-	hub      *Hub
-	capacity int
-	logger   *slog.Logger
+	store     *Store
+	hub       *Hub
+	capacity  int
+	logger    *slog.Logger
 
 	mu       sync.Mutex
 	running  int
@@ -46,6 +46,7 @@ type Pool struct {
 	cancels  map[string]context.CancelFunc
 	nextSeq  int
 	shutdown atomic.Bool
+	instanceID string
 
 	notify chan struct{} // signals the dispatcher loop to re-check
 	wg     sync.WaitGroup
@@ -54,17 +55,20 @@ type Pool struct {
 // NewPool builds a pool that runs at most capacity runners at once, updating the
 // store and publishing to the hub as work progresses. The dispatcher loop runs
 // in its own goroutine; close it with Close.
-func NewPool(store *Store, hub *Hub, capacity int, logger *slog.Logger) *Pool {
+// instanceID is a unique identifier for this server instance (e.g., a startup
+// timestamp) used to make task IDs globally unique across restarts.
+func NewPool(store *Store, hub *Hub, capacity int, logger *slog.Logger, instanceID string) *Pool {
 	if capacity < 1 {
 		capacity = 1
 	}
 	p := &Pool{
-		store:    store,
-		hub:      hub,
-		capacity: capacity,
-		logger:   logger,
-		cancels:  make(map[string]context.CancelFunc),
-		notify:   make(chan struct{}, 1),
+		store:     store,
+		hub:       hub,
+		capacity:  capacity,
+		logger:    logger,
+		cancels:   make(map[string]context.CancelFunc),
+		notify:    make(chan struct{}, 1),
+		instanceID: instanceID,
 	}
 	go p.loop()
 	return p
@@ -89,7 +93,7 @@ func (p *Pool) RunningCount() int {
 
 func (p *Pool) nextID() string {
 	p.nextSeq++
-	return fmt.Sprintf("task-%d", p.nextSeq)
+	return fmt.Sprintf("%s-task-%d", p.instanceID, p.nextSeq)
 }
 
 // Enqueue creates a queued task record, publishes it, and hands the runner to

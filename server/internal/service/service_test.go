@@ -12,7 +12,7 @@ import (
 )
 
 func newTestService() *Service {
-	return NewService(1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewService(1, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
 }
 
 // blockingOp returns an Op whose Run blocks until its context is cancelled.

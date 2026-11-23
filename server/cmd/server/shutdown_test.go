@@ -23,7 +23,7 @@ func discardLogger() *slog.Logger {
 // HTTP shutdown deadline expired). It also verifies the client's stream tears
 // down shortly after.
 func TestShutdownClosesLiveSSEStream(t *testing.T) {
-	svc := service.NewService(1, discardLogger())
+	svc := service.NewService(1, discardLogger(), "test-instance")
 	taskSrv := protocol.NewServer(svc, discardLogger())
 
 	mux := http.NewServeMux()

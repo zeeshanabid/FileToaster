@@ -33,7 +33,7 @@ func waitFor(t *testing.T, cond func() bool) {
 func TestPoolBoundedConcurrency(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 2, testLogger())
+	pool := NewPool(store, hub, 2, testLogger(), "test-instance")
 	defer pool.Close(context.Background())
 
 	var cur, maxRun int32
@@ -83,7 +83,7 @@ func TestPoolBoundedConcurrency(t *testing.T) {
 func TestPoolQueueFIFOCompletion(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 
 	firstDone := make(chan struct{})
 	var order []string
@@ -130,7 +130,7 @@ func TestPoolQueueFIFOCompletion(t *testing.T) {
 func TestPoolProgressReported(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 	defer pool.Close(context.Background())
 
 	runner := func(ctx context.Context, prog *Progression) error {
@@ -149,7 +149,7 @@ func TestPoolProgressReported(t *testing.T) {
 func TestPoolCancelRunning(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 	defer pool.Close(context.Background())
 
 	block := make(chan struct{})
@@ -173,7 +173,7 @@ func TestPoolCancelRunning(t *testing.T) {
 func TestPoolCancelQueued(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 	defer pool.Close(context.Background())
 
 	release := make(chan struct{})
@@ -203,7 +203,7 @@ func TestPoolCancelQueued(t *testing.T) {
 }
 
 func TestPoolCancelUnknown(t *testing.T) {
-	pool := NewPool(NewStore(), NewHub(), 1, testLogger())
+	pool := NewPool(NewStore(), NewHub(), 1, testLogger(), "test-instance")
 	defer pool.Close(context.Background())
 	if err := pool.Cancel("nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Cancel unknown err = %v, want ErrNotFound", err)
@@ -213,7 +213,7 @@ func TestPoolCancelUnknown(t *testing.T) {
 func TestPoolShutdownDrainsAndCancelsQueued(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 
 	release := make(chan struct{})
 	runner := func(ctx context.Context, prog *Progression) error {
@@ -238,7 +238,7 @@ func TestPoolShutdownDrainsAndCancelsQueued(t *testing.T) {
 func TestPoolShutdownRejectsAndFinishesExisting(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 
 	release := make(chan struct{})
 	var ranTasks, existingFinished int32
@@ -282,7 +282,7 @@ func TestPoolShutdownRejectsAndFinishesExisting(t *testing.T) {
 func TestPoolRejectsAfterFullShutdown(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 	pool.Close(context.Background())
 
 	var ran int32
@@ -308,7 +308,7 @@ func TestPoolRejectsAfterFullShutdown(t *testing.T) {
 func TestPoolGracefulDrainCompletesBeforeTimeout(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 
 	t1, _ := pool.Enqueue("t", nil, func(ctx context.Context, prog *Progression) error { return nil })
 	// Let the dispatcher start the task so Close cannot mistake it for a
@@ -339,7 +339,7 @@ func TestPoolGracefulDrainCompletesBeforeTimeout(t *testing.T) {
 func TestPoolTimeoutForceCancelsRunning(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 
 	var observedCancel int32
 	runner := func(ctx context.Context, prog *Progression) error {
@@ -374,7 +374,7 @@ func TestPoolTimeoutForceCancelsRunning(t *testing.T) {
 func TestPoolEmptyPoolExitsGracefully(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
@@ -403,7 +403,7 @@ func TestPoolEmptyPoolExitsGracefully(t *testing.T) {
 func TestPoolEnqueueSetsMeta(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()
-	pool := NewPool(store, hub, 1, testLogger())
+	pool := NewPool(store, hub, 1, testLogger(), "test-instance")
 	defer pool.Close(context.Background())
 
 	meta := json.RawMessage(`{"dest":"/data/archive.zip","format":"zip"}`)

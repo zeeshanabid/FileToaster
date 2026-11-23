@@ -26,7 +26,7 @@ import (
 // folders the copy may reference.
 func newCopyService(roots ...string) *protocolHarness {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := service.NewService(4, logger)
+	svc := service.NewService(4, logger, "test-instance")
 	resolve := func() *fs.Roots { return fs.NewRoots(roots...) }
 	svc.Register(service.CopyOperation, service.Op{
 		Prepare: func(body []byte) (any, []byte, error) {
