@@ -295,14 +295,25 @@ func copyThenDelete(ctx context.Context, src, dst string, prog *task.Progression
 // copyDirBytes recursively copies dir into dst, recreating the structure and
 // copying every regular file with byte progress only (no AddFile): the item's
 // completion is reported once by the caller so the per-item counter stays exact.
+// Directory creation is done upfront in a single MkdirAll pass (O(dirs) syscalls)
+// instead of per-file (O(files) syscalls).
 func copyDirBytes(ctx context.Context, src, dst string, prog *task.Progression, cfg *MoveConfig) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+
+	dirs, err := collectDirs(src)
+	if err != nil {
 		return err
 	}
+	for _, rel := range dirs {
+		dstDir := filepath.Join(dst, rel)
+		if err := os.MkdirAll(dstDir, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
@@ -368,11 +379,13 @@ func copyFileBytes(ctx context.Context, src, dst string, info os.FileInfo, prog 
 	return nil
 }
 
-// sameDevice reports whether a and b live on the same filesystem by comparing
-// their device numbers. It relies on the unix Sys().(*syscall.Stat_t), matching
-// the codebase's unix-only assumptions; a stat failure is returned so the caller
-// can fall back to copy-then-delete.
+// sameDevice reports whether a and b live on the same filesystem.
+// It uses a cross-platform approach: attempt to create a hard link between
+// the two directories. If it succeeds, they're on the same filesystem.
+// If it fails with EXDEV (cross-device link), they're on different filesystems.
+// Falls back to assuming different devices on error.
 func sameDevice(a, b string) (bool, error) {
+	// Ensure both paths exist and are directories
 	ai, aerr := os.Lstat(a)
 	if aerr != nil {
 		return false, aerr
@@ -381,12 +394,40 @@ func sameDevice(a, b string) (bool, error) {
 	if berr != nil {
 		return false, berr
 	}
-	aiSys, ok1 := ai.Sys().(*syscall.Stat_t)
-	biSys, ok2 := bi.Sys().(*syscall.Stat_t)
-	if !ok1 || !ok2 {
-		return false, fmt.Errorf("cannot compare device of %q and %q", a, b)
+	if !ai.IsDir() {
+		a = filepath.Dir(a)
 	}
-	return aiSys.Dev == biSys.Dev, nil
+	if !bi.IsDir() {
+		b = filepath.Dir(b)
+	}
+
+	// Create a temp file in a
+	tmp, err := os.CreateTemp(a, ".samedevice-*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+
+	// Try to hard link it into b
+	linkName := filepath.Join(b, filepath.Base(tmpName))
+	err = os.Link(tmpName, linkName)
+	if err == nil {
+		// Success: same filesystem
+		os.Remove(linkName)
+		os.Remove(tmpName)
+		return true, nil
+	}
+
+	// Check if it's a cross-device error
+	if errors.Is(err, os.ErrInvalid) || errors.Is(err, syscall.EXDEV) {
+		os.Remove(tmpName)
+		return false, nil
+	}
+
+	// Other error: clean up and return error
+	os.Remove(tmpName)
+	return false, err
 }
 
 // moveError aggregates every per-item failure of MoveRun so the task reports all

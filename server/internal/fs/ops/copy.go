@@ -322,17 +322,52 @@ func copyItem(ctx context.Context, src, dst string, prog *task.Progression, cfg 
 	return copyFile(ctx, src, dst, info, prog, buf)
 }
 
+// collectDirs walks src and returns all directory paths relative to src,
+// including src itself. The result is sorted so parent directories come before
+// children, allowing a single MkdirAll pass to create the entire tree.
+func collectDirs(src string) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			rel, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			dirs = append(dirs, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dirs, nil
+}
+
 // copyDir recursively copies dir into dst, recreating the directory structure
 // and copying every regular file with progress reporting. dst is already a
 // unique path chosen by Resolve, so no child is ever overwritten.
+// Directory creation is done upfront in a single MkdirAll pass (O(dirs) syscalls)
+// instead of per-file (O(files) syscalls).
 func copyDir(ctx context.Context, src, dst string, prog *task.Progression, cfg *CopyConfig) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+
+	dirs, err := collectDirs(src)
+	if err != nil {
 		return err
 	}
+	for _, rel := range dirs {
+		dstDir := filepath.Join(dst, rel)
+		if err := os.MkdirAll(dstDir, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
