@@ -42,7 +42,7 @@ func registerCompressOp(svc *service.Service, roots func() *fs.Roots, cfg *confi
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog, &ops.CompressConfig{BufferSize: cfg.CompressBufferSize})
+			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog, &ops.CompressConfig{BufferSize: cfg.CompressBufferSizeBytes()})
 		},
 	})
 }

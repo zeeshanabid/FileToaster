@@ -37,7 +37,7 @@ func registerCopyOp(svc *service.Service, roots func() *fs.Roots, cfg *config.Co
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.Run(ctx, spec.(*ops.Plan), prog, &ops.CopyConfig{BufferSize: cfg.CopyBufferSize})
+			return ops.Run(ctx, spec.(*ops.Plan), prog, &ops.CopyConfig{BufferSize: cfg.CopyBufferSizeBytes()})
 		},
 	})
 }

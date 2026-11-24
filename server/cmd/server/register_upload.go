@@ -49,7 +49,7 @@ func registerUploadOp(svc *service.Service, roots func() *fs.Roots, cfg *config.
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
 			req := spec.(finalizeUploadRequest)
-			return upload.Finalize(ctx, req.Staging, req.Dest, prog, &upload.FinalizeConfig{BufferSize: cfg.FinalizeBufferSize})
+			return upload.Finalize(ctx, req.Staging, req.Dest, prog, &upload.FinalizeConfig{BufferSize: cfg.FinalizeBufferSizeBytes()})
 		},
 	})
 }

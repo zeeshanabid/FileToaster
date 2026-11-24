@@ -44,7 +44,7 @@ func registerDecompressOp(svc *service.Service, roots func() *fs.Roots, cfg *con
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog, &ops.DecompressConfig{BufferSize: cfg.DecompressBufferSize})
+			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog, &ops.DecompressConfig{BufferSize: cfg.DecompressBufferSizeBytes()})
 		},
 	})
 }

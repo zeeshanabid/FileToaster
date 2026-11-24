@@ -55,24 +55,24 @@ admin_password_hash: ""
 		}
 	}
 
-	// Verify default values are used
-	if cfg.CopyBufferSize != 8<<20 {
-		t.Errorf("CopyBufferSize = %d, want %d", cfg.CopyBufferSize, 8<<20)
+	// Verify default values are used (in MB)
+	if cfg.CopyBufferSize != 8 {
+		t.Errorf("CopyBufferSize = %d, want 8", cfg.CopyBufferSize)
 	}
-	if cfg.MoveBufferSize != 8<<20 {
-		t.Errorf("MoveBufferSize = %d, want %d", cfg.MoveBufferSize, 8<<20)
+	if cfg.MoveBufferSize != 8 {
+		t.Errorf("MoveBufferSize = %d, want 8", cfg.MoveBufferSize)
 	}
-	if cfg.CompressBufferSize != 8<<20 {
-		t.Errorf("CompressBufferSize = %d, want %d", cfg.CompressBufferSize, 8<<20)
+	if cfg.CompressBufferSize != 8 {
+		t.Errorf("CompressBufferSize = %d, want 8", cfg.CompressBufferSize)
 	}
-	if cfg.DecompressBufferSize != 8<<20 {
-		t.Errorf("DecompressBufferSize = %d, want %d", cfg.DecompressBufferSize, 8<<20)
+	if cfg.DecompressBufferSize != 8 {
+		t.Errorf("DecompressBufferSize = %d, want 8", cfg.DecompressBufferSize)
 	}
-	if cfg.FinalizeBufferSize != 8<<20 {
-		t.Errorf("FinalizeBufferSize = %d, want %d", cfg.FinalizeBufferSize, 8<<20)
+	if cfg.FinalizeBufferSize != 8 {
+		t.Errorf("FinalizeBufferSize = %d, want 8", cfg.FinalizeBufferSize)
 	}
-	if cfg.DownloadBufferSize != 8<<20 {
-		t.Errorf("DownloadBufferSize = %d, want %d", cfg.DownloadBufferSize, 8<<20)
+	if cfg.DownloadBufferSize != 8 {
+		t.Errorf("DownloadBufferSize = %d, want 8", cfg.DownloadBufferSize)
 	}
 }
 
@@ -86,6 +86,7 @@ func TestPresentBufferSizes(t *testing.T) {
 
 	// Write config WITH all fields explicitly set (including buffer sizes)
 	// This simulates a complete config file where user has set all values
+	// Values are now in MB (integers 1-1000)
 	content := `addr: ":8080"
 allowed_paths:
   - name: Test
@@ -96,17 +97,17 @@ gomaxprocs: 0
 tmp_dir: ` + tmpDirForConfig + `
 upload_stale_after: 24
 upload_sweep_interval: 1
-upload_chunk_size: 4194304
+upload_chunk_size: 4
 upload_max_concurrent_chunks: 4
 session_secret: "test-secret-12345678901234567890123456789012"
 admin_user: admin
 admin_password_hash: ""
-copy_buffer_size: 1048576
-move_buffer_size: 2097152
-compress_buffer_size: 4194304
-decompress_buffer_size: 4194304
-finalize_buffer_size: 16777216
-download_buffer_size: 16777216
+copy_buffer_size: 1
+move_buffer_size: 2
+compress_buffer_size: 4
+decompress_buffer_size: 4
+finalize_buffer_size: 16
+download_buffer_size: 16
 debug: false
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
@@ -128,23 +129,23 @@ debug: false
 		t.Errorf("Unexpected 'using default' message found in log output:\n%s", logOutput)
 	}
 
-	// Verify custom values are used
-	if cfg.CopyBufferSize != 1048576 {
-		t.Errorf("CopyBufferSize = %d, want 1048576", cfg.CopyBufferSize)
+	// Verify custom values are used (in MB)
+	if cfg.CopyBufferSize != 1 {
+		t.Errorf("CopyBufferSize = %d, want 1", cfg.CopyBufferSize)
 	}
-	if cfg.MoveBufferSize != 2097152 {
-		t.Errorf("MoveBufferSize = %d, want 2097152", cfg.MoveBufferSize)
+	if cfg.MoveBufferSize != 2 {
+		t.Errorf("MoveBufferSize = %d, want 2", cfg.MoveBufferSize)
 	}
-	if cfg.CompressBufferSize != 4194304 {
-		t.Errorf("CompressBufferSize = %d, want 4194304", cfg.CompressBufferSize)
+	if cfg.CompressBufferSize != 4 {
+		t.Errorf("CompressBufferSize = %d, want 4", cfg.CompressBufferSize)
 	}
-	if cfg.DecompressBufferSize != 4194304 {
-		t.Errorf("DecompressBufferSize = %d, want 4194304", cfg.DecompressBufferSize)
+	if cfg.DecompressBufferSize != 4 {
+		t.Errorf("DecompressBufferSize = %d, want 4", cfg.DecompressBufferSize)
 	}
-	if cfg.FinalizeBufferSize != 16777216 {
-		t.Errorf("FinalizeBufferSize = %d, want 16777216", cfg.FinalizeBufferSize)
+	if cfg.FinalizeBufferSize != 16 {
+		t.Errorf("FinalizeBufferSize = %d, want 16", cfg.FinalizeBufferSize)
 	}
-	if cfg.DownloadBufferSize != 16777216 {
-		t.Errorf("DownloadBufferSize = %d, want 16777216", cfg.DownloadBufferSize)
+	if cfg.DownloadBufferSize != 16 {
+		t.Errorf("DownloadBufferSize = %d, want 16", cfg.DownloadBufferSize)
 	}
 }

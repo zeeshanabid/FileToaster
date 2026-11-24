@@ -87,7 +87,7 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	// it; GET /downloads/{token} streams the file and consumes the token. Both are
 	// authenticated like the fs endpoints, and the streaming URL carries only the
 	// token, so no client path can reach it (traversal is impossible).
-	downloadCfg := newDownloadConfig(func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }, download.NewRegistry(), cfg.DownloadBufferSize)
+	downloadCfg := newDownloadConfig(func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }, download.NewRegistry(), cfg.DownloadBufferSizeBytes())
 	mux.Handle("POST /api/downloads", guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveDownloads(w, r, downloadCfg)
 	})))
@@ -116,7 +116,7 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	sessions := upload.NewRegistry()
 	taskSrv := protocol.NewServer(taskService, logger,
 		protocol.WithUploadStaging(cfg.TMPDir, sessions, roots),
-		protocol.WithUploadSizing(cfg.UploadChunkSize, cfg.UploadMaxConcurrentChunks),
+		protocol.WithUploadSizing(cfg.UploadChunkSizeBytes(), cfg.UploadMaxConcurrentChunks),
 	)
 	mux.Handle("POST /api/copy", guard.Middleware(http.HandlerFunc(taskSrv.ServeCopy)))
 	mux.Handle("POST /api/move", guard.Middleware(http.HandlerFunc(taskSrv.ServeMove)))

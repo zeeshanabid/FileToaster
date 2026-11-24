@@ -34,7 +34,7 @@ func newDownloadEndpoints(t *testing.T, root string) downloadEndpoints {
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
 	reg := download.NewRegistry()
-	dlCfg := newDownloadConfig(roots, reg, cfg.DownloadBufferSize)
+	dlCfg := newDownloadConfig(roots, reg, cfg.DownloadBufferSizeBytes())
 	guard := newTestGuard(t)
 	return downloadEndpoints{
 		Post: guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

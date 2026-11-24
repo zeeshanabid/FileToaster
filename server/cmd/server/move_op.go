@@ -37,7 +37,7 @@ func registerMoveOp(svc *service.Service, roots func() *fs.Roots, cfg *config.Co
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog, &ops.MoveConfig{BufferSize: cfg.MoveBufferSize})
+			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog, &ops.MoveConfig{BufferSize: cfg.MoveBufferSizeBytes()})
 		},
 	})
 }
