@@ -33,6 +33,7 @@ import {
   submitMoveTask,
   submitCompressTask,
   submitDecompressTask,
+  submitTruncateTask,
   taskPanelOpen
 } from '$lib/store/tasks';
 
@@ -99,7 +100,8 @@ vi.mock('$lib/store/tasks', async () => {
     submitDeleteTask: vi.fn(async () => ({ taskID: 'task-9' })),
     submitMoveTask: vi.fn(async () => ({ taskID: 'task-5' })),
     submitCompressTask: vi.fn(async () => ({ taskID: 'task-7' })),
-    submitDecompressTask: vi.fn(async () => ({ taskID: 'task-8' }))
+    submitDecompressTask: vi.fn(async () => ({ taskID: 'task-8' })),
+    submitTruncateTask: vi.fn(async () => ({ taskID: 'task-10' }))
   };
 });
 
@@ -1047,6 +1049,138 @@ describe('Window compress', () => {
   });
 });
 
+  describe('Window truncate', () => {
+    function truncateButton(): HTMLButtonElement {
+      return screen.getByLabelText('Truncate') as HTMLButtonElement;
+    }
+    function dialog(): HTMLElement {
+      return screen.getByTestId('truncate-dialog') as HTMLElement;
+    }
+    async function clickRow(name: string, modifier?: 'ctrl' | 'shift') {
+      const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
+        .find((tr) => tr.textContent?.includes(name)) as HTMLElement;
+      if (!row) throw new Error(`no row named ${name}`);
+      if (modifier === 'ctrl') {
+        fireEvent.click(row, { ctrlKey: true });
+      } else if (modifier === 'shift') {
+        fireEvent.click(row, { shiftKey: true });
+      } else {
+        fireEvent.click(row);
+      }
+      await tick();
+    }
+
+    beforeEach(() => {
+      (submitTruncateTask as Mock).mockClear();
+      (submitTruncateTask as Mock).mockResolvedValue({ taskID: 'task-10' });
+    });
+
+    it('is disabled until a file row is selected, then enabled', async () => {
+      await openAndRender();
+      expect(truncateButton()).toBeDisabled();
+      await clickRow('notes.txt');
+      await waitFor(() => expect(truncateButton()).not.toBeDisabled());
+    });
+
+    it('remains disabled when a directory is selected', async () => {
+      await openAndRender();
+      await clickRow('documents');
+      expect(truncateButton()).toBeDisabled();
+    });
+
+    it('opens the modal and shows the file count', async () => {
+      await openAndRender();
+      await clickRow('notes.txt');
+      await clickRow('myfiles.zip', 'ctrl');
+      await waitFor(() => expect(truncateButton()).not.toBeDisabled());
+
+      fireEvent.click(truncateButton());
+      await waitFor(() => expect(dialog()).toBeInTheDocument());
+      expect(within(dialog()).getByText('Target size for 2 files:')).toBeInTheDocument();
+    });
+
+    it('does not open the modal when nothing is selected', async () => {
+      await openAndRender();
+      fireEvent.click(truncateButton());
+      expect(screen.queryByTestId('truncate-dialog')).not.toBeInTheDocument();
+      expect(submitTruncateTask).not.toHaveBeenCalled();
+    });
+
+    it('confirms truncate with default size (0 MB), submits, clears selection, and flashes a status', async () => {
+      await openAndRender();
+      await clickRow('notes.txt');
+      await waitFor(() => expect(truncateButton()).not.toBeDisabled());
+
+      fireEvent.click(truncateButton());
+      await waitFor(() => expect(dialog()).toBeInTheDocument());
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Truncate' }));
+      await tick();
+
+      await waitFor(() =>
+        expect(submitTruncateTask).toHaveBeenCalledWith(['/root/notes.txt'], 0)
+      );
+
+      await waitFor(() => expect(truncateButton()).toBeDisabled());
+      await waitFor(() => expect(screen.getByText(/Truncating/i)).toBeInTheDocument());
+    });
+
+    it('passes the custom size chosen in the dialog', async () => {
+      await openAndRender();
+      await clickRow('notes.txt');
+      await waitFor(() => expect(truncateButton()).not.toBeDisabled());
+
+      fireEvent.click(truncateButton());
+      await waitFor(() => expect(dialog()).toBeInTheDocument());
+
+      // Select custom size
+      const select = within(dialog()).getByRole('combobox') as HTMLSelectElement;
+      select.value = 'custom';
+      fireEvent.change(select);
+
+      // Enter custom size
+      await waitFor(() => expect(screen.getByLabelText('Enter size in MB:')).toBeInTheDocument());
+      const input = within(dialog()).getByLabelText('Enter size in MB:') as HTMLInputElement;
+      fireEvent.input(input, { target: { value: '100' } });
+
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Truncate' }));
+      await waitFor(() =>
+        expect(submitTruncateTask).toHaveBeenCalledWith(['/root/notes.txt'], 100 * 1024 * 1024)
+      );
+    });
+
+    it('passes the preset size chosen in the dialog', async () => {
+      await openAndRender();
+      await clickRow('notes.txt');
+      await waitFor(() => expect(truncateButton()).not.toBeDisabled());
+
+      fireEvent.click(truncateButton());
+      await waitFor(() => expect(dialog()).toBeInTheDocument());
+
+      // Select 4 MB preset
+      const select = within(dialog()).getByRole('combobox') as HTMLSelectElement;
+      fireEvent.change(select, { target: { value: '4 MB' } });
+
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Truncate' }));
+      await waitFor(() =>
+        expect(submitTruncateTask).toHaveBeenCalledWith(['/root/notes.txt'], 4 * 1024 * 1024)
+      );
+    });
+
+    it('keeps the dialog open (no submit) when Cancel is pressed', async () => {
+      await openAndRender();
+      await clickRow('notes.txt');
+      await waitFor(() => expect(truncateButton()).not.toBeDisabled());
+
+      fireEvent.click(truncateButton());
+      await waitFor(() => expect(dialog()).toBeInTheDocument());
+      const cancelBtn = within(dialog()).getByRole('button', { name: 'Cancel' });
+      fireEvent.click(cancelBtn);
+      await waitFor(() => expect(screen.queryByTestId('truncate-dialog')).not.toBeInTheDocument());
+      expect(submitTruncateTask).not.toHaveBeenCalled();
+      expect(truncateButton()).not.toBeDisabled();
+    });
+  });
+
   describe('Window rename', () => {
     function renameButton(): HTMLButtonElement {
       return screen.getByLabelText('Rename') as HTMLButtonElement;
@@ -1222,13 +1356,13 @@ describe('Window decompress', () => {
     await tick();
 
     await waitFor(() =>
-      expect(submitDecompressTask).toHaveBeenCalledWith(['/root/myfiles.zip'], '')
+      expect(submitDecompressTask).toHaveBeenCalledWith(['/root/myfiles.zip'], '', '/root')
     );
     await waitFor(() => expect(decompressButton()).toBeDisabled());
     await waitFor(() => expect(screen.getByText(/Extracting/i)).toBeInTheDocument());
   });
 
-  it('submits the stem into for “Extract in …”', async () => {
+  it('submits the stem into for "Extract in …"', async () => {
     await openAndRender();
     await clickRow('myfiles.zip');
     fireEvent.click(decompressButton());
@@ -1237,7 +1371,7 @@ describe('Window decompress', () => {
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Extract' }));
 
     await waitFor(() =>
-      expect(submitDecompressTask).toHaveBeenCalledWith(['/root/myfiles.zip'], 'myfiles')
+      expect(submitDecompressTask).toHaveBeenCalledWith(['/root/myfiles.zip'], 'myfiles', '/root')
     );
   });
 

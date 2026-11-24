@@ -13,11 +13,13 @@ import (
 )
 
 // decompressTaskRequest is the subset of the decompress request the op needs to
-// validate: the single selected path and the extraction destination, "" to
-// extract here or the archive stem to extract into a sibling folder.
+// validate: the single selected path, the extraction destination ("" to extract
+// here or the archive stem to extract into a sibling folder), and the current
+// window path so the client can reload the correct directory after extraction.
 type decompressTaskRequest struct {
-	Paths []string `json:"paths"`
-	Into  string   `json:"into"`
+	Paths      []string `json:"paths"`
+	Into       string   `json:"into"`
+	WindowPath string   `json:"windowPath"`
 }
 
 // registerDecompressOp wires the decompress operation into the task service. The
@@ -40,6 +42,7 @@ func registerDecompressOp(svc *service.Service, roots func() *fs.Roots, cfg *con
 				Archive:    plan.Archive,
 				ExtractDir: plan.ExtractDir,
 				Into:       req.Into,
+				WindowPath: req.WindowPath,
 			})
 			return plan, meta, nil
 		},

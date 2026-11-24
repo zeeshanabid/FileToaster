@@ -99,6 +99,7 @@
   const canOpen = $derived(kind === 'folder' && selection.length === 1 && selection[0]?.type === 'dir');
   const canOpenInNewWindow = $derived(kind === 'folder' && selection.length === 1 && selection[0]?.type === 'dir');
   const canGoUpHere = $derived(kind === 'empty' && canGoUp);
+  const canTruncate = $derived(selection.length > 0 && selection.every((s) => s.type === 'file'));
 
   // Icon markup (24x24 viewBox, stroke currentColor) reused from the toolbar so
   // the menu looks consistent with the rest of the UI. Declared before `items`
@@ -135,6 +136,8 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>';
   const SELECT_ALL =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M3 3h18v18H3z" /><path d="M7 7l3 3 7-7" /></svg>';
+  const TRUNCATE =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M21 12H3" /><path d="M18 6v12" /><path d="M6 6v12" /></svg>';
 
   const items = $derived<Array<MenuItem | MenuSeparator>>([
     { type: 'item', id: 'open', label: 'Open', action: 'open', svg: OPEN, enabled: canOpen },
@@ -148,6 +151,8 @@
     { type: 'item', id: 'delete', label: 'Delete', action: 'delete', svg: DELETE, enabled: canDelete },
     { type: 'sep' },
     { type: 'item', id: 'rename', label: 'Rename', action: 'rename', svg: RENAME, enabled: canRename },
+    { type: 'sep' },
+    { type: 'item', id: 'truncate', label: 'Truncate', action: 'truncate', svg: TRUNCATE, enabled: canTruncate },
     { type: 'sep' },
     { type: 'item', id: 'compress', label: 'Compress', action: 'compress', svg: COMPRESS, enabled: canCompress },
     { type: 'item', id: 'download', label: 'Download', action: 'download', svg: DOWNLOAD, enabled: canDownload },

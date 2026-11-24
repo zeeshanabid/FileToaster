@@ -248,7 +248,7 @@
     border: 1px solid var(--taskbar-border);
     border-top: 1px solid var(--taskbar-border);
     border-radius: 18px;
-    z-index: 40;
+    z-index: 1000;
     box-shadow:
       0 4px 24px rgba(0, 0, 0, 0.3),
       0 1px 3px rgba(0, 0, 0, 0.2),

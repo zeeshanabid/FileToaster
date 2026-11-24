@@ -62,12 +62,14 @@ var DecompressArchiveTraversal = errors.New("archive entry escapes the destinati
 // DecompressMeta is the serializable surface of a decompress plan shown in the
 // task record. Archive is the resolved archive path; Format the detected format;
 // ExtractDir the resolved extraction root; Into the requested destination
-// ("", extract here, or the archive stem, extract into that folder).
+// ("", extract here, or the archive stem, extract into that folder);
+// WindowPath is the window's current path for reload after extraction.
 type DecompressMeta struct {
 	Format     string `json:"format"`
 	Archive    string `json:"archive"`
 	ExtractDir string `json:"extractDir"`
 	Into       string `json:"into"`
+	WindowPath string `json:"windowPath"`
 }
 
 // DecompressPlan is a validated, resolved archive and the folder to extract it

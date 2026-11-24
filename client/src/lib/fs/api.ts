@@ -107,6 +107,7 @@ export interface DecompressMeta {
   archive: string;
   extractDir: string;
   into: string;
+  windowPath: string;
 }
 
 export interface TaskListResponse {
@@ -163,6 +164,12 @@ export interface CompressTaskRequest {
 export interface DecompressTaskRequest {
   paths: string[];
   into: string;
+  windowPath: string;
+}
+
+export interface TruncateTaskRequest {
+  paths: string[];
+  size: number;
 }
 
 // apiError carries a UI-facing message from the server's `{"error": ...}` body.
@@ -358,6 +365,32 @@ export async function submitDecompress(req: DecompressTaskRequest): Promise<Deco
     throw new ApiError(message);
   }
   return (await res.json()) as DecompressResponse;
+}
+
+// submitTruncate enqueues a truncate task for `paths` to the target `size` in bytes.
+// Truncate only works on files (not directories). It resolves to the server's
+// response ({ taskID } on success) and rejects on any other error.
+export async function submitTruncate(req: TruncateTaskRequest): Promise<TruncateResponse> {
+  const res = await fetch('/api/truncate', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req)
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+    const message =
+      typeof payload.error === 'string' && payload.error
+        ? payload.error
+        : `truncate failed (${res.status})`;
+    throw new ApiError(message);
+  }
+  return (await res.json()) as TruncateResponse;
+}
+
+// TruncateResponse is the response from the truncate operation.
+export interface TruncateResponse {
+  taskID?: string;
 }
 
 // downloadFile requests a one-token download of a single source path (POST

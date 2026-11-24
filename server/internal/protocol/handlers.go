@@ -33,6 +33,10 @@ const maxCopyRequestSize = 4 << 20 // 4 MiB
 // above any realistic selection without allowing unbounded reads.
 const maxCompressRequestSize = 4 << 20 // 4 MiB
 
+// maxTruncateRequestSize bounds the truncate request body (paths + size) far
+// above any realistic selection without allowing unbounded reads.
+const maxTruncateRequestSize = 4 << 20 // 4 MiB
+
 // maxUploadManifestSize bounds the upload-create request body (the file + dir
 // manifest) far above any realistic selection without allowing unbounded reads.
 const maxUploadManifestSize = 1 << 20 // 1 MiB
@@ -349,6 +353,56 @@ func decompressStatus(err error) (int, string) {
 		return http.StatusInternalServerError, "the requested operation is not available"
 	default:
 		return http.StatusBadRequest, "could not decompress the selected archive"
+	}
+}
+
+type truncateRequest struct {
+	Paths []string `json:"paths"`
+	Size  int64    `json:"size"`
+}
+
+// ServeTruncate handles a truncate request: it enqueues a truncate task and returns its id.
+// Truncate only works on files, not directories.
+func (s *Server) ServeTruncate(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxTruncateRequestSize))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+
+	var req truncateRequest
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Paths) == 0 {
+		writeError(w, http.StatusBadRequest, "the request requires one or more 'paths'")
+		return
+	}
+
+	taskRec, err := s.svc.Submit(service.TruncateOperation, body)
+	if err != nil {
+		status, message := truncateStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"taskID": taskRec.ID})
+}
+
+// truncateStatus maps an operation failure to an HTTP status and user-facing message.
+func truncateStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the selected path is outside the allowed folders"
+	case errors.Is(err, ops.TruncateErrEmptyPaths):
+		return http.StatusBadRequest, "at least one file is required"
+	case errors.Is(err, ops.TruncateErrDirectorySelected):
+		return http.StatusBadRequest, "truncate only works on files, not directories"
+	case errors.Is(err, ops.TruncateErrInvalidSize):
+		return http.StatusBadRequest, "target size must be a non-negative integer"
+	case errors.Is(err, task.ErrShuttingDown):
+		return http.StatusServiceUnavailable, "the server is shutting down; please try again later"
+	case errors.Is(err, service.ErrUnknownOperation):
+		return http.StatusInternalServerError, "the requested operation is not available"
+	default:
+		return http.StatusBadRequest, "could not truncate the selected files"
 	}
 }
 

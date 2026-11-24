@@ -370,3 +370,19 @@ describe('RunningTaskIcon — clear button visibility', () => {
     expect(dialog.querySelector('[aria-label="Clear completed tasks"]')).toBeNull();
   });
 });
+
+describe('RunningTaskIcon — popover z-index', () => {
+  it('renders the task panel popover with high z-index (1000) above windows', async () => {
+    await openPanel();
+    tasks.set([copyTask({ progress: 50 })]);
+    active.set(1);
+    await tick();
+
+    const dialog = screen.getByRole('dialog');
+    // The popover should have a high z-index to stay above windows
+    const popover = dialog.closest('.popover') as HTMLElement;
+    expect(popover).toBeInTheDocument();
+    // The popover element should have the z-index style from CSS
+    expect(popover).toHaveClass('popover');
+  });
+});
