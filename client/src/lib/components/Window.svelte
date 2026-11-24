@@ -716,10 +716,10 @@ import { formatSize, formatDate } from '$lib/fs/format';
   function cancelCompress() {
     compressOpen = false;
   }
-  async function confirmCompress(format: string) {
+  async function confirmCompress(format: string, compressionLevel: number) {
     compressOpen = false;
     try {
-      const res = await submitCompressTask([...selected], format);
+      const res = await submitCompressTask([...selected], format, compressionLevel);
       clearSelection();
       if (res.taskID) flash(`Compressing… (task ${res.taskID}).`);
     } catch (err) {

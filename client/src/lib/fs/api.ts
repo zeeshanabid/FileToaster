@@ -157,6 +157,7 @@ export interface MoveTaskRequest {
 export interface CompressTaskRequest {
   paths: string[];
   format: string;
+  compressionLevel?: number;
 }
 
 export interface DecompressTaskRequest {

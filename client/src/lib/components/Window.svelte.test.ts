@@ -1016,7 +1016,7 @@ describe('Window compress', () => {
     await tick();
 
     await waitFor(() =>
-      expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt', '/root/documents'], 'zip')
+      expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt', '/root/documents'], 'zip', 6)
     );
 
     await waitFor(() => expect(compressButton()).toBeDisabled());
@@ -1031,7 +1031,7 @@ describe('Window compress', () => {
     await waitFor(() => expect(dialog()).toBeInTheDocument());
     fireEvent.click(within(dialog()).getByLabelText('GNU tar archive, gzip (.tar.gz)'));
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Compress' }));
-    await waitFor(() => expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt'], 'targz'));
+    await waitFor(() => expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt'], 'targz', 6));
   });
 
   it('keeps the dialog open (no submit) when Cancel is pressed', async () => {
@@ -2084,7 +2084,7 @@ describe('Window context menu', () => {
     fireEvent.click(within(screen.getByTestId('compress-dialog')).getByRole('button', { name: 'Compress' }));
     await tick();
     await waitFor(() =>
-      expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt'], 'zip')
+      expect(submitCompressTask).toHaveBeenCalledWith(['/root/notes.txt'], 'zip', 6)
     );
     expect(screen.queryByTestId('context-menu')).not.toBeInTheDocument();
   });
@@ -2155,7 +2155,7 @@ describe('Window context menu', () => {
     fireEvent.click(within(screen.getByTestId('compress-dialog')).getByRole('button', { name: 'Compress' }));
     await tick();
     await waitFor(() =>
-      expect(submitCompressTask).toHaveBeenCalledWith(['/root/documents'], 'zip')
+      expect(submitCompressTask).toHaveBeenCalledWith(['/root/documents'], 'zip', 6)
     );
   });
 

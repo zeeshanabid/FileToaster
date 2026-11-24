@@ -63,7 +63,7 @@ describe('ConfirmCompress', () => {
     mountComp({ entries, onClose, onConfirm });
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Compress' }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(onConfirm).toHaveBeenCalledWith('zip');
+    expect(onConfirm).toHaveBeenCalledWith('zip', 6);
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -72,7 +72,7 @@ describe('ConfirmCompress', () => {
     fireEvent.click(within(dialog()).getByLabelText('GNU tar archive, gzip (.tar.gz)'));
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Compress' }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(onConfirm).toHaveBeenCalledWith('targz');
+    expect(onConfirm).toHaveBeenCalledWith('targz', 6);
   });
 
   it('calls onClose when Cancel is pressed', () => {

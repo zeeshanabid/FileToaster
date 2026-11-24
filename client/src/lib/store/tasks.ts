@@ -286,8 +286,8 @@ export function submitMoveTask(paths: string[], dest: string) {
   // submitCompressTask enqueues a compress task for `paths` into `format`
   // (zip, targz, tar). The archive is written in place and a colliding target is
   // renamed server-side, so no overwrite decision is passed.
-  export function submitCompressTask(paths: string[], format: string) {
-    return submitCompress({ paths, format });
+  export function submitCompressTask(paths: string[], format: string, compressionLevel?: number) {
+    return submitCompress({ paths, format, compressionLevel });
   }
 
   // submitDecompressTask enqueues a decompress task for the single archive at

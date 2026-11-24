@@ -9,7 +9,7 @@
   }: {
     entries: Array<{ path: string; name: string; type: 'file' | 'dir' }>;
     onClose: () => void;
-    onConfirm: (format: string) => void;
+    onConfirm: (format: string, compressionLevel: number) => void;
   } = $props();
 
   let selectedCount = $derived(entries.length);
@@ -23,6 +23,10 @@
     { value: 'tar', label: 'GNU tar archive (.tar)' }
   ] as const;
   let format = $state<'zip' | 'targz' | 'tar'>('zip');
+  let compressionLevel = $state(6); // default: balanced (0-9)
+
+  // Progress percentage for the slider filled portion (0-9 maps to 0-100%)
+  let compressionProgress = $derived((compressionLevel / 9) * 100);
 
   // Return focus to the dialog on open so keyboard users stay trapped until
   // they close it.
@@ -38,6 +42,10 @@
       onClose();
     }
   }
+
+  // Whether the current format supports compression level (zip, targz)
+// tar format shows the slider but disabled since it has no compression
+  let isSliderDisabled = $derived(format === 'tar');
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -102,9 +110,27 @@
       {/each}
     </fieldset>
 
+    <fieldset class="compression">
+      <legend class="compression-legend">Compression level</legend>
+      <div class="compression-slider" class:disabled={isSliderDisabled}>
+        <span class="compression-label">Fast</span>
+        <input
+          type="range"
+          min="0"
+          max="9"
+          bind:value={compressionLevel}
+          class="compression-range"
+          aria-label="Compression level"
+          style="--progress: {compressionProgress}%"
+          disabled={isSliderDisabled}
+        />
+        <span class="compression-label">Best</span>
+      </div>
+    </fieldset>
+
     <footer class="dlg-footer">
       <button class="dlg-cancel" type="button" onclick={() => onClose()}>Cancel</button>
-      <button class="dlg-compress" type="button" disabled={selectedCount === 0} onclick={() => onConfirm(format)}>Compress</button>
+      <button class="dlg-compress" type="button" disabled={selectedCount === 0} onclick={() => onConfirm(format, compressionLevel)}>Compress</button>
     </footer>
   </div>
 </div>
@@ -254,6 +280,136 @@
     font-size: 13px;
     color: var(--text);
     cursor: pointer;
+  }
+  .compression {
+    margin: 0;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .compression-legend {
+    padding: 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: capitalize;
+  }
+  .compression-slider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .compression-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .compression-range {
+    flex: 1;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--border);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+    /* Filled portion (progress) - using CSS custom property */
+    background: linear-gradient(var(--accent), var(--accent)) 0 0 / var(--progress, 0%) 100% no-repeat var(--border);
+  }
+  .compression-range::-webkit-slider-runnable-track {
+    height: 6px;
+    background: transparent;
+    border-radius: 3px;
+    border: none;
+  }
+  .compression-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--surface);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.1s ease, background-color 0.15s ease;
+    /* Extend the filled portion visually */
+    margin-top: -6px;
+  }
+  .compression-range::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 3px 8px rgba(var(--accent-rgb), 0.4);
+    background: var(--accent-strong);
+  }
+  .compression-range::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--surface);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.1s ease, background-color 0.15s ease;
+  }
+  .compression-range::-moz-range-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 3px 8px rgba(var(--accent-rgb), 0.4);
+    background: var(--accent-strong);
+  }
+  .compression-range::-moz-range-track {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    border: none;
+  }
+  .compression-range::-moz-range-progress {
+    height: 6px;
+    background: var(--accent);
+    border-radius: 3px;
+    border: none;
+  }
+  .compression-range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.3), 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+  .compression-range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.3), 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+  .compression-range:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .compression-range:disabled::-webkit-slider-thumb {
+    background: var(--text-faint);
+    box-shadow: none;
+    transform: none;
+  }
+  .compression-range:disabled::-moz-range-thumb {
+    background: var(--text-faint);
+    box-shadow: none;
+    transform: none;
+  }
+  .compression-range:disabled::-moz-range-progress {
+    background: var(--border);
+  }
+  .compression-slider.disabled .compression-label {
+    color: var(--text-faint);
+  }
+  .compression-slider.disabled .compression-range {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .compression-slider.disabled .compression-range::-webkit-slider-thumb {
+    background: var(--text-faint);
+    box-shadow: none;
+    transform: none;
+  }
+  .compression-slider.disabled .compression-range::-moz-range-thumb {
+    background: var(--text-faint);
+    box-shadow: none;
+    transform: none;
+  }
+  .compression-slider.disabled .compression-range::-moz-range-progress {
+    background: var(--border);
   }
   .dlg-footer {
     display: flex;

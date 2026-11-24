@@ -13,10 +13,12 @@ import (
 )
 
 // compressTaskRequest is the subset of the compress request the op needs to
-// validate: the selected paths and the chosen archive format (zip, targz, tar).
+// validate: the selected paths, the chosen archive format (zip, targz, tar),
+// and the compression level (0-9, only used for zip and targz).
 type compressTaskRequest struct {
-	Paths  []string `json:"paths"`
-	Format string   `json:"format"`
+	Paths            []string `json:"paths"`
+	Format           string   `json:"format"`
+	CompressionLevel int      `json:"compressionLevel"`
 }
 
 // registerCompressOp wires the compress operation into the task service. The
@@ -30,7 +32,7 @@ func registerCompressOp(svc *service.Service, roots func() *fs.Roots, cfg *confi
 			if err := json.Unmarshal(body, &req); err != nil {
 				return nil, nil, fmt.Errorf("invalid compress request: %w", err)
 			}
-			plan, err := ops.CompressResolve(roots(), req.Paths, req.Format)
+			plan, err := ops.CompressResolve(roots(), req.Paths, req.Format, req.CompressionLevel)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -42,7 +44,11 @@ func registerCompressOp(svc *service.Service, roots func() *fs.Roots, cfg *confi
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog, &ops.CompressConfig{BufferSize: cfg.CompressBufferSizeBytes()})
+			plan := spec.(*ops.CompressPlan)
+			return ops.CompressRun(ctx, plan, prog, &ops.CompressConfig{
+				BufferSize:       cfg.CompressBufferSizeBytes(),
+				CompressionLevel: plan.CompressionLevel,
+			})
 		},
 	})
 }

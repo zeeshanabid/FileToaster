@@ -318,7 +318,7 @@ func newCompressService(roots ...string) *protocolHarness {
 			if err := json.Unmarshal(body, &req); err != nil {
 				return nil, nil, err
 			}
-			plan, err := ops.CompressResolve(resolve(), req.Paths, req.Format)
+			plan, err := ops.CompressResolve(resolve(), req.Paths, req.Format, 6)
 			if err != nil {
 				return nil, nil, err
 			}
