@@ -35,17 +35,17 @@ type job struct {
 // otherwise it waits in FIFO order. It also supports cancelling queued or
 // running work and draining gracefully on shutdown.
 type Pool struct {
-	store     *Store
-	hub       *Hub
-	capacity  int
-	logger    *slog.Logger
+	store    *Store
+	hub      *Hub
+	capacity int
+	logger   *slog.Logger
 
-	mu       sync.Mutex
-	running  int
-	queued   []job
-	cancels  map[string]context.CancelFunc
-	nextSeq  int
-	shutdown atomic.Bool
+	mu         sync.Mutex
+	running    int
+	queued     []job
+	cancels    map[string]context.CancelFunc
+	nextSeq    int
+	shutdown   atomic.Bool
 	instanceID string
 
 	notify chan struct{} // signals the dispatcher loop to re-check
@@ -62,12 +62,12 @@ func NewPool(store *Store, hub *Hub, capacity int, logger *slog.Logger, instance
 		capacity = 1
 	}
 	p := &Pool{
-		store:     store,
-		hub:       hub,
-		capacity:  capacity,
-		logger:    logger,
-		cancels:   make(map[string]context.CancelFunc),
-		notify:    make(chan struct{}, 1),
+		store:      store,
+		hub:        hub,
+		capacity:   capacity,
+		logger:     logger,
+		cancels:    make(map[string]context.CancelFunc),
+		notify:     make(chan struct{}, 1),
 		instanceID: instanceID,
 	}
 	go p.loop()

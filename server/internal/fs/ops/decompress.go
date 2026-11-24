@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,19 @@ import (
 // decompressBufferSize is the per-file stream buffer for the extractor. It
 // matches copy's and compress's buffer so extraction stays throughput-bound.
 const decompressBufferSize = 8 << 20
+
+// DecompressConfig holds configuration for the decompress operation.
+type DecompressConfig struct {
+	// BufferSize is the per-file decompress buffer size in bytes.
+	BufferSize int64
+}
+
+// DefaultDecompressConfig returns the default decompress configuration.
+func DefaultDecompressConfig() *DecompressConfig {
+	return &DecompressConfig{
+		BufferSize: decompressBufferSize,
+	}
+}
 
 // DecompressUnsupportedFormat is the sentinel surfaced when a request names a
 // format the stdlib cannot read. Its message lists the accepted formats.
@@ -48,12 +62,14 @@ var DecompressArchiveTraversal = errors.New("archive entry escapes the destinati
 // DecompressMeta is the serializable surface of a decompress plan shown in the
 // task record. Archive is the resolved archive path; Format the detected format;
 // ExtractDir the resolved extraction root; Into the requested destination
-// ("", extract here, or the archive stem, extract into that folder).
+// ("", extract here, or the archive stem, extract into that folder);
+// WindowPath is the window's current path for reload after extraction.
 type DecompressMeta struct {
 	Format     string `json:"format"`
 	Archive    string `json:"archive"`
 	ExtractDir string `json:"extractDir"`
 	Into       string `json:"into"`
+	WindowPath string `json:"windowPath"`
 }
 
 // DecompressPlan is a validated, resolved archive and the folder to extract it
@@ -170,14 +186,14 @@ func extractTarget(root, name string) (string, error) {
 // entry into plan.ExtractDir, reporting progress through prog. The archive is
 // never modified, renamed, or deleted. It returns a context error when cancelled
 // mid-extraction, leaving surviving targets in place.
-func DecompressRun(ctx context.Context, plan *DecompressPlan, prog *task.Progression) error {
+func DecompressRun(ctx context.Context, plan *DecompressPlan, prog *task.Progression, cfg *DecompressConfig) error {
 	switch plan.Format {
 	case formatZip:
-		return runZip(ctx, plan.Archive, plan.ExtractDir, prog)
+		return runZip(ctx, plan.Archive, plan.ExtractDir, prog, cfg)
 	case formatTargz:
-		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, true)
+		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, true, cfg)
 	case formatTar:
-		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, false)
+		return runTar(ctx, plan.Archive, plan.ExtractDir, prog, false, cfg)
 	default:
 		return DecompressUnsupportedFormat
 	}
@@ -186,7 +202,9 @@ func DecompressRun(ctx context.Context, plan *DecompressPlan, prog *task.Progres
 // runZip reads the zip archive read-only, measuring exact byte/file totals up
 // front from the file headers, then writes each entry. Directory entries create
 // their folders; regular entries are streamed with an 8 MiB buffer.
-func runZip(ctx context.Context, archive, root string, prog *task.Progression) error {
+// Directory creation is done upfront in a single MkdirAll pass (O(dirs) syscalls)
+// instead of per-entry (O(entries) syscalls).
+func runZip(ctx context.Context, archive, root string, prog *task.Progression, cfg *DecompressConfig) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -213,7 +231,19 @@ func runZip(ctx context.Context, archive, root string, prog *task.Progression) e
 	}
 	prog.SetTotal(totalBytes, filesTotal)
 
-	buf := make([]byte, decompressBufferSize)
+	// Pre-create all directories
+	dirs := collectZipDirs(zr)
+	for _, dir := range dirs {
+		dst, terr := extractTarget(root, dir)
+		if terr != nil {
+			return terr
+		}
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			return err
+		}
+	}
+
+	buf := make([]byte, cfg.BufferSize)
 	for _, zf := range zr.File {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -225,18 +255,15 @@ func runZip(ctx context.Context, archive, root string, prog *task.Progression) e
 	return nil
 }
 
-// writeZipEntry writes one zip entry: a directory entry creates its folder, a
-// regular entry is streamed to its containment-checked destination.
+// writeZipEntry writes one zip entry: a directory entry is already created by
+// pre-creation; a regular entry is streamed to its containment-checked destination.
 func writeZipEntry(ctx context.Context, zf *zip.File, root string, prog *task.Progression, buf []byte) error {
 	info := zf.FileInfo()
 	mode := info.Mode().Perm()
 
 	if strings.HasSuffix(zf.Name, "/") {
-		dst, terr := extractTarget(root, zf.Name)
-		if terr != nil {
-			return terr
-		}
-		return os.MkdirAll(dst, mode)
+		// Directory already created by pre-creation pass
+		return nil
 	}
 
 	dst, terr := extractTarget(root, zf.Name)
@@ -270,22 +297,56 @@ func writeZipEntry(ctx context.Context, zf *zip.File, root string, prog *task.Pr
 }
 
 // runTar reads a tar or tar.gz archive read-only in two passes: the first counts
-// regular-file entries and sums their sizes for accurate totals, the second
-// streams each entry. Per-entry cancellation is checked before each entry.
-func runTar(ctx context.Context, archive, root string, prog *task.Progression, gzipped bool) error {
-	total, files, err := countTarEntries(archive, gzipped)
+// regular-file entries and sums their sizes for accurate totals while also collecting
+// directories for pre-creation, the second streams each entry. Per-entry cancellation
+// is checked before each entry. Directory creation is done upfront in a single
+// MkdirAll pass (O(dirs) syscalls) instead of per-entry (O(entries) syscalls).
+func runTar(ctx context.Context, archive, root string, prog *task.Progression, gzipped bool, cfg *DecompressConfig) error {
+	// First pass: count and collect directories
+	f, err := os.Open(archive)
 	if err != nil {
 		return err
 	}
+
+	var r io.Reader = f
+	if gzipped {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return err
+		}
+		defer gz.Close()
+		r = gz
+	}
+
+	total, files, dirs, err := countTarEntriesAndDirs(r)
+	if err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+
 	prog.SetTotal(total, files)
 
-	f, err := os.Open(archive)
+	// Pre-create all directories
+	for _, dir := range dirs {
+		dst, terr := extractTarget(root, dir)
+		if terr != nil {
+			return terr
+		}
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			return err
+		}
+	}
+
+	// Second pass: extract entries
+	f, err = os.Open(archive)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	var r io.Reader = f
+	r = f
 	if gzipped {
 		gz, err := gzip.NewReader(f)
 		if err != nil {
@@ -296,7 +357,7 @@ func runTar(ctx context.Context, archive, root string, prog *task.Progression, g
 	}
 	tr := tar.NewReader(r)
 
-	buf := make([]byte, decompressBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -310,13 +371,7 @@ func runTar(ctx context.Context, archive, root string, prog *task.Progression, g
 		}
 		switch {
 		case hdr.Typeflag == tar.TypeDir:
-			dst, terr := extractTarget(root, hdr.Name)
-			if terr != nil {
-				return terr
-			}
-			if err := os.MkdirAll(dst, os.FileMode(hdr.Mode).Perm()); err != nil {
-				return err
-			}
+			// Directory already created by pre-creation pass
 		case hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA:
 			dst, terr := extractTarget(root, hdr.Name)
 			if terr != nil {
@@ -351,6 +406,63 @@ func runTar(ctx context.Context, archive, root string, prog *task.Progression, g
 	}
 }
 
+// collectZipDirs scans the zip entries and returns all directory paths that need
+// to be created, sorted so parents come before children.
+func collectZipDirs(zr *zip.Reader) []string {
+	dirSet := make(map[string]struct{})
+	for _, zf := range zr.File {
+		if strings.HasSuffix(zf.Name, "/") {
+			dirSet[zf.Name[:len(zf.Name)-1]] = struct{}{}
+		} else {
+			dir := filepath.Dir(zf.Name)
+			if dir != "." {
+				dirSet[dir] = struct{}{}
+			}
+		}
+	}
+	dirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
+// countTarEntriesAndDirs performs a read-only pass over the tar (optionally gzip)
+// stream returning the number of regular-file entries, their summed sizes, and
+// all directory paths that need to be created.
+func countTarEntriesAndDirs(r io.Reader) (int64, int, []string, error) {
+	tr := tar.NewReader(r)
+	dirSet := make(map[string]struct{})
+	var total int64
+	var files int
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			dirSet[hdr.Name] = struct{}{}
+		} else if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA {
+			files++
+			total += hdr.Size
+			dir := filepath.Dir(hdr.Name)
+			if dir != "." {
+				dirSet[dir] = struct{}{}
+			}
+		}
+	}
+	dirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	return total, files, dirs, nil
+}
+
 // countTarEntries performs a read-only pass over the tar (optionally gzip) stream
 // returning the number of regular-file entries and their summed sizes.
 func countTarEntries(archive string, gzipped bool) (int64, int, error) {
@@ -370,21 +482,6 @@ func countTarEntries(archive string, gzipped bool) (int64, int, error) {
 		r = gz
 	}
 
-	var total int64
-	var files int
-	tr := tar.NewReader(r)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return total, files, nil
-		}
-		if err != nil {
-			return 0, 0, err
-		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
-			continue
-		}
-		files++
-		total += hdr.Size
-	}
+	total, files, _, err := countTarEntriesAndDirs(r)
+	return total, files, err
 }

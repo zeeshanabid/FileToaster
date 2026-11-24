@@ -215,7 +215,7 @@ func TestRunSamePathCopyPreservesOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// The original file is untouched ...
@@ -255,7 +255,7 @@ func TestRunCopyIntoSubdirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// The destination folder is created and the file lands inside it, byte-identical.
@@ -289,7 +289,7 @@ func TestRunRecursiveCopy(t *testing.T) {
 	done := make(chan struct{})
 	prog.SetSink(func(bp task.ByteProgress) { /* observe */ })
 	go func() {
-		_ = Run(context.Background(), plan, prog)
+		_ = Run(context.Background(), plan, prog, DefaultCopyConfig())
 		close(done)
 	}()
 	select {
@@ -335,7 +335,7 @@ func TestRunOverwritesExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// The pre-existing file is not clobbered; the copy lands alongside it.
@@ -361,7 +361,7 @@ func TestRunCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled
-	err = Run(ctx, plan, &task.Progression{})
+	err = Run(ctx, plan, &task.Progression{}, DefaultCopyConfig())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run err = %v, want context.Canceled", err)
 	}
@@ -438,7 +438,7 @@ func TestRunNumberedCopySuffixes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, name := range []string{"a.txt", "a (copy).txt", "a (copy) 1.txt"} {
@@ -493,7 +493,7 @@ func TestRunCopyDirIntoParentProducesCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v, want no error", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// The original directory is untouched.
@@ -568,7 +568,7 @@ func TestRunCopyDirCreatesNamedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(parent, "pkg", "inner.txt")); err != nil || string(b) != "x" {
@@ -596,7 +596,7 @@ func TestRunCopyDirRenamesWhenTargetExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if err := Run(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := Run(context.Background(), plan, &task.Progression{}, DefaultCopyConfig()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(existing, "keep.txt")); string(b) != "old" {

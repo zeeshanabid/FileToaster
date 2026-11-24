@@ -9,7 +9,7 @@ import (
 // sink. Progress updates frequently (once per file or per buffer), so without a
 // throttle the SSE hub would be flooded. The value is small enough to feel like
 // "almost real time" but large enough to keep the event stream light.
-const reportInterval = 60 * time.Millisecond
+const reportInterval = 150 * time.Millisecond
 
 // Progression is a thread-safe progress reporter for a single task. The work
 // (copy, compress, ...) reports bytes and files through it; the pool wires the

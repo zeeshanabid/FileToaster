@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -74,11 +76,11 @@ type Config struct {
 	UploadStaleAfter int `yaml:"upload_stale_after"`
 	// UploadSweepInterval is how often the background sweep runs, in hours.
 	UploadSweepInterval int `yaml:"upload_sweep_interval"`
-	// UploadChunkSize is the fixed per-file chunk size (in bytes) the server
-	// advertises for chunked uploads. The client slices every file with this
-	// value and re-sends only missing chunks, so the client and server must agree;
-	// the client reads it from GET /api/config. Must be positive.
-	UploadChunkSize int64 `yaml:"upload_chunk_size"`
+	// UploadChunkSize is the fixed per-file chunk size in MB (integer 1-1000)
+	// the server advertises for chunked uploads. The client slices every file with
+	// this value and re-sends only missing chunks, so the client and server must agree;
+	// the client reads it from GET /api/config. Must be between 1 and 1000.
+	UploadChunkSize int `yaml:"upload_chunk_size"`
 	// UploadMaxConcurrentChunks bounds how many chunks a client uploads at once,
 	// across every file and every active session (a global limit, not per file).
 	// It caps the number of simultaneous upload requests the browser opens, which
@@ -95,11 +97,33 @@ type Config struct {
 	// FILETOASTER_ADMIN_PASSWORD (env) always takes precedence over this field.
 	AdminPasswordHash string `yaml:"admin_password_hash"`
 
+	// CopyBufferSize is the per-file copy buffer size in MB (integer 1-1000). Default 8.
+	CopyBufferSize int `yaml:"copy_buffer_size"`
+	// MoveBufferSize is the per-file move buffer size in MB (integer 1-1000). Default 8.
+	MoveBufferSize int `yaml:"move_buffer_size"`
+	// CompressBufferSize is the per-file compress buffer size in MB (integer 1-1000). Default 8.
+	CompressBufferSize int `yaml:"compress_buffer_size"`
+	// DecompressBufferSize is the per-file decompress buffer size in MB (integer 1-1000). Default 8.
+	DecompressBufferSize int `yaml:"decompress_buffer_size"`
+	// FinalizeBufferSize is the per-file finalize buffer size in MB (integer 1-1000). Default 8.
+	FinalizeBufferSize int `yaml:"finalize_buffer_size"`
+	// DownloadBufferSize is the per-file download buffer size in MB (integer 1-1000). Default 8.
+	DownloadBufferSize int `yaml:"download_buffer_size"`
+
 	// Debug enables debug-level logging when true. Defaults to info logging.
 	Debug bool `yaml:"debug"`
 
 	// SourcePath records the file this config was loaded from.
 	SourcePath string `yaml:"-"`
+
+	// Internal byte-size values (computed from MB config values)
+	uploadChunkSizeBytes      int64
+	copyBufferSizeBytes       int64
+	moveBufferSizeBytes       int64
+	compressBufferSizeBytes   int64
+	decompressBufferSizeBytes int64
+	finalizeBufferSizeBytes   int64
+	downloadBufferSizeBytes   int64
 }
 
 // EnsureTmpDirMode is the permission used when the server creates its built-in
@@ -119,7 +143,7 @@ const (
 
 // DefaultConfig returns settings filled with documented defaults.
 func DefaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		Addr:                      ":8080",
 		MaxParallelTasks:          4,
 		ShutdownTimeout:           30,
@@ -127,9 +151,17 @@ func DefaultConfig() *Config {
 		TMPDir:                    defaultTmpDir(),
 		UploadStaleAfter:          24,
 		UploadSweepInterval:       1,
-		UploadChunkSize:           4 << 20, // 4 MiB
+		UploadChunkSize:           4, // 4 MB
 		UploadMaxConcurrentChunks: 4,
+		CopyBufferSize:            8, // 8 MB
+		MoveBufferSize:            8, // 8 MB
+		CompressBufferSize:        8, // 8 MB
+		DecompressBufferSize:      8, // 8 MB
+		FinalizeBufferSize:        8, // 8 MB
+		DownloadBufferSize:        8, // 8 MB
 	}
+	cfg.computeByteSizes()
+	return cfg
 }
 
 // defaultTmpDir is the built-in upload staging directory: <home>/.filetoaster/tmp_uploads.
@@ -142,6 +174,52 @@ func defaultTmpDir() string {
 		return filepath.Join(os.TempDir(), "filetoaster-uploads")
 	}
 	return filepath.Join(home, ".filetoaster", "tmp_uploads")
+}
+
+// computeByteSizes converts MB config values to byte sizes for internal use.
+func (c *Config) computeByteSizes() {
+	c.uploadChunkSizeBytes = int64(c.UploadChunkSize) * 1024 * 1024
+	c.copyBufferSizeBytes = int64(c.CopyBufferSize) * 1024 * 1024
+	c.moveBufferSizeBytes = int64(c.MoveBufferSize) * 1024 * 1024
+	c.compressBufferSizeBytes = int64(c.CompressBufferSize) * 1024 * 1024
+	c.decompressBufferSizeBytes = int64(c.DecompressBufferSize) * 1024 * 1024
+	c.finalizeBufferSizeBytes = int64(c.FinalizeBufferSize) * 1024 * 1024
+	c.downloadBufferSizeBytes = int64(c.DownloadBufferSize) * 1024 * 1024
+}
+
+// UploadChunkSizeBytes returns the upload chunk size in bytes.
+func (c *Config) UploadChunkSizeBytes() int64 {
+	return c.uploadChunkSizeBytes
+}
+
+// CopyBufferSizeBytes returns the copy buffer size in bytes.
+func (c *Config) CopyBufferSizeBytes() int64 {
+	return c.copyBufferSizeBytes
+}
+
+// MoveBufferSizeBytes returns the move buffer size in bytes.
+func (c *Config) MoveBufferSizeBytes() int64 {
+	return c.moveBufferSizeBytes
+}
+
+// CompressBufferSizeBytes returns the compress buffer size in bytes.
+func (c *Config) CompressBufferSizeBytes() int64 {
+	return c.compressBufferSizeBytes
+}
+
+// DecompressBufferSizeBytes returns the decompress buffer size in bytes.
+func (c *Config) DecompressBufferSizeBytes() int64 {
+	return c.decompressBufferSizeBytes
+}
+
+// FinalizeBufferSizeBytes returns the finalize buffer size in bytes.
+func (c *Config) FinalizeBufferSizeBytes() int64 {
+	return c.finalizeBufferSizeBytes
+}
+
+// DownloadBufferSizeBytes returns the download buffer size in bytes.
+func (c *Config) DownloadBufferSizeBytes() int64 {
+	return c.downloadBufferSizeBytes
 }
 
 // ResolveConfigPath returns the config file to use and whether it was created.
@@ -224,6 +302,8 @@ max_parallel_tasks: 4
 shutdown_timeout_seconds: 30
 # Set to true to enable debug logging (defaults to info).
 debug: false
+# Set GOMAXPROCS to this value. 0 (the default) leaves it to the Go runtime.
+gomaxprocs: 0
 tmp_dir: %s
 # How many hours a staged upload is tolerated before the background sweep
 # removes its staging dir and session. Must be at least 1 hour; 0 or negative
@@ -232,15 +312,27 @@ tmp_dir: %s
 upload_stale_after: 24
 # How often the background upload sweep runs, in hours. Default 1.
 upload_sweep_interval: 1
-# Fixed size, in bytes, of each per-file upload chunk. The client slices files
+# Fixed size, in MB (integer 1-1000), of each per-file upload chunk. The client slices files
 # with this value and re-sends only missing chunks, so the client and server
-# must agree (the client reads it from GET /api/config). Default 4 MiB.
-upload_chunk_size: 4194304
+# must agree (the client reads it from GET /api/config). Default 4 MB.
+upload_chunk_size: 4
 # Maximum number of upload chunks sent at once, across every file and session
 # (a global limit, not per file). Caps simultaneous upload requests in the
 # browser to avoid resource-exhaustion failures when uploading large files.
 # Default 4.
 upload_max_concurrent_chunks: 4
+# Per-file copy buffer size in MB (integer 1-1000). Default 8 MB.
+copy_buffer_size: 8
+# Per-file move buffer size in MB (integer 1-1000). Default 8 MB.
+move_buffer_size: 8
+# Per-file compress buffer size in MB (integer 1-1000). Default 8 MB.
+compress_buffer_size: 8
+# Per-file decompress buffer size in MB (integer 1-1000). Default 8 MB.
+decompress_buffer_size: 8
+# Per-file finalize buffer size in MB (integer 1-1000). Default 8 MB.
+finalize_buffer_size: 8
+# Per-file download buffer size in MB (integer 1-1000). Default 8 MB.
+download_buffer_size: 8
 # Session secret signs the login cookie. A random value was generated here;
 # you can also override it via the FILETOASTER_SESSION_SECRET env var.
 session_secret: %s
@@ -328,20 +420,61 @@ func parseConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("config file %q is not readable: %w", path, err)
 	}
 
-	cfg := DefaultConfig()
+	// First, parse into a map to detect which fields are present in the file.
+	var raw map[string]any
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // reject unknown keys to catch typos early
-
-	if err := dec.Decode(cfg); err != nil {
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		if errors.Is(err, io.EOF) {
-			// Empty file: keep defaults and apply env overrides below.
+			raw = make(map[string]any)
 		} else {
 			return nil, fmt.Errorf("config file %q is not valid YAML or has the wrong structure: %w", path, err)
 		}
 	}
 
+	cfg := DefaultConfig()
+	// Now decode into the struct to get the values (with defaults for missing fields).
+	dec = yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			// Empty file: keep defaults.
+		} else {
+			return nil, fmt.Errorf("config file %q is not valid YAML or has the wrong structure: %w", path, err)
+		}
+	}
+
+	// Check for missing config fields and log warnings.
+	checkMissingConfigFields(raw, cfg)
+
 	cfg.SourcePath = path
 	return cfg, nil
+}
+
+// checkMissingConfigFields uses reflection to find all fields in Config that have
+// a yaml tag, and logs a warning for any that are missing from the raw config map.
+func checkMissingConfigFields(raw map[string]any, cfg *Config) {
+	defaults := DefaultConfig()
+	v := reflect.ValueOf(cfg).Elem()
+	t := v.Type()
+	defaultsV := reflect.ValueOf(defaults).Elem()
+
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		yamlTag := field.Tag.Get("yaml")
+		if yamlTag == "" || yamlTag == "-" {
+			continue
+		}
+		// Extract the yaml key name (before any comma options like ",omitempty")
+		key := strings.Split(yamlTag, ",")[0]
+
+		// Skip fields that are not in the raw map (i.e., not explicitly set in config file)
+		if _, ok := raw[key]; !ok {
+			// Get the default value for this field
+			defaultVal := defaultsV.Field(i).Interface()
+			slog.Warn("config value not set, using default", "key", key, "default", defaultVal)
+		}
+	}
 }
 
 // ChangeAdminPassword persists newHash as the admin password hash in the config
@@ -393,13 +526,43 @@ func (c *Config) applyEnvOverrides() {
 		}
 	}
 	if v := os.Getenv("FILETOASTER_UPLOAD_CHUNK_SIZE"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
 			c.UploadChunkSize = n
 		}
 	}
 	if v := os.Getenv("FILETOASTER_UPLOAD_MAX_CONCURRENT_CHUNKS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.UploadMaxConcurrentChunks = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_COPY_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			c.CopyBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_MOVE_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			c.MoveBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_COMPRESS_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			c.CompressBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_DECOMPRESS_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			c.DecompressBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_FINALIZE_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			c.FinalizeBufferSize = n
+		}
+	}
+	if v := os.Getenv("FILETOASTER_DOWNLOAD_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			c.DownloadBufferSize = n
 		}
 	}
 	if v := os.Getenv("FILETOASTER_SESSION_SECRET"); v != "" {
@@ -585,11 +748,29 @@ func (c *Config) Validate() error {
 	if c.UploadSweepInterval < 1 {
 		errs = append(errs, "upload_sweep_interval must be at least 1 hour")
 	}
-	if c.UploadChunkSize <= 0 {
-		errs = append(errs, "upload_chunk_size must be a positive number of bytes")
+	if c.UploadChunkSize < 1 || c.UploadChunkSize > 1000 {
+		errs = append(errs, "upload_chunk_size must be an integer between 1 and 1000 (MB)")
 	}
 	if c.UploadMaxConcurrentChunks < 1 {
 		errs = append(errs, "upload_max_concurrent_chunks must be at least 1")
+	}
+	if c.CopyBufferSize < 1 || c.CopyBufferSize > 1000 {
+		errs = append(errs, "copy_buffer_size must be an integer between 1 and 1000 (MB)")
+	}
+	if c.MoveBufferSize < 1 || c.MoveBufferSize > 1000 {
+		errs = append(errs, "move_buffer_size must be an integer between 1 and 1000 (MB)")
+	}
+	if c.CompressBufferSize < 1 || c.CompressBufferSize > 1000 {
+		errs = append(errs, "compress_buffer_size must be an integer between 1 and 1000 (MB)")
+	}
+	if c.DecompressBufferSize < 1 || c.DecompressBufferSize > 1000 {
+		errs = append(errs, "decompress_buffer_size must be an integer between 1 and 1000 (MB)")
+	}
+	if c.FinalizeBufferSize < 1 || c.FinalizeBufferSize > 1000 {
+		errs = append(errs, "finalize_buffer_size must be an integer between 1 and 1000 (MB)")
+	}
+	if c.DownloadBufferSize < 1 || c.DownloadBufferSize > 1000 {
+		errs = append(errs, "download_buffer_size must be an integer between 1 and 1000 (MB)")
 	}
 
 	if len(errs) > 0 {

@@ -45,7 +45,7 @@ func newCopyService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.Run(ctx, spec.(*ops.Plan), prog)
+			return ops.Run(ctx, spec.(*ops.Plan), prog, ops.DefaultCopyConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}

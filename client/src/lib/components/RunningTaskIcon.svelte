@@ -7,147 +7,147 @@ import { uploadManager } from '$lib/fs/upload';
 import { onMount, onDestroy } from 'svelte';
 import Portal from './Portal.svelte';
 
-  // Local open state, synced with the global taskPanelOpen store
-  let open = $state(false);
-  let notification = $state<{ taskId: string; label: string } | null>(null);
-  let notificationTimeout: ReturnType<typeof setTimeout> | null = null;
+// Local open state, synced with the global taskPanelOpen store
+let open = $state(false);
+let notification = $state<{ taskId: string; label: string } | null>(null);
+let notificationTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  // Sync with global store
-  $effect(() => {
-    open = $taskPanelOpen;
-  });
+// Sync with global store
+$effect(() => {
+  open = $taskPanelOpen;
+});
 
-  // Subscribe to task notifications
-  $effect(() => {
-    const unsubscribe = taskNotification.subscribe((value) => {
-      if (value && !open) {
-        notification = value;
-        // Clear any existing timeout
-        if (notificationTimeout) {
-          clearTimeout(notificationTimeout);
-        }
-        // Auto-hide after 3 seconds
-        notificationTimeout = setTimeout(() => {
-          notification = null;
-          notificationTimeout = null;
-        }, 3000);
-      } else {
-        notification = null;
-      }
-    });
-    return () => {
-      unsubscribe();
+// Subscribe to task notifications
+$effect(() => {
+  const unsubscribe = taskNotification.subscribe((value) => {
+    if (value && !open) {
+      notification = value;
+      // Clear any existing timeout
       if (notificationTimeout) {
         clearTimeout(notificationTimeout);
       }
-    };
+      // Auto-hide after 3 seconds
+      notificationTimeout = setTimeout(() => {
+        notification = null;
+        notificationTimeout = null;
+      }, 3000);
+    } else {
+      notification = null;
+    }
   });
-
-  function togglePanel() {
-    const newOpen = !open;
-    open = newOpen;
-    taskPanelOpen.set(newOpen);
-  }
-
-  async function on_cancel(task: Task) {
-    if (task.status !== 'running' && task.status !== 'queued') return;
-    // Local staging tasks carry the session id in meta and are cancelled through
-    // the upload manager (the server has no tracked task for ingestion yet). A
-    // finalize task is a normal server task and must be cancelled by its id.
-    if (task.type === 'upload' && task.id.startsWith('staging-') && task.meta && (task.meta as any).staging) {
-      const stagingTaskID = (task.meta as any).staging;
-      try {
-        await uploadManager.abort(stagingTaskID);
-      } catch {
-        // Ignore transport errors
-      }
-      return;
+  return () => {
+    unsubscribe();
+    if (notificationTimeout) {
+      clearTimeout(notificationTimeout);
     }
+  };
+});
+
+function togglePanel() {
+  const newOpen = !open;
+  open = newOpen;
+  taskPanelOpen.set(newOpen);
+}
+
+async function on_cancel(task: Task) {
+  if (task.status !== 'running' && task.status !== 'queued') return;
+  // Local staging tasks carry the session id in meta and are cancelled through
+  // the upload manager (the server has no tracked task for ingestion yet). A
+  // finalize task is a normal server task and must be cancelled by its id.
+  if (task.type === 'upload' && task.id.startsWith('staging-') && task.meta && (task.meta as any).staging) {
+    const stagingTaskID = (task.meta as any).staging;
     try {
-      await cancelTaskAction(task.id);
-    } catch {
-      // The pool reports cancellation itself; ignore transport errors.
-    }
-  }
-
-  // Hidden picker used only when a refreshed upload could not restore its file
-  // bytes (IndexedDB unavailable/full). Re-selecting the same files lets the
-  // upload continue from the chunks the server already has.
-  let resumeInput = $state<HTMLInputElement | null>(null);
-  let pendingResumeTaskID: string | null = null;
-
-  function openResumePicker(taskID: string) {
-    pendingResumeTaskID = taskID;
-    if (!resumeInput) return;
-    // Folder uploads need webkitRelativePath values so the re-selected files can
-    // be matched to the interrupted manifest by relative path.
-    (resumeInput as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory =
-      uploadManager.needsFolderSelection(taskID);
-    resumeInput.multiple = true;
-    resumeInput.value = '';
-    resumeInput.click();
-  }
-
-  async function onResumeFilesPicked() {
-    const taskID = pendingResumeTaskID;
-    pendingResumeTaskID = null;
-    const picked = resumeInput?.files ? Array.from(resumeInput.files) : [];
-    if (resumeInput) resumeInput.value = '';
-    if (!taskID || picked.length === 0) return;
-    try {
-      await uploadManager.resumeWithFiles(
-        taskID,
-        picked.map((f) => ({
-          rel: (f.webkitRelativePath || f.name).replace(/^\/+/, ''),
-          size: f.size,
-          blob: f
-        }))
-      );
+      await uploadManager.abort(stagingTaskID);
     } catch {
       // Ignore transport errors
     }
+    return;
   }
+  try {
+    await cancelTaskAction(task.id);
+  } catch {
+    // The pool reports cancellation itself; ignore transport errors.
+  }
+}
 
-  async function on_resume(task: Task) {
-    if (task.type !== 'upload') return;
-    if (task.status !== 'cancelled' && task.status !== 'failed') return;
-    // Only a local staging task is resumable; a terminal finalize task has no
-    // upload session left behind it.
-    if (!task.id.startsWith('staging-')) return;
-    const stagingTaskID = (task.meta as any)?.staging;
-    if (!stagingTaskID) return;
-    // If the file bytes could not be restored after a refresh, ask for the files
-    // before starting (resuming without them would fail with "bytes are
-    // missing"). This runs synchronously in the click handler so the browser
-    // still treats the picker as user-initiated.
-    if (uploadManager.needsFiles(stagingTaskID)) {
+// Hidden picker used only when a refreshed upload could not restore its file
+// bytes (IndexedDB unavailable/full). Re-selecting the same files lets the
+// upload continue from the chunks the server already has.
+let resumeInput = $state<HTMLInputElement | null>(null);
+let pendingResumeTaskID: string | null = null;
+
+function openResumePicker(taskID: string) {
+  pendingResumeTaskID = taskID;
+  if (!resumeInput) return;
+  // Folder uploads need webkitRelativePath values so the re-selected files can
+  // be matched to the interrupted manifest by relative path.
+  (resumeInput as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory =
+    uploadManager.needsFolderSelection(taskID);
+  resumeInput.multiple = true;
+  resumeInput.value = '';
+  resumeInput.click();
+}
+
+async function onResumeFilesPicked() {
+  const taskID = pendingResumeTaskID;
+  pendingResumeTaskID = null;
+  const picked = resumeInput?.files ? Array.from(resumeInput.files) : [];
+  if (resumeInput) resumeInput.value = '';
+  if (!taskID || picked.length === 0) return;
+  try {
+    await uploadManager.resumeWithFiles(
+      taskID,
+      picked.map((f) => ({
+        rel: (f.webkitRelativePath || f.name).replace(/^\/+/, ''),
+        size: f.size,
+        blob: f
+      }))
+    );
+  } catch {
+    // Ignore transport errors
+  }
+}
+
+async function on_resume(task: Task) {
+  if (task.type !== 'upload') return;
+  if (task.status !== 'cancelled' && task.status !== 'failed') return;
+  // Only a local staging task is resumable; a terminal finalize task has no
+  // upload session left behind it.
+  if (!task.id.startsWith('staging-')) return;
+  const stagingTaskID = (task.meta as any)?.staging;
+  if (!stagingTaskID) return;
+  // If the file bytes could not be restored after a refresh, ask for the files
+  // before starting (resuming without them would fail with "bytes are
+  // missing"). This runs synchronously in the click handler so the browser
+  // still treats the picker as user-initiated.
+  if (uploadManager.needsFiles(stagingTaskID)) {
+    openResumePicker(stagingTaskID);
+    return;
+  }
+  try {
+    const resumed = await uploadManager.resumeSession(stagingTaskID);
+    if (!resumed && uploadManager.needsFiles(stagingTaskID)) {
       openResumePicker(stagingTaskID);
-      return;
     }
-    try {
-      const resumed = await uploadManager.resumeSession(stagingTaskID);
-      if (!resumed && uploadManager.needsFiles(stagingTaskID)) {
-        openResumePicker(stagingTaskID);
-      }
-    } catch {
-      // Ignore transport errors
-    }
+  } catch {
+    // Ignore transport errors
   }
+}
 
-  function statusLabel(status: Task['status']): string {
-    switch (status) {
-      case 'queued':
-        return 'Queued';
-      case 'running':
-        return 'Running';
-      case 'finished':
-        return 'Done';
-      case 'failed':
-        return 'Failed';
-      case 'cancelled':
-        return 'Cancelled';
-    }
+function statusLabel(status: Task['status']): string {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'running':
+      return 'Running';
+    case 'finished':
+      return 'Done';
+    case 'failed':
+      return 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
   }
+}
 </script>
 
 <div class="tasks">
@@ -200,96 +200,99 @@ import Portal from './Portal.svelte';
 
   {#if open}
     <div class="popover" role="dialog" aria-label="Tasks">
-      <div class="popover-head">
-        Tasks
-        {#if $combinedRunningCount > 0 || $combinedQueuedCount > 0}
-          <span class="counts">
-            {$combinedRunningCount} running{#if $combinedQueuedCount > 0}, {$combinedQueuedCount} queued{/if}
-          </span>
-        {/if}
-        {#if $combinedTaskList.some(t => t.status === 'finished' || t.status === 'failed' || t.status === 'cancelled')}
-          <button
-            class="clear-btn"
-            type="button"
-            aria-label="Clear completed tasks"
-            title="Clear completed tasks"
-            onclick={clearCompletedTasks}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-              <path d="M3 6h18" />
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-            </svg>
-          </button>
-        {/if}
-      </div>
-      {#if $combinedTaskList.length === 0}
-        <div class="empty">No tasks yet.</div>
-      {:else}
-        <div class="task-list">
-          {#each $combinedTaskList as task (task.id)}
-            <div class="task" class:terminal={task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled'}>
-            <div class="task-row">
-              <span class="task-name" title={taskLabel(task)}>{taskLabel(task)}</span>
-              <span class="status status-{task.status}">{statusLabel(task.status)}</span>
+        <div class="popover-head">
+          Tasks
+          {#if $combinedRunningCount > 0 || $combinedQueuedCount > 0}
+            <span class="counts">
+              {$combinedRunningCount} running{#if $combinedQueuedCount > 0}, {$combinedQueuedCount} queued{/if}
+            </span>
+          {/if}
+          {#if $combinedTaskList.some(t => t.status === 'finished' || t.status === 'failed' || t.status === 'cancelled')}
+            <button
+              class="clear-btn"
+              type="button"
+              aria-label="Clear completed tasks"
+              title="Clear completed tasks"
+              onclick={clearCompletedTasks}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+                <path d="M3 6h18" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          {/if}
+        </div>
+        {#if $combinedTaskList.length === 0}
+          <div class="empty">No tasks yet.</div>
+        {:else}
+          <div class="task-list">
+            {#each $combinedTaskList as task (task.id)}
+              <div class="task" class:terminal={task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled'}>
+              <div class="task-row">
+                <span class="task-name" title={taskLabel(task)}>{taskLabel(task)}</span>
+                <span class="status status-{task.status}">{statusLabel(task.status)}</span>
+                {#if task.status === 'running' || task.status === 'queued'}
+                  <button
+                    class="cancel"
+                    type="button"
+                    aria-label="Cancel task"
+                    title="Cancel task"
+                    onclick={() => on_cancel(task)}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="100%" height="100%">
+                      <path d="M7 7l10 10M17 7L7 17" />
+                    </svg>
+                  </button>
+                {:else if task.type === 'upload' && task.id.startsWith('staging-') && (task.status === 'cancelled' || task.status === 'failed')}
+                  <button
+                    class="resume"
+                    type="button"
+                    aria-label="Resume upload"
+                    title="Resume upload"
+                    onclick={() => on_resume(task)}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+                      <path d="M5 12h14" />
+                      <path d="M12 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                {/if}
+              </div>
               {#if task.status === 'running' || task.status === 'queued'}
-                <button
-                  class="cancel"
-                  type="button"
-                  aria-label="Cancel task"
-                  title="Cancel task"
-                  onclick={() => on_cancel(task)}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="100%" height="100%">
-                    <path d="M7 7l10 10M17 7L7 17" />
-                  </svg>
-                </button>
-              {:else if task.type === 'upload' && task.id.startsWith('staging-') && (task.status === 'cancelled' || task.status === 'failed')}
-                <button
-                  class="resume"
-                  type="button"
-                  aria-label="Resume upload"
-                  title="Resume upload"
-                  onclick={() => on_resume(task)}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-                    <path d="M5 12h14" />
-                    <path d="M12 5l7 7-7 7" />
-                  </svg>
-                </button>
+                <progress
+                  class="bar"
+                  value={task.status === 'running' ? Math.round(task.progress) : undefined}
+                  max="100"
+                  aria-label="Progress"
+                ></progress>
+                <div class="meta">
+                  {#if task.bytes.filesTotal > 0}
+                    <span class="files">{task.bytes.filesDone} / {task.bytes.filesTotal} files</span>
+                  {/if}
+                  {#if task.bytes.total > 0}
+                    <span class="bytes">{formatSize(task.bytes.done)} / {formatSize(task.bytes.total)}</span>
+                  {/if}
+                  {#if task.status === 'running' && task.bytes.ratePerSec > 0}
+                    <span class="rate">{formatRate(task.bytes.ratePerSec)}</span>
+                  {/if}
+                </div>
+              {:else}
+                <div class="meta {task.status}">
+                  {#if (task.status === 'failed' || task.status === 'cancelled') && task.error}
+                    <span class="err">{task.error}</span>
+                  {:else}
+                    <span>{statusLabel(task.status)}</span>
+                  {/if}
+                </div>
               {/if}
             </div>
-            {#if task.status === 'running' || task.status === 'queued'}
-              <div class="bar" role="progressbar" aria-valuenow={Math.round(task.progress)} aria-valuemin="0" aria-valuemax="100" aria-label="Progress">
-                <div class="fill" style="width:{task.progress}%"></div>
-              </div>
-              <div class="meta">
-                {#if task.bytes.filesTotal > 0}
-                  <span class="files">{task.bytes.filesDone} / {task.bytes.filesTotal} files</span>
-                {/if}
-                {#if task.bytes.total > 0}
-                  <span class="bytes">{formatSize(task.bytes.done)} / {formatSize(task.bytes.total)}</span>
-                {/if}
-                {#if task.status === 'running' && task.bytes.ratePerSec > 0}
-                  <span class="rate">{formatRate(task.bytes.ratePerSec)}</span>
-                {/if}
-              </div>
-            {:else}
-              <div class="meta {task.status}">
-                {#if (task.status === 'failed' || task.status === 'cancelled') && task.error}
-                  <span class="err">{task.error}</span>
-                {:else}
-                  <span>{statusLabel(task.status)}</span>
-                {/if}
-              </div>
-            {/if}
+            {/each}
           </div>
-        {/each}
-        </div>
-      {/if}
-    </div>
-  {/if}
-</div>
+        {/if}
+      </div>
+    {/if}
+  </div>
 
 <style>
   .tasks {
@@ -368,7 +371,7 @@ import Portal from './Portal.svelte';
     border-radius: 14px;
     box-shadow: var(--shadow-popover);
     padding: 14px;
-    z-index: 50;
+    z-index: 1000;
     animation: popover-in 140ms ease-out;
   }
   @keyframes popover-in {
@@ -524,18 +527,64 @@ import Portal from './Portal.svelte';
     height: 14px;
   }
   .bar {
+    width: 100%;
     height: 7px;
     border-radius: 999px;
     background: var(--surface-inset);
-    overflow: hidden;
+    overflow: clip;
     margin-top: 8px;
+    appearance: none;
+    border: 0;
   }
-  .fill {
-    height: 100%;
+
+  /* WebKit/Blink: style the progress bar (fill) */
+  .bar::-webkit-progress-bar {
+    background: transparent;
+  }
+
+  .bar::-webkit-progress-value {
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border-radius: inherit;
-    transition: width 180ms ease-out;
+    border-radius: 999px;
+    transition: inline-size 180ms ease-out;
     box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
+  }
+
+  /* Firefox: style the progress bar (fill) */
+  .bar::-moz-progress-bar {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 999px;
+    transition: inline-size 180ms ease-out;
+    box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
+  }
+
+  /* Indeterminate state (queued) - animated fill */
+  .bar:indeterminate {
+    --progress-indeterminate-size: 30%;
+    --progress-indeterminate-duration: 1.5s;
+    animation: progress-indeterminate var(--progress-indeterminate-duration) infinite linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar:indeterminate {
+      --progress-indeterminate-duration: 10s;
+    }
+  }
+
+  @keyframes progress-indeterminate {
+    from {
+      inline-size: var(--progress-indeterminate-size);
+      transform: translateX(-100%);
+    }
+    to {
+      inline-size: var(--progress-indeterminate-size);
+      transform: translateX(100%);
+    }
+  }
+
+  /* Apply indeterminate animation to pseudo-elements */
+  .bar:indeterminate::-webkit-progress-value,
+  .bar:indeterminate::-moz-progress-bar {
+    animation: progress-indeterminate var(--progress-indeterminate-duration) infinite linear;
   }
   .meta {
     display: flex;

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"filetoaster/internal/config"
 	"filetoaster/internal/fs"
 	"filetoaster/internal/service"
 	"filetoaster/internal/task"
@@ -25,7 +26,7 @@ type finalizeUploadRequest struct {
 // registerUploadOp wires the upload finalize operation into the task service.
 // The roots factory confines the destination to the allowed folders; the runner
 // copies the staged tree into it (see internal/upload.Finalize).
-func registerUploadOp(svc *service.Service, roots func() *fs.Roots) {
+func registerUploadOp(svc *service.Service, roots func() *fs.Roots, cfg *config.Config) {
 	svc.Register(service.UploadOperation, service.Op{
 		Prepare: func(body []byte) (any, []byte, error) {
 			var req finalizeUploadRequest
@@ -48,7 +49,7 @@ func registerUploadOp(svc *service.Service, roots func() *fs.Roots) {
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
 			req := spec.(finalizeUploadRequest)
-			return upload.Finalize(ctx, req.Staging, req.Dest, prog)
+			return upload.Finalize(ctx, req.Staging, req.Dest, prog, &upload.FinalizeConfig{BufferSize: cfg.FinalizeBufferSizeBytes()})
 		},
 	})
 }

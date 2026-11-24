@@ -22,6 +22,19 @@ import (
 // throughput-bound rather than syscalls-bound without wasting memory per worker.
 const copyBufferSize = 8 << 20
 
+// CopyConfig holds configuration for the copy operation.
+type CopyConfig struct {
+	// BufferSize is the per-file copy buffer size in bytes.
+	BufferSize int64
+}
+
+// DefaultCopyConfig returns the default copy configuration.
+func DefaultCopyConfig() *CopyConfig {
+	return &CopyConfig{
+		BufferSize: copyBufferSize,
+	}
+}
+
 // Item is one resolved source→destination copy.
 type Item struct {
 	Src string `json:"src"`
@@ -234,7 +247,7 @@ func numberedCopyName(base string, n int) string {
 // renamed rather than overwritten (Resolve already picks unique names for every
 // item), so no copy overwrites an existing file or directory. It returns a
 // context error when cancelled mid-copy.
-func Run(ctx context.Context, plan *Plan, prog *task.Progression) error {
+func Run(ctx context.Context, plan *Plan, prog *task.Progression, cfg *CopyConfig) error {
 	if len(plan.Items) == 0 {
 		return errors.New("no items to copy")
 	}
@@ -254,7 +267,7 @@ func Run(ctx context.Context, plan *Plan, prog *task.Progression) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := copyItem(ctx, it.Src, it.Dst, prog); err != nil {
+		if err := copyItem(ctx, it.Src, it.Dst, prog, cfg); err != nil {
 			return err
 		}
 	}
@@ -297,34 +310,69 @@ func statTarget(path string) (bytes int64, files int, err error) {
 }
 
 // copyItem copies a single source (file or directory) to dst.
-func copyItem(ctx context.Context, src, dst string, prog *task.Progression) error {
+func copyItem(ctx context.Context, src, dst string, prog *task.Progression, cfg *CopyConfig) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
 	if info.IsDir() {
-		return copyDir(ctx, src, dst, prog)
+		return copyDir(ctx, src, dst, prog, cfg)
 	}
-	buf := make([]byte, copyBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	return copyFile(ctx, src, dst, info, prog, buf)
+}
+
+// collectDirs walks src and returns all directory paths relative to src,
+// including src itself. The result is sorted so parent directories come before
+// children, allowing a single MkdirAll pass to create the entire tree.
+func collectDirs(src string) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			rel, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			dirs = append(dirs, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dirs, nil
 }
 
 // copyDir recursively copies dir into dst, recreating the directory structure
 // and copying every regular file with progress reporting. dst is already a
 // unique path chosen by Resolve, so no child is ever overwritten.
-func copyDir(ctx context.Context, src, dst string, prog *task.Progression) error {
+// Directory creation is done upfront in a single MkdirAll pass (O(dirs) syscalls)
+// instead of per-file (O(files) syscalls).
+func copyDir(ctx context.Context, src, dst string, prog *task.Progression, cfg *CopyConfig) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+
+	dirs, err := collectDirs(src)
+	if err != nil {
 		return err
 	}
+	for _, rel := range dirs {
+		dstDir := filepath.Join(dst, rel)
+		if err := os.MkdirAll(dstDir, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
 	}
-	buf := make([]byte, copyBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for _, de := range entries {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -337,7 +385,7 @@ func copyDir(ctx context.Context, src, dst string, prog *task.Progression) error
 		}
 		switch {
 		case de.IsDir():
-			if err := copyDir(ctx, s2, d2, prog); err != nil {
+			if err := copyDir(ctx, s2, d2, prog, cfg); err != nil {
 				return err
 			}
 		default:

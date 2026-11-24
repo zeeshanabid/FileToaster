@@ -53,7 +53,7 @@ func TestFinalizeCopiesStagingIntoTargetAndRemovesStaging(t *testing.T) {
 		"sub/empty/": "",
 	})
 
-	if err := Finalize(context.Background(), staging, dest, &task.Progression{}); err != nil {
+	if err := Finalize(context.Background(), staging, dest, &task.Progression{}, DefaultFinalizeConfig()); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestFinalizeUniqueDestOnCollision(t *testing.T) {
 	// A same-named file already exists at the target.
 	writeTree(t, dest, map[string]string{"a.txt": "existing"})
 
-	if err := Finalize(context.Background(), staging, dest, &task.Progression{}); err != nil {
+	if err := Finalize(context.Background(), staging, dest, &task.Progression{}, DefaultFinalizeConfig()); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestFinalizeCancelAbortsAndKeepsStaging(t *testing.T) {
 	// A pre-cancelled context aborts immediately, before writing anything.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Finalize(ctx, staging, dest, &task.Progression{}); !errors.Is(err, context.Canceled) {
+	if err := Finalize(ctx, staging, dest, &task.Progression{}, DefaultFinalizeConfig()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Finalize with cancelled context: err = %v, want context.Canceled", err)
 	}
 	// The staging dir is kept so the copy can be retried.
@@ -126,7 +126,7 @@ func TestFinalizeFailureKeepsStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Finalize(context.Background(), staging, dest, &task.Progression{})
+	err := Finalize(context.Background(), staging, dest, &task.Progression{}, DefaultFinalizeConfig())
 	if err == nil {
 		t.Fatal("Finalize should fail when the destination path is not creatable")
 	}

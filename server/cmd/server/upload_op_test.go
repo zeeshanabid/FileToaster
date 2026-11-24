@@ -37,14 +37,13 @@ func newUploadEndpoint(t *testing.T, root, tmpDir string) uploadEndpoint {
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("create tmp_dir: %v", err)
 	}
-	cfg := &config.Config{
-		AllowedPaths:     []config.AllowedPath{{Name: "Files", Path: root}},
-		MaxParallelTasks: 4,
-	}
+	cfg := config.DefaultConfig()
+	cfg.AllowedPaths = []config.AllowedPath{{Name: "Files", Path: root}}
+	cfg.MaxParallelTasks = 4
 	fsCfg := newFSConfig(cfg)
 	roots := func() *fs.Roots { return fs.NewRoots(pathsOf(fsCfg)...) }
 	svc := service.NewService(cfg.MaxParallelTasks, slog.New(slog.NewTextHandler(io.Discard, nil)), "test-instance")
-	registerUploadOp(svc, roots)
+	registerUploadOp(svc, roots, cfg)
 	sessions := upload.NewRegistry()
 	taskSrv := protocol.NewServer(svc, slog.New(slog.NewTextHandler(io.Discard, nil)), protocol.WithUploadStaging(tmpDir, sessions, roots))
 	guard := newTestGuard(t)

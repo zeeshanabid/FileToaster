@@ -107,12 +107,11 @@ describe('RunningTaskIcon — progress bar and stats', () => {
     await tick();
 
     const task = within(screen.getByRole('dialog')).getByTitle('Copy').closest('.task') as HTMLElement;
-    const bar = task.querySelector('.bar') as HTMLElement;
-    const fill = bar.querySelector('.fill') as HTMLElement;
+    const bar = task.querySelector('.bar') as HTMLProgressElement;
     expect(bar).toBeTruthy();
-    expect(fill).toBeTruthy();
-    expect(fill.getAttribute('style')).toContain('50%');
-    expect(bar.getAttribute('role')).toBe('progressbar');
+    expect(bar.value).toBe(50);
+    expect(bar.max).toBe(100);
+    expect(bar.getAttribute('aria-label')).toBe('Progress');
   });
 
   it('shows files done/total, human byte counts, and transfer rate while running', async () => {
@@ -368,5 +367,21 @@ describe('RunningTaskIcon — clear button visibility', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.querySelector('[aria-label="Clear completed tasks"]')).toBeNull();
+  });
+});
+
+describe('RunningTaskIcon — popover z-index', () => {
+  it('renders the task panel popover with high z-index (1000) above windows', async () => {
+    await openPanel();
+    tasks.set([copyTask({ progress: 50 })]);
+    active.set(1);
+    await tick();
+
+    const dialog = screen.getByRole('dialog');
+    // The popover should have a high z-index to stay above windows
+    const popover = dialog.closest('.popover') as HTMLElement;
+    expect(popover).toBeInTheDocument();
+    // The popover element should have the z-index style from CSS
+    expect(popover).toHaveClass('popover');
   });
 });

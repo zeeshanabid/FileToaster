@@ -8,6 +8,7 @@ package ops
 import (
 	"archive/tar"
 	"archive/zip"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -33,6 +34,23 @@ const (
 // compressBufferSize is the per-file stream buffer for the archive writer. It
 // matches copy's buffer so large-file compression stays throughput-bound.
 const compressBufferSize = 8 << 20
+
+// CompressConfig holds configuration for the compress operation.
+type CompressConfig struct {
+	// BufferSize is the per-file compress buffer size in bytes.
+	BufferSize int64
+	// CompressionLevel is the compression level (1-9, 0 = no compression).
+	// Only used for zip and targz formats.
+	CompressionLevel int
+}
+
+// DefaultCompressConfig returns the default compress configuration.
+func DefaultCompressConfig() *CompressConfig {
+	return &CompressConfig{
+		BufferSize:       compressBufferSize,
+		CompressionLevel: 6, // default: balanced
+	}
+}
 
 // CompressArchive is the sentinel surfaced when a request names a format the
 // stdlib cannot write. Its message lists the accepted formats for the UI.
@@ -72,9 +90,10 @@ type ResolvedSource struct {
 // CompressPlan is a validated, resolved set of sources and the single archive to
 // write for them. It is the opaque spec passed to Run.
 type CompressPlan struct {
-	Sources []ResolvedSource `json:"sources"`
-	Dest    string           `json:"dest"`
-	Format  string           `json:"format"`
+	Sources          []ResolvedSource `json:"sources"`
+	Dest             string           `json:"dest"`
+	Format           string           `json:"format"`
+	CompressionLevel int              `json:"compressionLevel"`
 }
 
 // CompressResolve validates the request, resolves every source against the
@@ -97,7 +116,7 @@ type CompressPlan struct {
 //
 // Sources are opened read-only by CompressRun; Resolve never writes or mutates
 // anything. A source nested inside another selected source is rejected.
-func CompressResolve(roots *fs.Roots, paths []string, format string) (*CompressPlan, error) {
+func CompressResolve(roots *fs.Roots, paths []string, format string, compressionLevel int) (*CompressPlan, error) {
 	paths = uniqueTrim(paths)
 	if len(paths) == 0 {
 		return nil, ErrEmptyPaths
@@ -105,6 +124,14 @@ func CompressResolve(roots *fs.Roots, paths []string, format string) (*CompressP
 	format = strings.TrimSpace(format)
 	if !isSupportedArchiveFormat(format) {
 		return nil, CompressArchiveFormatUnsupported
+	}
+
+	// Clamp compression level to valid range (0-9)
+	if compressionLevel < 0 {
+		compressionLevel = 0
+	}
+	if compressionLevel > 9 {
+		compressionLevel = 9
 	}
 
 	resolved := make([]ResolvedSource, 0, len(paths))
@@ -144,7 +171,7 @@ func CompressResolve(roots *fs.Roots, paths []string, format string) (*CompressP
 		return nil, err
 	}
 
-	plan := &CompressPlan{Dest: dest, Format: format}
+	plan := &CompressPlan{Dest: dest, Format: format, CompressionLevel: compressionLevel}
 	for _, src := range resolved {
 		plan.Sources = append(plan.Sources, src)
 	}
@@ -257,7 +284,7 @@ func commonParentDir(paths []string) string {
 // The destination is excluded from its own walk (the directory-in-place case),
 // and a cancelled context is returned directly so the pool marks the task
 // cancelled.
-func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression) error {
+func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression, cfg *CompressConfig) error {
 	var totalBytes int64
 	var filesTotal int
 	for _, src := range plan.Sources {
@@ -277,7 +304,7 @@ func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression
 	archive := newArchive(plan, f)
 	defer f.Close()
 
-	buf := make([]byte, compressBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for _, src := range plan.Sources {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -295,22 +322,34 @@ func CompressRun(ctx context.Context, plan *CompressPlan, prog *task.Progression
 
 // archive wraps the writer for one plan.Format and streams regular files into it.
 type archive struct {
-	format string
-	f      *os.File
-	zw     *zip.Writer
-	gw     *gzip.Writer
-	tw     *tar.Writer
+	format           string
+	f                *os.File
+	zw               *zip.Writer
+	gw               *gzip.Writer
+	tw               *tar.Writer
+	compressionLevel int
 }
 
 // newArchive opens the writer for plan.Format: a zip writer, a gzip-wrapped tar
 // writer, or a plain tar writer.
 func newArchive(plan *CompressPlan, f *os.File) *archive {
-	a := &archive{format: plan.Format, f: f}
+	a := &archive{format: plan.Format, f: f, compressionLevel: plan.CompressionLevel}
 	switch plan.Format {
 	case formatZip:
 		a.zw = zip.NewWriter(f)
+		// Register a custom compressor with the specified compression level
+		if a.compressionLevel >= 0 && a.compressionLevel <= 9 {
+			a.zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+				return flate.NewWriter(out, a.compressionLevel)
+			})
+		}
 	case formatTargz:
-		a.gw = gzip.NewWriter(f)
+		var err error
+		a.gw, err = gzip.NewWriterLevel(f, a.compressionLevel)
+		if err != nil {
+			// Fallback to default compression if level is invalid
+			a.gw, _ = gzip.NewWriterLevel(f, gzip.DefaultCompression)
+		}
 		a.tw = tar.NewWriter(a.gw)
 	case formatTar:
 		a.tw = tar.NewWriter(f)

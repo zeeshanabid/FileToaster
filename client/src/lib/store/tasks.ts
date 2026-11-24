@@ -9,13 +9,15 @@ import {
   submitMove,
   submitCompress,
   submitDecompress,
+  submitTruncate,
   type Task,
   type CopyMeta,
   type DeleteMeta,
   type MoveMeta,
   type CompressMeta,
   type DecompressMeta,
-  type UploadMeta
+  type UploadMeta,
+  type TruncateResponse
 } from '$lib/fs/api';
 import { archiveStem } from '$lib/fs/archive';
 import { uploadStoreKey, uploadManager, type IngestState, globalChunkSpan } from '$lib/fs/upload';
@@ -286,19 +288,26 @@ export function submitMoveTask(paths: string[], dest: string) {
   // submitCompressTask enqueues a compress task for `paths` into `format`
   // (zip, targz, tar). The archive is written in place and a colliding target is
   // renamed server-side, so no overwrite decision is passed.
-  export function submitCompressTask(paths: string[], format: string) {
-    return submitCompress({ paths, format });
+  export function submitCompressTask(paths: string[], format: string, compressionLevel?: number) {
+    return submitCompress({ paths, format, compressionLevel });
   }
 
-  // submitDecompressTask enqueues a decompress task for the single archive at
+// submitDecompressTask enqueues a decompress task for the single archive at
   // `paths` into `into` ("", extract here, or an archive stem, extract into a
   // sibling folder). An existing destination folder is renamed server-side.
-  export function submitDecompressTask(paths: string[], into: string) {
-    return submitDecompress({ paths, into });
+  // windowPath is the current window's path for reload after extraction.
+  export function submitDecompressTask(paths: string[], into: string, windowPath: string) {
+    return submitDecompress({ paths, into, windowPath });
   }
 
-// cancelTaskAction asks the server to stop a queued or running task.
-export function cancelTaskAction(id: string) {
+  // submitTruncateTask enqueues a truncate task for `paths` to the target `size` in bytes.
+  // Truncate only works on files (not directories).
+  export function submitTruncateTask(paths: string[], size: number) {
+    return submitTruncate({ paths, size });
+  }
+
+  // cancelTaskAction asks the server to stop a queued or running task.
+  export function cancelTaskAction(id: string) {
   return apiCancel(id);
 }
 
@@ -395,12 +404,17 @@ export function taskLabel(task: Task): string {
       const n = meta?.source ?? 1;
       return n === 1 ? 'Compress' : `Compress ${n} items`;
     }
-    case 'decompress': {
+case 'decompress': {
       const meta = (task.meta ?? null) as DecompressMeta | null;
-      // The label shows the archive's stem ("myfiles.zip" → "myfiles").
+      // The label shows the archive's stem ("myfiles.zip" -> "myfiles").
       const raw = meta?.archive ?? '';
       const stem = archiveStem(raw.split('/').filter(Boolean).pop() ?? raw);
       return `Extract ${stem || 'archive'}`;
+    }
+    case 'truncate': {
+      const meta = (task.meta ?? null) as TruncateMeta | null;
+      const n = meta?.items?.length ?? 1;
+      return n === 1 ? 'Truncate' : `Truncate ${n} files`;
     }
     case 'upload': {
       // The finalize op's meta carries the phase flag ("finalizing", set when
@@ -627,7 +641,11 @@ function getAffectedPaths(task: Task): string[] {
     }
     case 'decompress': {
       const m = meta as DecompressMeta | null;
-      if (m?.extractDir) addDir(m.extractDir);
+      // Use windowPath (the directory the user was viewing when they started extraction)
+      // so the window refreshes to show the extracted files in context.
+      // Fall back to extractDir/into for backward compatibility with old tasks.
+      if (m?.windowPath) addDir(m.windowPath);
+      else if (m?.extractDir) addDir(m.extractDir);
       else if (m?.into) addDir(m.into);
       break;
     }
@@ -636,8 +654,22 @@ function getAffectedPaths(task: Task): string[] {
       if (m?.dest) addDir(m.dest);
       break;
     }
+    case 'truncate': {
+      const m = meta as TruncateMeta | null;
+      if (m?.items) {
+        for (const item of m.items) {
+          if (item.src) addDir(dirname(item.src));
+        }
+      }
+      break;
+    }
   }
   return Array.from(paths);
+}
+
+// TruncateMeta is the truncate operation's plan, carried in a task's Meta field.
+interface TruncateMeta {
+  items: Array<{ src: string; size: number }>;
 }
 
 // Export getAffectedPaths so it can be unit-tested independently.

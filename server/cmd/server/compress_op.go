@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"filetoaster/internal/config"
 	"filetoaster/internal/fs"
 	"filetoaster/internal/fs/ops"
 	"filetoaster/internal/service"
@@ -12,24 +13,26 @@ import (
 )
 
 // compressTaskRequest is the subset of the compress request the op needs to
-// validate: the selected paths and the chosen archive format (zip, targz, tar).
+// validate: the selected paths, the chosen archive format (zip, targz, tar),
+// and the compression level (0-9, only used for zip and targz).
 type compressTaskRequest struct {
-	Paths  []string `json:"paths"`
-	Format string   `json:"format"`
+	Paths            []string `json:"paths"`
+	Format           string   `json:"format"`
+	CompressionLevel int      `json:"compressionLevel"`
 }
 
 // registerCompressOp wires the compress operation into the task service. The
 // roots factory is captured so validation stays confined to the allowed folders,
 // and the runner closes over the resolved plan. Adding a new operation follows
 // the same shape: implement the work and Register it.
-func registerCompressOp(svc *service.Service, roots func() *fs.Roots) {
+func registerCompressOp(svc *service.Service, roots func() *fs.Roots, cfg *config.Config) {
 	svc.Register(service.CompressOperation, service.Op{
 		Prepare: func(body []byte) (any, []byte, error) {
 			var req compressTaskRequest
 			if err := json.Unmarshal(body, &req); err != nil {
 				return nil, nil, fmt.Errorf("invalid compress request: %w", err)
 			}
-			plan, err := ops.CompressResolve(roots(), req.Paths, req.Format)
+			plan, err := ops.CompressResolve(roots(), req.Paths, req.Format, req.CompressionLevel)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -41,7 +44,11 @@ func registerCompressOp(svc *service.Service, roots func() *fs.Roots) {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog)
+			plan := spec.(*ops.CompressPlan)
+			return ops.CompressRun(ctx, plan, prog, &ops.CompressConfig{
+				BufferSize:       cfg.CompressBufferSizeBytes(),
+				CompressionLevel: plan.CompressionLevel,
+			})
 		},
 	})
 }

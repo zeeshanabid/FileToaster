@@ -160,7 +160,7 @@ func newMoveService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog)
+			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog, ops.DefaultMoveConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}
@@ -318,7 +318,7 @@ func newCompressService(roots ...string) *protocolHarness {
 			if err := json.Unmarshal(body, &req); err != nil {
 				return nil, nil, err
 			}
-			plan, err := ops.CompressResolve(resolve(), req.Paths, req.Format)
+			plan, err := ops.CompressResolve(resolve(), req.Paths, req.Format, 6)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -330,7 +330,7 @@ func newCompressService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog)
+			return ops.CompressRun(ctx, spec.(*ops.CompressPlan), prog, ops.DefaultCompressConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}
@@ -457,7 +457,7 @@ func newDecompressService(roots ...string) *protocolHarness {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog)
+			return ops.DecompressRun(ctx, spec.(*ops.DecompressPlan), prog, ops.DefaultDecompressConfig())
 		},
 	})
 	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}
@@ -1353,57 +1353,230 @@ func TestHubIDs(t *testing.T) {
 	}
 }
 
-// --- Pool Capacity test ---
+// --- Truncate tests ---
 
-func TestPoolCapacity(t *testing.T) {
+func newTruncateService(roots ...string) *protocolHarness {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := task.NewStore()
-	hub := task.NewHub()
-	pool := task.NewPool(store, hub, 4, logger, "test-instance")
+	svc := newTestService()
+	resolve := func() *fs.Roots { return fs.NewRoots(roots...) }
+	svc.Register(service.TruncateOperation, service.Op{
+		Prepare: func(body []byte) (any, []byte, error) {
+			var req struct {
+				Paths []string `json:"paths"`
+				Size  int64    `json:"size"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				return nil, nil, err
+			}
+			plan, err := ops.TruncateResolve(resolve(), req.Paths, req.Size)
+			if err != nil {
+				return nil, nil, err
+			}
+			meta, _ := json.Marshal(plan)
+			return plan, meta, nil
+		},
+		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
+			return ops.TruncateRun(ctx, spec.(*ops.TruncatePlan), prog, ops.DefaultTruncateConfig())
+		},
+	})
+	return &protocolHarness{srv: NewServer(svc, logger), svc: svc}
+}
 
-	cap := pool.Capacity()
-	if cap != 4 {
-		t.Errorf("Capacity = %d, want 4", cap)
+func truncateReq(paths []string, size int64) string {
+	body, _ := json.Marshal(map[string]any{"paths": paths, "size": size})
+	return string(body)
+}
+
+func postTruncate(h *protocolHarness, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/truncate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.srv.ServeTruncate(rec, req)
+	return rec
+}
+
+func TestServeTruncateSuccess(t *testing.T) {
+	parent := t.TempDir()
+	src := filepath.Join(parent, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "b.txt"), []byte("test content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTruncateService(parent)
+
+	// Truncate both files to 5 bytes
+	rec := postTruncate(h, truncateReq([]string{filepath.Join(src, "a.txt"), filepath.Join(src, "b.txt")}, 5))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+
+	// Wait for task to complete
+	waitFor(t, func() bool {
+		tasks := h.svc.Snapshot()
+		return len(tasks) > 0 && tasks[0].Status == task.StatusFinished
+	})
+
+	// Verify files were truncated
+	infoA, _ := os.Stat(filepath.Join(src, "a.txt"))
+	infoB, _ := os.Stat(filepath.Join(src, "b.txt"))
+	if infoA.Size() != 5 {
+		t.Errorf("a.txt size = %d, want 5", infoA.Size())
+	}
+	if infoB.Size() != 5 {
+		t.Errorf("b.txt size = %d, want 5", infoB.Size())
 	}
 }
 
-// --- Upload session writeAt test ---
-
-func TestUploadSessionWriteAt(t *testing.T) {
-	tmpDir := t.TempDir()
-	dest := filepath.Join(tmpDir, "dest")
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+func TestServeTruncateZeroSize(t *testing.T) {
+	parent := t.TempDir()
+	src := filepath.Join(parent, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := upload.NewSession(tmpDir, dest, 4, []upload.File{{Rel: "a.txt", Size: 8}}, nil)
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Write at offset 0
-	if _, err := sess.WriteChunk(0, 0, []byte("abcd")); err != nil {
-		t.Fatalf("WriteChunk: %v", err)
+	h := newTruncateService(parent)
+
+	// Truncate to zero
+	rec := postTruncate(h, truncateReq([]string{filepath.Join(src, "a.txt")}, 0))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
 	}
 
-	// Verify content
-	b, err := os.ReadFile(filepath.Join(sess.Staging, "a.txt"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
+	waitFor(t, func() bool {
+		tasks := h.svc.Snapshot()
+		return len(tasks) > 0 && tasks[0].Status == task.StatusFinished
+	})
+
+	info, _ := os.Stat(filepath.Join(src, "a.txt"))
+	if info.Size() != 0 {
+		t.Errorf("a.txt size = %d, want 0", info.Size())
 	}
-	if string(b) != "abcd" {
-		t.Errorf("content = %q, want abcd", string(b))
+}
+
+func TestServeTruncateExtendSize(t *testing.T) {
+	parent := t.TempDir()
+	src := filepath.Join(parent, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("short"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	// Write at offset 4
-	if _, err := sess.WriteChunk(0, 1, []byte("efgh")); err != nil {
-		t.Fatalf("WriteChunk: %v", err)
+	h := newTruncateService(parent)
+
+	// Extend to 20 bytes
+	rec := postTruncate(h, truncateReq([]string{filepath.Join(src, "a.txt")}, 20))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
 	}
 
-	b, err = os.ReadFile(filepath.Join(sess.Staging, "a.txt"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
+	waitFor(t, func() bool {
+		tasks := h.svc.Snapshot()
+		return len(tasks) > 0 && tasks[0].Status == task.StatusFinished
+	})
+
+	info, _ := os.Stat(filepath.Join(src, "a.txt"))
+	if info.Size() != 20 {
+		t.Errorf("a.txt size = %d, want 20", info.Size())
 	}
-	if string(b) != "abcdefgh" {
-		t.Errorf("content = %q, want abcdefgh", string(b))
+
+	// Verify content is padded with zeros
+	content, _ := os.ReadFile(filepath.Join(src, "a.txt"))
+	if len(content) != 20 {
+		t.Errorf("content length = %d, want 20", len(content))
+	}
+	if string(content[:5]) != "short" {
+		t.Errorf("content prefix = %q, want 'short'", string(content[:5]))
+	}
+	for i := 5; i < 20; i++ {
+		if content[i] != 0 {
+			t.Errorf("content[%d] = %d, want 0", i, content[i])
+		}
+	}
+}
+
+func TestServeTruncateDirectoryFails(t *testing.T) {
+	parent := t.TempDir()
+	src := filepath.Join(parent, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTruncateService(parent)
+
+	// Try to truncate a directory
+	rec := postTruncate(h, truncateReq([]string{src}, 5))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "truncate only works on files") {
+		t.Errorf("error message = %s, want contains 'truncate only works on files'", rec.Body.String())
+	}
+}
+
+func TestServeTruncateNegativeSizeFails(t *testing.T) {
+	parent := t.TempDir()
+	src := filepath.Join(parent, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTruncateService(parent)
+
+	// Negative size should fail
+	rec := postTruncate(h, truncateReq([]string{filepath.Join(src, "a.txt")}, -1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "target size must be a non-negative integer") {
+		t.Errorf("error message = %s, want contains 'target size must be a non-negative integer'", rec.Body.String())
+	}
+}
+
+func TestServeTruncateEmptyPathsFails(t *testing.T) {
+	parent := t.TempDir()
+	h := newTruncateService(parent)
+
+	// Empty paths should fail
+	rec := postTruncate(h, truncateReq([]string{}, 5))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "the request requires one or more 'paths'") {
+		t.Errorf("error message = %s, want contains 'the request requires one or more paths'", rec.Body.String())
+	}
+}
+
+func TestServeTruncateOutsideRootsFails(t *testing.T) {
+	parent := t.TempDir()
+	other := t.TempDir()
+	// Create a file in the other directory
+	outsideFile := filepath.Join(other, "b.txt")
+	if err := os.WriteFile(outsideFile, []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newTruncateService(parent)
+
+	// Try to truncate a file outside allowed roots
+	rec := postTruncate(h, truncateReq([]string{outsideFile}, 5))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "outside the allowed folders") {
+		t.Errorf("error message = %s, want contains 'outside the allowed folders'", rec.Body.String())
 	}
 }

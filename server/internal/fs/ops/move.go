@@ -14,6 +14,23 @@ import (
 	"filetoaster/internal/task"
 )
 
+// moveBufferSize is the per-file move buffer. 8 MiB keeps large-file moving
+// throughput-bound rather than syscalls-bound without wasting memory per worker.
+const moveBufferSize = 8 << 20
+
+// MoveConfig holds configuration for the move operation.
+type MoveConfig struct {
+	// BufferSize is the per-file move buffer size in bytes.
+	BufferSize int64
+}
+
+// DefaultMoveConfig returns the default move configuration.
+func DefaultMoveConfig() *MoveConfig {
+	return &MoveConfig{
+		BufferSize: moveBufferSize,
+	}
+}
+
 // MoveErrEmptyPaths, MoveErrEmptyDest, MoveErrSelfMove and MoveErrOverlapping
 // are the sentinels surfaced by MoveResolve. They are prefixed ErrMove to avoid
 // clashing with copy's differently shaped errors in the shared ops package.
@@ -125,7 +142,7 @@ func MoveResolve(roots *fs.Roots, paths []string, dest string) (*MovePlan, error
 // Same-filesystem moves use a native rename-overwrite (a directory destination
 // is replaced with a temp-swap); a cross-filesystem source is copied to the
 // destination and then the source removed.
-func MoveRun(ctx context.Context, plan *MovePlan, prog *task.Progression) error {
+func MoveRun(ctx context.Context, plan *MovePlan, prog *task.Progression, cfg *MoveConfig) error {
 	filesTotal := len(plan.Items)
 	var totalBytes int64
 	for _, it := range plan.Items {
@@ -143,7 +160,7 @@ func MoveRun(ctx context.Context, plan *MovePlan, prog *task.Progression) error 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := moveItem(ctx, it.Src, it.Dst, destDirOf(it.Dst), it.Size, prog, &errs); err != nil {
+		if err := moveItem(ctx, it.Src, it.Dst, destDirOf(it.Dst), it.Size, prog, &errs, cfg); err != nil {
 			return err
 		}
 	}
@@ -165,16 +182,16 @@ func destDirOf(dst string) string {
 // source with a rename-overwrite. It returns a non-nil error only on context
 // cancellation, so cancellation short-circuits the whole walk; ordinary
 // failures are recorded into errs and the walk continues.
-func moveItem(ctx context.Context, src, dst, dest string, size int64, prog *task.Progression, errs *[]error) error {
+func moveItem(ctx context.Context, src, dst, dest string, size int64, prog *task.Progression, errs *[]error, cfg *MoveConfig) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	same, derr := sameDevice(src, dest)
 	if derr != nil || !same {
-		copyThenDelete(ctx, src, dst, prog, errs)
+		copyThenDelete(ctx, src, dst, prog, errs, cfg)
 		return nil
 	}
-	return renameOverwrite(ctx, src, dst, size, prog, errs)
+	return renameOverwrite(ctx, src, dst, size, prog, errs, cfg)
 }
 
 // renameOverwrite moves src onto dst in place when they share a filesystem. A
@@ -182,7 +199,7 @@ func moveItem(ctx context.Context, src, dst, dest string, size int64, prog *task
 // destination is overwritten with a single atomic rename. On any failure that
 // leaves src intact it falls back to copyThenDelete and records only the fallback
 // outcome, so a partially failed task can still relocate an item.
-func renameOverwrite(ctx context.Context, src, dst string, size int64, prog *task.Progression, errs *[]error) error {
+func renameOverwrite(ctx context.Context, src, dst string, size int64, prog *task.Progression, errs *[]error, cfg *MoveConfig) error {
 	info, lerr := os.Lstat(dst)
 	if lerr != nil {
 		if !os.IsNotExist(lerr) {
@@ -199,7 +216,7 @@ func renameOverwrite(ctx context.Context, src, dst string, size int64, prog *tas
 	}
 	if err := os.Rename(src, dst); err != nil {
 		// rename is atomic, so src is intact; copy can still relocate it.
-		copyThenDelete(ctx, src, dst, prog, errs)
+		copyThenDelete(ctx, src, dst, prog, errs, cfg)
 		return nil
 	}
 	prog.AddBytes(size)
@@ -248,7 +265,7 @@ func dirSwap(src, dst string, size int64, prog *task.Progression) error {
 // the copy does not merge into or collide with it. A mid-copy failure records
 // the error and leaves the source intact; a post-copy source-removal failure
 // records the error too.
-func copyThenDelete(ctx context.Context, src, dst string, prog *task.Progression, errs *[]error) error {
+func copyThenDelete(ctx context.Context, src, dst string, prog *task.Progression, errs *[]error, cfg *MoveConfig) error {
 	if _, err := os.Lstat(dst); err == nil {
 		if err := os.RemoveAll(dst); err != nil {
 			*errs = append(*errs, fmt.Errorf("%s: %w", src, err))
@@ -260,9 +277,9 @@ func copyThenDelete(ctx context.Context, src, dst string, prog *task.Progression
 	if lerr != nil {
 		copyErr = lerr
 	} else if info.IsDir() {
-		copyErr = copyDirBytes(ctx, src, dst, prog)
+		copyErr = copyDirBytes(ctx, src, dst, prog, cfg)
 	} else {
-		copyErr = copyFileBytes(ctx, src, dst, info, prog, make([]byte, copyBufferSize))
+		copyErr = copyFileBytes(ctx, src, dst, info, prog, make([]byte, cfg.BufferSize))
 	}
 	if copyErr != nil {
 		*errs = append(*errs, fmt.Errorf("%s: %w", src, copyErr))
@@ -278,19 +295,30 @@ func copyThenDelete(ctx context.Context, src, dst string, prog *task.Progression
 // copyDirBytes recursively copies dir into dst, recreating the structure and
 // copying every regular file with byte progress only (no AddFile): the item's
 // completion is reported once by the caller so the per-item counter stays exact.
-func copyDirBytes(ctx context.Context, src, dst string, prog *task.Progression) error {
+// Directory creation is done upfront in a single MkdirAll pass (O(dirs) syscalls)
+// instead of per-file (O(files) syscalls).
+func copyDirBytes(ctx context.Context, src, dst string, prog *task.Progression, cfg *MoveConfig) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+
+	dirs, err := collectDirs(src)
+	if err != nil {
 		return err
 	}
+	for _, rel := range dirs {
+		dstDir := filepath.Join(dst, rel)
+		if err := os.MkdirAll(dstDir, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
 	}
-	buf := make([]byte, copyBufferSize)
+	buf := make([]byte, cfg.BufferSize)
 	for _, de := range entries {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -302,7 +330,7 @@ func copyDirBytes(ctx context.Context, src, dst string, prog *task.Progression) 
 			continue
 		}
 		if de.IsDir() {
-			if err := copyDirBytes(ctx, s2, d2, prog); err != nil {
+			if err := copyDirBytes(ctx, s2, d2, prog, cfg); err != nil {
 				return err
 			}
 			continue
@@ -351,11 +379,13 @@ func copyFileBytes(ctx context.Context, src, dst string, info os.FileInfo, prog 
 	return nil
 }
 
-// sameDevice reports whether a and b live on the same filesystem by comparing
-// their device numbers. It relies on the unix Sys().(*syscall.Stat_t), matching
-// the codebase's unix-only assumptions; a stat failure is returned so the caller
-// can fall back to copy-then-delete.
+// sameDevice reports whether a and b live on the same filesystem.
+// It uses a cross-platform approach: attempt to create a hard link between
+// the two directories. If it succeeds, they're on the same filesystem.
+// If it fails with EXDEV (cross-device link), they're on different filesystems.
+// Falls back to assuming different devices on error.
 func sameDevice(a, b string) (bool, error) {
+	// Ensure both paths exist and are directories
 	ai, aerr := os.Lstat(a)
 	if aerr != nil {
 		return false, aerr
@@ -364,12 +394,40 @@ func sameDevice(a, b string) (bool, error) {
 	if berr != nil {
 		return false, berr
 	}
-	aiSys, ok1 := ai.Sys().(*syscall.Stat_t)
-	biSys, ok2 := bi.Sys().(*syscall.Stat_t)
-	if !ok1 || !ok2 {
-		return false, fmt.Errorf("cannot compare device of %q and %q", a, b)
+	if !ai.IsDir() {
+		a = filepath.Dir(a)
 	}
-	return aiSys.Dev == biSys.Dev, nil
+	if !bi.IsDir() {
+		b = filepath.Dir(b)
+	}
+
+	// Create a temp file in a
+	tmp, err := os.CreateTemp(a, ".samedevice-*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+
+	// Try to hard link it into b
+	linkName := filepath.Join(b, filepath.Base(tmpName))
+	err = os.Link(tmpName, linkName)
+	if err == nil {
+		// Success: same filesystem
+		os.Remove(linkName)
+		os.Remove(tmpName)
+		return true, nil
+	}
+
+	// Check if it's a cross-device error
+	if errors.Is(err, os.ErrInvalid) || errors.Is(err, syscall.EXDEV) {
+		os.Remove(tmpName)
+		return false, nil
+	}
+
+	// Other error: clean up and return error
+	os.Remove(tmpName)
+	return false, err
 }
 
 // moveError aggregates every per-item failure of MoveRun so the task reports all

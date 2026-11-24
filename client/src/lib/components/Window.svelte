@@ -32,6 +32,7 @@ import {
   submitMoveTask,
   submitCompressTask,
   submitDecompressTask,
+  submitTruncateTask,
   taskPanelOpen
 } from '$lib/store/tasks';
 import { isArchiveFile } from '$lib/fs/archive';
@@ -45,6 +46,7 @@ import ConfirmDropMode from './ConfirmDropMode.svelte';
 import Portal from './Portal.svelte';
 import ConfirmCompress from './ConfirmCompress.svelte';
 import ConfirmDecompress from './ConfirmDecompress.svelte';
+import ConfirmTruncate from './ConfirmTruncate.svelte';
 import { formatSize, formatDate } from '$lib/fs/format';
 
   let { window: winProp }: { window: AppWindow } = $props();
@@ -332,6 +334,9 @@ import { formatSize, formatDate } from '$lib/fs/format';
       case 'rename':
         startRename();
         reload();
+        break;
+      case 'truncate':
+        startTruncate();
         break;
       case 'compress':
         startCompress();
@@ -716,10 +721,10 @@ import { formatSize, formatDate } from '$lib/fs/format';
   function cancelCompress() {
     compressOpen = false;
   }
-  async function confirmCompress(format: string) {
+  async function confirmCompress(format: string, compressionLevel: number) {
     compressOpen = false;
     try {
-      const res = await submitCompressTask([...selected], format);
+      const res = await submitCompressTask([...selected], format, compressionLevel);
       clearSelection();
       if (res.taskID) flash(`Compressing… (task ${res.taskID}).`);
     } catch (err) {
@@ -754,11 +759,41 @@ import { formatSize, formatDate } from '$lib/fs/format';
   async function confirmDecompress(choice: { into: string }) {
     decompressOpen = false;
     try {
-      const res = await submitDecompressTask([...selected], choice.into);
+      const res = await submitDecompressTask([...selected], choice.into, winProp.path);
       clearSelection();
       if (res.taskID) flash(`Extracting… (task ${res.taskID}).`);
     } catch (err) {
       flash(err instanceof Error ? err.message : 'could not decompress');
+    }
+  }
+
+  // --- truncate: truncate selected files to a specific size ------------------
+  // `truncateOpen` toggles the confirm modal; `truncateEntries` are the selected
+  // file rows rendered inside it. Truncate applies only to files (not directories),
+  // so the button enables only when all selected items are files.
+  let truncateOpen = $state(false);
+  let truncateEntries = $derived(
+    entries.filter((it) => selected.has(it.path)).map((it) => ({ path: it.path, name: it.name, type: it.type }))
+  );
+  const canTruncate = $derived(
+    truncateEntries.length > 0 && truncateEntries.every((e) => e.type === 'file')
+  );
+
+  function startTruncate() {
+    if (!canTruncate) return;
+    truncateOpen = true;
+  }
+  function cancelTruncate() {
+    truncateOpen = false;
+  }
+  async function confirmTruncate(size: number) {
+    truncateOpen = false;
+    try {
+      const res = await submitTruncateTask([...selected], size);
+      clearSelection();
+      if (res.taskID) flash(`Truncating… (task ${res.taskID}).`);
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'could not truncate');
     }
   }
 
@@ -1192,6 +1227,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       dropChoiceOpen ||
       compressOpen ||
       decompressOpen ||
+      truncateOpen ||
       menuOpen ||
       uploadMenuOpen
     ) {
@@ -1558,7 +1594,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   // Sorted view of the current entries. For name, folders sort first; the other
   // keys sort purely by value.
   const rows = $derived(
-    [...entries].sort((a, b) => {
+    entries.toSorted((a, b) => {
       const mul = sortDir === 'asc' ? 1 : -1;
       if (sortKey === 'name') {
         if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
@@ -1697,28 +1733,42 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
          <path d="M12 11v6M9 14h6" />
        </svg>
      </button>
-     <button
-       class="tool rename"
-       type="button"
-       title="Rename selected"
-       aria-label="Rename"
-       disabled={selected.size === 0 || editingNew}
-       onclick={startRename}
-     >
-       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-         <path d="M3 17.25V21h3.75L17.89 9.64a1 1 0 0 0 0-1.41L15.77 6.11a1 1 0 0 0-1.41 0L3 15.82Z" />
-         <path d="M17.5 4.5l2.5 2.5L19 9l-2.5-2.5Z" />
-       </svg>
-     </button>
-     <button
-       class="tool cut"
-       class:cut-active={$cutMode}
-       type="button"
-       title="Cut selected to clipboard"
-       aria-label="Cut"
-       disabled={selected.size === 0}
-       onclick={cutSelection}
-     >
+<button
+        class="tool rename"
+        type="button"
+        title="Rename selected"
+        aria-label="Rename"
+        disabled={selected.size === 0 || editingNew}
+        onclick={startRename}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <path d="M3 17.25V21h3.75L17.89 9.64a1 1 0 0 0 0-1.41L15.77 6.11a1 1 0 0 0-1.41 0L3 15.82Z" />
+          <path d="M17.5 4.5l2.5 2.5L19 9l-2.5-2.5Z" />
+        </svg>
+      </button>
+      <button
+        class="tool truncate"
+        type="button"
+        title="Truncate selected files to a specific size"
+        aria-label="Truncate"
+        disabled={!canTruncate}
+        onclick={startTruncate}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <path d="M21 12H3" />
+          <path d="M18 6v12" />
+          <path d="M6 6v12" />
+        </svg>
+      </button>
+      <button
+        class="tool cut"
+        class:cut-active={$cutMode}
+        type="button"
+        title="Cut selected to clipboard"
+        aria-label="Cut"
+        disabled={selected.size === 0}
+        onclick={cutSelection}
+      >
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
          <circle cx="6" cy="6" r="2.75" />
          <circle cx="6" cy="18" r="2.75" />
@@ -2053,6 +2103,16 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     </Portal>
   {/if}
 
+  {#if truncateOpen}
+    <Portal>
+      <ConfirmTruncate
+        fileCount={truncateEntries.length}
+        onConfirm={confirmTruncate}
+        onCancel={cancelTruncate}
+      />
+    </Portal>
+  {/if}
+
   <ContextMenu
     open={menuOpen}
     x={menuX}
@@ -2218,7 +2278,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
     height: 17.6px;
   }
   .tool.cut.cut-active {
-    color: var(--accent-strong);
+    color: var(--text);
     background: var(--surface-inset);
   }
   .tool.info {

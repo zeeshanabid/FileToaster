@@ -184,7 +184,7 @@ func TestArchiveIntactAndFilesExtracted(t *testing.T) {
 			if plan.Format != tc.format {
 				t.Fatalf("plan.Format = %q, want %q", plan.Format, tc.format)
 			}
-			if err := DecompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+			if err := DecompressRun(context.Background(), plan, &task.Progression{}, DefaultDecompressConfig()); err != nil {
 				t.Fatalf("DecompressRun: %v", err)
 			}
 
@@ -260,7 +260,7 @@ func TestExtractHereZip(t *testing.T) {
 	if plan.ExtractDir != base {
 		t.Fatalf("ExtractDir = %q, want %q", plan.ExtractDir, base)
 	}
-	if err := DecompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := DecompressRun(context.Background(), plan, &task.Progression{}, DefaultDecompressConfig()); err != nil {
 		t.Fatalf("DecompressRun: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(base, "a.txt")); string(b) != "x" {
@@ -283,7 +283,7 @@ func TestExtractInDirZip(t *testing.T) {
 	if plan.ExtractDir != filepath.Join(base, "myfiles") {
 		t.Fatalf("ExtractDir = %q, want %q", plan.ExtractDir, filepath.Join(base, "myfiles"))
 	}
-	if err := DecompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := DecompressRun(context.Background(), plan, &task.Progression{}, DefaultDecompressConfig()); err != nil {
 		t.Fatalf("DecompressRun: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(base, "myfiles", "a.txt")); string(b) != "x" {
@@ -313,7 +313,7 @@ func TestExtractInDirNumbering(t *testing.T) {
 	if plan.ExtractDir != filepath.Join(base, "myfiles (1)") {
 		t.Fatalf("ExtractDir = %q, want %q", plan.ExtractDir, filepath.Join(base, "myfiles (1)"))
 	}
-	if err := DecompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := DecompressRun(context.Background(), plan, &task.Progression{}, DefaultDecompressConfig()); err != nil {
 		t.Fatalf("DecompressRun: %v", err)
 	}
 	// The sentinel is untouched; the new files landed alongside it.
@@ -341,7 +341,7 @@ func TestZipTraversalRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecompressResolve: %v", err)
 	}
-	err = DecompressRun(context.Background(), plan, &task.Progression{})
+	err = DecompressRun(context.Background(), plan, &task.Progression{}, DefaultDecompressConfig())
 	if !errors.Is(err, DecompressArchiveTraversal) {
 		t.Fatalf("DecompressRun err = %v, want DecompressArchiveTraversal", err)
 	}
@@ -371,7 +371,7 @@ func TestTargzTraversalRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecompressResolve: %v", err)
 	}
-	err = DecompressRun(context.Background(), plan, &task.Progression{})
+	err = DecompressRun(context.Background(), plan, &task.Progression{}, DefaultDecompressConfig())
 	if !errors.Is(err, DecompressArchiveTraversal) {
 		t.Fatalf("DecompressRun err = %v, want DecompressArchiveTraversal", err)
 	}
@@ -399,7 +399,7 @@ func TestProgressCounts(t *testing.T) {
 	prog := &task.Progression{}
 	done := make(chan struct{})
 	go func() {
-		_ = DecompressRun(context.Background(), plan, prog)
+		_ = DecompressRun(context.Background(), plan, prog, DefaultDecompressConfig())
 		close(done)
 	}()
 	select {
@@ -436,7 +436,7 @@ func TestCancelledLeavesArchiveIntact(t *testing.T) {
 	done := make(chan struct{})
 	prog.SetSink(func(task.ByteProgress) { cancel() }) // stop at the first streamed chunk
 	go func() {
-		runErr = DecompressRun(ctx, plan, prog)
+		runErr = DecompressRun(ctx, plan, prog, DefaultDecompressConfig())
 		close(done)
 	}()
 	select {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"filetoaster/internal/config"
 	"filetoaster/internal/fs"
 	"filetoaster/internal/fs/ops"
 	"filetoaster/internal/service"
@@ -21,7 +22,7 @@ type moveTaskRequest struct {
 // factory is captured so validation stays confined to the allowed folders, and
 // the runner closes over the resolved plan. Move overwrites an existing same-name
 // item at the destination, so (unlike copy) there is no conflict field here.
-func registerMoveOp(svc *service.Service, roots func() *fs.Roots) {
+func registerMoveOp(svc *service.Service, roots func() *fs.Roots, cfg *config.Config) {
 	svc.Register(service.MoveOperation, service.Op{
 		Prepare: func(body []byte) (any, []byte, error) {
 			var req moveTaskRequest
@@ -36,7 +37,7 @@ func registerMoveOp(svc *service.Service, roots func() *fs.Roots) {
 			return plan, meta, nil
 		},
 		Run: func(ctx context.Context, spec any, prog *task.Progression) error {
-			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog)
+			return ops.MoveRun(ctx, spec.(*ops.MovePlan), prog, &ops.MoveConfig{BufferSize: cfg.MoveBufferSizeBytes()})
 		},
 	})
 }

@@ -25,7 +25,7 @@ func TestCompressResolveSingleFileReplacesExtension(t *testing.T) {
 	src := writeTree(t, map[string]string{"bar.txt": "hello"})
 	roots := rootsFor(t, src)
 
-	plan, err := CompressResolve(roots, []string{filepath.Join(src, "bar.txt")}, "zip")
+	plan, err := CompressResolve(roots, []string{filepath.Join(src, "bar.txt")}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestCompressResolveSingleDirectoryReplacesExtension(t *testing.T) {
 	src := writeTree(t, map[string]string{"pkg/inner.txt": "x", "pkg/sub/deep.txt": "y"})
 	roots := rootsFor(t, src)
 
-	plan, err := CompressResolve(roots, []string{filepath.Join(src, "pkg")}, "zip")
+	plan, err := CompressResolve(roots, []string{filepath.Join(src, "pkg")}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestCompressResolveMultipleFilesShareParent(t *testing.T) {
 	plan, err := CompressResolve(roots, []string{
 		filepath.Join(parent, "foo", "a.txt"),
 		filepath.Join(parent, "foo", "b.txt"),
-	}, "zip")
+	}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestCompressResolveNestedMultipleFilesShareParent(t *testing.T) {
 	plan, err := CompressResolve(roots, []string{
 		filepath.Join(parent, "foo", "a.txt"),
 		filepath.Join(parent, "foo", "sub", "b.txt"),
-	}, "zip")
+	}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestCompressResolveConflictNumbering(t *testing.T) {
 	}
 	roots := rootsFor(t, parent)
 
-	plan, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "zip")
+	plan, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
@@ -133,11 +133,11 @@ func TestCompressResolveNeverOverwrites(t *testing.T) {
 	}
 	roots := rootsFor(t, parent)
 
-	plan, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "zip")
+	plan, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(src, "a.zip")); string(b) != "old" {
@@ -165,7 +165,7 @@ func TestCompressResolveDifferentDirectories(t *testing.T) {
 	_, err := CompressResolve(roots, []string{
 		filepath.Join(r1, "a.txt"),
 		filepath.Join(r2, "b.txt"),
-	}, "zip")
+	}, "zip", 6)
 	if !errors.Is(err, CompressErrDifferentDirectories) {
 		t.Fatalf("err = %v, want CompressErrDifferentDirectories", err)
 	}
@@ -180,7 +180,7 @@ func TestCompressResolveOverlappingSelection(t *testing.T) {
 	_, err := CompressResolve(roots, []string{
 		filepath.Join(src, "sub"),
 		filepath.Join(src, "sub", "inner.txt"),
-	}, "zip")
+	}, "zip", 6)
 	if !errors.Is(err, CompressErrOverlappingSelection) {
 		t.Fatalf("err = %v, want CompressErrOverlappingSelection", err)
 	}
@@ -192,7 +192,7 @@ func TestCompressResolveUnsupportedFormat(t *testing.T) {
 	src := writeTree(t, map[string]string{"a.txt": "x"})
 	roots := rootsFor(t, src)
 
-	_, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "bz2")
+	_, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "bz2", 6)
 	if !errors.Is(err, CompressArchiveFormatUnsupported) {
 		t.Fatalf("err = %v, want CompressArchiveFormatUnsupported", err)
 	}
@@ -201,7 +201,7 @@ func TestCompressResolveUnsupportedFormat(t *testing.T) {
 // TestCompressResolveEmptyPaths verifies an empty selection is rejected.
 func TestCompressResolveEmptyPaths(t *testing.T) {
 	src := writeTree(t, map[string]string{"a.txt": "x"})
-	_, err := CompressResolve(rootsFor(t, src), nil, "zip")
+	_, err := CompressResolve(rootsFor(t, src), nil, "zip", 6)
 	if !errors.Is(err, ErrEmptyPaths) {
 		t.Fatalf("err = %v, want ErrEmptyPaths", err)
 	}
@@ -210,7 +210,7 @@ func TestCompressResolveEmptyPaths(t *testing.T) {
 // TestCompressResolveOutsideRoots verifies a traversal escape is rejected.
 func TestCompressResolveOutsideRoots(t *testing.T) {
 	src := writeTree(t, map[string]string{"a.txt": "x"})
-	_, err := CompressResolve(rootsFor(t, src), []string{"/etc/passwd"}, "zip")
+	_, err := CompressResolve(rootsFor(t, src), []string{"/etc/passwd"}, "zip", 6)
 	if !errors.Is(err, fs.ErrOutsideRoots) {
 		t.Fatalf("err = %v, want fs.ErrOutsideRoots", err)
 	}
@@ -314,11 +314,11 @@ func TestCompressRunFormatsExtractable(t *testing.T) {
 			plan, err := CompressResolve(roots, []string{
 				filepath.Join(pkg),
 				filepath.Join(parent, "top.txt"),
-			}, format)
+			}, format, 6)
 			if err != nil {
 				t.Fatalf("CompressResolve: %v", err)
 			}
-			if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+			if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 				t.Fatalf("CompressRun: %v", err)
 			}
 
@@ -388,11 +388,11 @@ func TestCompressRunRecursiveDirectory(t *testing.T) {
 	})
 	roots := rootsFor(t, parent)
 
-	plan, err := CompressResolve(roots, []string{src}, "zip")
+	plan, err := CompressResolve(roots, []string{src}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestCompressRunWalkSkipsDestination(t *testing.T) {
 			{Path: root, IsDir: true, Prefix: "root/"},
 		},
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 
@@ -456,14 +456,14 @@ func TestCompressRunProgressCounts(t *testing.T) {
 	})
 	roots := rootsFor(t, parent)
 
-	plan, err := CompressResolve(roots, []string{src}, "zip")
+	plan, err := CompressResolve(roots, []string{src}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
 	prog := &task.Progression{}
 	done := make(chan struct{})
 	go func() {
-		_ = CompressRun(context.Background(), plan, prog)
+		_ = CompressRun(context.Background(), plan, prog, DefaultCompressConfig())
 		close(done)
 	}()
 	select {
@@ -487,13 +487,13 @@ func TestCompressRunPreCancelled(t *testing.T) {
 	src := writeTree(t, map[string]string{"a.txt": "data"})
 	roots := rootsFor(t, src)
 
-	plan, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "zip")
+	plan, err := CompressResolve(roots, []string{filepath.Join(src, "a.txt")}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := CompressRun(ctx, plan, &task.Progression{}); !errors.Is(err, context.Canceled) {
+	if err := CompressRun(ctx, plan, &task.Progression{}, DefaultCompressConfig()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompressRun err = %v, want context.Canceled", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(src, "a.txt")); string(b) != "data" {
@@ -513,7 +513,7 @@ func TestCompressRunMidRunCancellation(t *testing.T) {
 	plan, err := CompressResolve(roots, []string{
 		filepath.Join(src, "a.txt"),
 		filepath.Join(src, "b.txt"),
-	}, "zip")
+	}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestCompressRunMidRunCancellation(t *testing.T) {
 		cancel() // stop as soon as the first chunk streams
 	})
 	go func() {
-		runErr = CompressRun(ctx, plan, prog)
+		runErr = CompressRun(ctx, plan, prog, DefaultCompressConfig())
 		close(done)
 	}()
 	select {
@@ -565,11 +565,11 @@ func TestCompressRunOriginalsReadonly(t *testing.T) {
 	}
 	roots := rootsFor(t, src)
 
-	plan, err := CompressResolve(roots, []string{file}, "zip")
+	plan, err := CompressResolve(roots, []string{file}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 
@@ -607,11 +607,11 @@ func TestCompressRunLeavesOriginalsAndCreatesOnlyArchive(t *testing.T) {
 	plan, err := CompressResolve(roots, []string{
 		filepath.Join(parent, "pkg"),
 		filepath.Join(parent, "top.txt"),
-	}, "zip")
+	}, "zip", 6)
 	if err != nil {
 		t.Fatalf("CompressResolve: %v", err)
 	}
-	if err := CompressRun(context.Background(), plan, &task.Progression{}); err != nil {
+	if err := CompressRun(context.Background(), plan, &task.Progression{}, DefaultCompressConfig()); err != nil {
 		t.Fatalf("CompressRun: %v", err)
 	}
 

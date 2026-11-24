@@ -28,6 +28,9 @@ const CompressOperation = "compress"
 // DecompressOperation is the operation key registered for decompress.
 const DecompressOperation = "decompress"
 
+// TruncateOperation is the operation key registered for truncate.
+const TruncateOperation = "truncate"
+
 // UploadOperation is the operation key registered for the upload finalize step
 // (a tracked copy from the staging dir into the target).
 const UploadOperation = "upload"
