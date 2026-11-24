@@ -1594,7 +1594,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   // Sorted view of the current entries. For name, folders sort first; the other
   // keys sort purely by value.
   const rows = $derived(
-    [...entries].sort((a, b) => {
+    entries.toSorted((a, b) => {
       const mul = sortDir === 'asc' ? 1 : -1;
       if (sortKey === 'name') {
         if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;

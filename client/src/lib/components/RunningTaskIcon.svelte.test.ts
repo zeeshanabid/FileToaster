@@ -107,12 +107,11 @@ describe('RunningTaskIcon — progress bar and stats', () => {
     await tick();
 
     const task = within(screen.getByRole('dialog')).getByTitle('Copy').closest('.task') as HTMLElement;
-    const bar = task.querySelector('.bar') as HTMLElement;
-    const fill = bar.querySelector('.fill') as HTMLElement;
+    const bar = task.querySelector('.bar') as HTMLProgressElement;
     expect(bar).toBeTruthy();
-    expect(fill).toBeTruthy();
-    expect(fill.getAttribute('style')).toContain('50%');
-    expect(bar.getAttribute('role')).toBe('progressbar');
+    expect(bar.value).toBe(50);
+    expect(bar.max).toBe(100);
+    expect(bar.getAttribute('aria-label')).toBe('Progress');
   });
 
   it('shows files done/total, human byte counts, and transfer rate while running', async () => {

@@ -260,9 +260,12 @@ function statusLabel(status: Task['status']): string {
                 {/if}
               </div>
               {#if task.status === 'running' || task.status === 'queued'}
-                <div class="bar" role="progressbar" aria-valuenow={Math.round(task.progress)} aria-valuemin="0" aria-valuemax="100" aria-label="Progress">
-                  <div class="fill" style="width:{task.progress}%"></div>
-                </div>
+                <progress
+                  class="bar"
+                  value={task.status === 'running' ? Math.round(task.progress) : undefined}
+                  max="100"
+                  aria-label="Progress"
+                ></progress>
                 <div class="meta">
                   {#if task.bytes.filesTotal > 0}
                     <span class="files">{task.bytes.filesDone} / {task.bytes.filesTotal} files</span>
@@ -524,18 +527,64 @@ function statusLabel(status: Task['status']): string {
     height: 14px;
   }
   .bar {
+    width: 100%;
     height: 7px;
     border-radius: 999px;
     background: var(--surface-inset);
-    overflow: hidden;
+    overflow: clip;
     margin-top: 8px;
+    appearance: none;
+    border: 0;
   }
-  .fill {
-    height: 100%;
+
+  /* WebKit/Blink: style the progress bar (fill) */
+  .bar::-webkit-progress-bar {
+    background: transparent;
+  }
+
+  .bar::-webkit-progress-value {
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border-radius: inherit;
-    transition: width 180ms ease-out;
+    border-radius: 999px;
+    transition: inline-size 180ms ease-out;
     box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
+  }
+
+  /* Firefox: style the progress bar (fill) */
+  .bar::-moz-progress-bar {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 999px;
+    transition: inline-size 180ms ease-out;
+    box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
+  }
+
+  /* Indeterminate state (queued) - animated fill */
+  .bar:indeterminate {
+    --progress-indeterminate-size: 30%;
+    --progress-indeterminate-duration: 1.5s;
+    animation: progress-indeterminate var(--progress-indeterminate-duration) infinite linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar:indeterminate {
+      --progress-indeterminate-duration: 10s;
+    }
+  }
+
+  @keyframes progress-indeterminate {
+    from {
+      inline-size: var(--progress-indeterminate-size);
+      transform: translateX(-100%);
+    }
+    to {
+      inline-size: var(--progress-indeterminate-size);
+      transform: translateX(100%);
+    }
+  }
+
+  /* Apply indeterminate animation to pseudo-elements */
+  .bar:indeterminate::-webkit-progress-value,
+  .bar:indeterminate::-moz-progress-bar {
+    animation: progress-indeterminate var(--progress-indeterminate-duration) infinite linear;
   }
   .meta {
     display: flex;
