@@ -640,6 +640,99 @@ func TestChangeAdminPasswordUsesFileValuesNotEnv(t *testing.T) {
 	}
 }
 
+// TestChangeAdminPasswordPreservesCommentsAndFormatting verifies that only the
+// admin_password_hash field is updated and all comments, formatting, and other
+// fields are preserved exactly as they were.
+func TestChangeAdminPasswordPreservesCommentsAndFormatting(t *testing.T) {
+	root := t.TempDir()
+	tmp := t.TempDir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	// Write a config with comments and specific formatting
+	originalContent := `# FileToaster configuration
+# This is a comment at the top
+addr: "127.0.0.1:0"  # inline comment
+allowed_paths:
+  - name: Files      # name comment
+    path: ` + root + `  # path comment
+max_parallel_tasks: 2  # tasks comment
+gomaxprocs: 0
+tmp_dir: ` + tmp + `
+session_secret: supersecret  # secret comment
+admin_password_hash: $argon2id$v=19$old  # hash comment
+`
+	writeYAML(t, path, originalContent)
+
+	newHash, err := auth.HashPassword("brand-new")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := ChangeAdminPassword(path, newHash); err != nil {
+		t.Fatalf("ChangeAdminPassword: %v", err)
+	}
+
+	// Read the file back and verify structure
+	newContent, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	newContentStr := string(newContent)
+
+	// Verify the hash was updated
+	if !strings.Contains(newContentStr, newHash) {
+		t.Errorf("new hash not found in file: %s", newContentStr)
+	}
+	if strings.Contains(newContentStr, "$argon2id$v=19$old") {
+		t.Errorf("old hash still present in file: %s", newContentStr)
+	}
+
+	// Verify comments are preserved
+	if !strings.Contains(newContentStr, "# FileToaster configuration") {
+		t.Errorf("top comment lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# This is a comment at the top") {
+		t.Errorf("second comment lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# inline comment") {
+		t.Errorf("inline comment on addr lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# name comment") {
+		t.Errorf("name comment lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# path comment") {
+		t.Errorf("path comment lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# tasks comment") {
+		t.Errorf("tasks comment lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# secret comment") {
+		t.Errorf("secret comment lost: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "# hash comment") {
+		t.Errorf("hash comment lost: %s", newContentStr)
+	}
+
+	// Verify other fields are unchanged
+	if !strings.Contains(newContentStr, `addr: "127.0.0.1:0"`) {
+		t.Errorf("addr field changed: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "max_parallel_tasks: 2") {
+		t.Errorf("max_parallel_tasks field changed: %s", newContentStr)
+	}
+	if !strings.Contains(newContentStr, "session_secret: supersecret") {
+		t.Errorf("session_secret field changed: %s", newContentStr)
+	}
+
+	// Verify the file can still be loaded and validated
+	reloaded, err := LoadForEdit(path)
+	if err != nil {
+		t.Fatalf("LoadForEdit after change: %v", err)
+	}
+	if !auth.VerifyPassword(reloaded.AdminPasswordHash, "brand-new") {
+		t.Fatal("persisted hash must verify the new password")
+	}
+}
+
 // TestWriteDefaultConfigCreatesOwnerOnlyConfigFile verifies an auto-created
 // config file is written with 0600 so the session secret and admin hash are
 // private to the owner, not readable by other local users.

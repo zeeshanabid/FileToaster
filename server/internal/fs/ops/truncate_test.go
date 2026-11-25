@@ -111,7 +111,7 @@ func TestTruncateRun(t *testing.T) {
 	// Create test files
 	file1 := filepath.Join(tmpDir, "file1.txt")
 	file2 := filepath.Join(tmpDir, "file2.txt")
-	os.WriteFile(file1, []byte("hello world"), 0644) // 11 bytes
+	os.WriteFile(file1, []byte("hello world"), 0644)  // 11 bytes
 	os.WriteFile(file2, []byte("test content"), 0644) // 12 bytes
 
 	// Test truncate to smaller size
