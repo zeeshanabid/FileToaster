@@ -861,6 +861,81 @@ describe('Window selection & information dialog', () => {
       expect(fetchInfo).not.toHaveBeenCalled();
 });
 
+  it('renders the Type column in the table header', async () => {
+    await openAndRender();
+    const headers = [...screen.getByRole('table').querySelectorAll('thead th')].map((th) => th.textContent?.trim().split(' ')[0]);
+    expect(headers).toContain('Type');
+    // Type should be between Name and Size
+    const nameIdx = headers.indexOf('Name');
+    const typeIdx = headers.indexOf('Type');
+    const sizeIdx = headers.indexOf('Size');
+    expect(typeIdx).toBe(nameIdx + 1);
+    expect(sizeIdx).toBe(typeIdx + 1);
+  });
+
+  it('shows file type in the Type column for each row', async () => {
+    await openAndRender();
+    const table = screen.getByRole('table');
+    const rows = [...table.querySelectorAll('tbody tr.row')];
+    
+    // Find the notes.txt row (file) and check its type
+    const notesRow = rows.find((r) => r.textContent?.includes('notes.txt')) as HTMLElement;
+    expect(notesRow).toBeTruthy();
+    const notesTypeCell = notesRow?.querySelector('td.type');
+    expect(notesTypeCell?.textContent?.trim()).toBe('TXT');
+    
+    // Find the documents row (dir) and check its type
+    const docsRow = rows.find((r) => r.textContent?.includes('documents')) as HTMLElement;
+    expect(docsRow).toBeTruthy();
+    const docsTypeCell = docsRow?.querySelector('td.type');
+    expect(docsTypeCell?.textContent?.trim()).toBe('DIR');
+    
+    // Find the myfiles.zip row (file) and check its type
+    const zipRow = rows.find((r) => r.textContent?.includes('myfiles.zip')) as HTMLElement;
+    expect(zipRow).toBeTruthy();
+    const zipTypeCell = zipRow?.querySelector('td.type');
+    expect(zipTypeCell?.textContent?.trim()).toBe('ZIP');
+  });
+
+  it('sorts by Type column when header is clicked', async () => {
+    await openAndRender();
+    const table = screen.getByRole('table');
+    const typeHeader = [...table.querySelectorAll('thead th')].find((th) => th.textContent?.includes('Type')) as HTMLElement;
+    expect(typeHeader).toBeTruthy();
+    
+    // Click Type header to sort ascending
+    fireEvent.click(typeHeader);
+    await tick();
+    
+    // After sorting by Type asc, DIR should come before files, and within files, by extension
+    const rows = [...table.querySelectorAll('tbody tr.row')].map((r) => r.textContent?.trim() ?? '');
+    // Find indices of different types
+    const dirIndex = rows.findIndex((r) => r.includes('documents'));
+    const txtIndex = rows.findIndex((r) => r.includes('notes.txt'));
+    const zipIndex = rows.findIndex((r) => r.includes('myfiles.zip'));
+    const photosIndex = rows.findIndex((r) => r.includes('photos'));
+    
+    // All DIRs should come before files
+    expect(dirIndex).toBeLessThan(txtIndex);
+    expect(dirIndex).toBeLessThan(zipIndex);
+    expect(photosIndex).toBeLessThan(txtIndex);
+    expect(photosIndex).toBeLessThan(zipIndex);
+    
+    // Click again to sort descending
+    fireEvent.click(typeHeader);
+    await tick();
+    
+    const rowsDesc = [...table.querySelectorAll('tbody tr.row')].map((r) => r.textContent?.trim() ?? '');
+    const dirIndexDesc = rowsDesc.findIndex((r) => r.includes('documents'));
+    const txtIndexDesc = rowsDesc.findIndex((r) => r.includes('notes.txt'));
+    const zipIndexDesc = rowsDesc.findIndex((r) => r.includes('myfiles.zip'));
+    const photosIndexDesc = rowsDesc.findIndex((r) => r.includes('photos'));
+    
+    // In descending, files should come before DIRs
+    expect(txtIndexDesc).toBeLessThan(dirIndexDesc);
+    expect(zipIndexDesc).toBeLessThan(dirIndexDesc);
+  });
+
 describe('Window delete', () => {
   function rows(): HTMLElement[] {
     return [...screen.getByRole('table').querySelectorAll('tbody tr.row')] as HTMLElement[];
@@ -3182,11 +3257,20 @@ describe('Window keyboard — ctrl+alt letters via the physical key code', () =>
       altKey: true
     });
   }
-  function clickRow(name: string): void {
+  function clickRow(name: string, modifier?: 'ctrl' | 'shift'): void {
     const row = [...screen.getByRole('table').querySelectorAll('tbody tr.row')]
       .find((tr) => tr.textContent?.includes(name)) as HTMLElement;
     if (!row) throw new Error(`no row named ${name}`);
-    fireEvent.click(row);
+    if (modifier === 'ctrl') {
+      fireEvent.click(row, { ctrlKey: true });
+    } else if (modifier === 'shift') {
+      fireEvent.click(row, { shiftKey: true });
+    } else {
+      fireEvent.click(row);
+    }
+  }
+  function infoButton(): HTMLButtonElement {
+    return screen.getByLabelText('Information') as HTMLButtonElement;
   }
 
   beforeEach(() => {
@@ -3261,6 +3345,65 @@ describe('Window keyboard — ctrl+alt letters via the physical key code', () =>
     pressCode('I');
     await waitFor(() => expect(screen.getByTestId('info-dialog')).toBeInTheDocument());
     expect(fetchInfo).toHaveBeenCalledWith(['/root/notes.txt']);
+  });
+
+  it('shows file type in the Information dialog', async () => {
+    await openAndRender();
+    clickRow('notes.txt');
+    await clickRow('documents', 'ctrl');
+    await tick();
+
+    const items: { path: string; name: string; type: 'file' | 'dir'; size: number; fileCount: number; dirCount: number; perms: string; permsOctal: string; created: string; modified: string }[] = [
+      {
+        path: '/root/notes.txt',
+        name: 'notes.txt',
+        type: 'file',
+        size: 42,
+        fileCount: 1,
+        dirCount: 0,
+        perms: '-rw-r--r--',
+        permsOctal: '0644',
+        created: '2023-01-02T03:04:05Z',
+        modified: '2024-05-06T07:08:09Z'
+      },
+      {
+        path: '/root/documents',
+        name: 'documents',
+        type: 'dir',
+        size: 160,
+        fileCount: 3,
+        dirCount: 2,
+        perms: 'drwxr-xr-x',
+        permsOctal: '0755',
+        created: '2022-11-12T13:14:15Z',
+        modified: '2025-01-02T03:04:05Z'
+      }
+    ];
+    (fetchInfo as Mock).mockResolvedValue(items);
+
+    fireEvent.click(infoButton());
+    await waitFor(() => expect(screen.getByTestId('info-dialog')).toBeInTheDocument());
+
+    const dlg = screen.getByTestId('info-dialog');
+    const headers = [...dlg.querySelectorAll('thead th')].map((th) => th.textContent?.trim());
+    expect(headers).toContain('Type');
+    const nameIdx = headers.indexOf('Name');
+    const typeIdx = headers.indexOf('Type');
+    const sizeIdx = headers.indexOf('Size');
+    expect(typeIdx).toBe(nameIdx + 1);
+    expect(sizeIdx).toBe(typeIdx + 1);
+
+    // Check the type column values in the dialog table
+    const rows = [...dlg.querySelectorAll('tbody tr.row')];
+    const notesRow = rows.find((r) => r.textContent?.includes('notes.txt')) as HTMLElement;
+    expect(notesRow).toBeTruthy();
+    const notesTypeCell = notesRow?.querySelector('td.type');
+    expect(notesTypeCell?.textContent?.trim()).toBe('TXT');
+
+    const docsRow = rows.find((r) => r.textContent?.includes('documents')) as HTMLElement;
+    expect(docsRow).toBeTruthy();
+    const docsTypeCell = docsRow?.querySelector('td.type');
+    expect(docsTypeCell?.textContent?.trim()).toBe('DIR');
   });
 
   it('CTRL + ALT + L downloads', async () => {

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import FileIcon from './FileIcon.svelte';
-  import type { FileInfo } from '$lib/fs/api';
-  import { formatSize, formatDate } from '$lib/fs/format';
+import FileIcon from './FileIcon.svelte';
+import type { FileInfo } from '$lib/fs/api';
+import { formatSize, formatDate, getFileType } from '$lib/fs/format';
 
   let { items, onClose }: { items: FileInfo[]; onClose: () => void } = $props();
 
@@ -75,6 +75,7 @@
           <thead>
             <tr>
               <th>Name</th>
+              <th>Type</th>
               <th>Size</th>
               <th>Permissions</th>
               <th>Created</th>
@@ -90,6 +91,7 @@
                   </span>
                   <span class="rname" title={item.path}>{item.name}</span>
                 </td>
+                <td class="type">{getFileType(item.name, item.type)}</td>
                 <td class="size">{formatSize(item.size)}</td>
                 <td class="perms" title={item.permsOctal}>
                   <span class="perm">{item.perms}</span>
@@ -251,6 +253,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .type {
+    width: 1%;
+    white-space: nowrap;
+    color: var(--text-muted);
+    min-width: 60px;
+    text-align: right;
   }
   .size,
   .date {

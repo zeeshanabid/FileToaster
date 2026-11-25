@@ -48,3 +48,13 @@ export function formatRate(n: number): string {
   }
   return `${v.toFixed(v < 1 ? 1 : 0)} ${RATE_UNITS[i]}/s`;
 }
+
+// getFileType returns the file type in uppercase from a filename.
+// For directories, it returns "DIR". For files, it returns the extension
+// in uppercase (e.g., "JPG", "TXT", "PDF"). If no extension, returns "FILE".
+export function getFileType(name: string, type: 'file' | 'dir'): string {
+  if (type === 'dir') return 'DIR';
+  const idx = name.lastIndexOf('.');
+  if (idx === -1 || idx === name.length - 1) return 'FILE';
+  return name.slice(idx + 1).toUpperCase();
+}
