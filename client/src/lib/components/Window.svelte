@@ -47,7 +47,7 @@ import Portal from './Portal.svelte';
 import ConfirmCompress from './ConfirmCompress.svelte';
 import ConfirmDecompress from './ConfirmDecompress.svelte';
 import ConfirmTruncate from './ConfirmTruncate.svelte';
-import { formatSize, formatDate } from '$lib/fs/format';
+import { formatSize, formatDate, getFileType } from '$lib/fs/format';
 
   let { window: winProp }: { window: AppWindow } = $props();
 
@@ -169,8 +169,8 @@ import { formatSize, formatDate } from '$lib/fs/format';
   // the cursor row in view (scoped to this window, never another one).
   let contentEl: HTMLElement | null = $state(null);
 
-  type SortKey = 'name' | 'size' | 'created' | 'updated';
-  const SORT_KEYS: SortKey[] = ['name', 'size', 'created', 'updated'];
+type SortKey = 'name' | 'type' | 'size' | 'created' | 'updated';
+const SORT_KEYS: SortKey[] = ['name', 'type', 'size', 'created', 'updated'];
   let sortKey = $state<SortKey>('name');
   let sortDir = $state<'asc' | 'desc'>('asc');
 
@@ -1591,35 +1591,45 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       : null
   );
 
-  // Sorted view of the current entries. For name, folders sort first; the other
-  // keys sort purely by value.
-  const rows = $derived(
-    entries.toSorted((a, b) => {
-      const mul = sortDir === 'asc' ? 1 : -1;
-      if (sortKey === 'name') {
-        if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
-        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * mul;
-      }
-      let cmp = 0;
-      if (sortKey === 'size') cmp = a.size - b.size;
-      else if (sortKey === 'created') cmp = Date.parse(a.created) - Date.parse(b.created);
-      else cmp = Date.parse(b.modified) - Date.parse(a.modified);
-      return cmp * mul;
-    })
-  );
-
-  function headerLabel(key: SortKey): string {
-    switch (key) {
-      case 'name':
-        return 'Name';
-      case 'size':
-        return 'Size';
-      case 'created':
-        return 'Created';
-      case 'updated':
-        return 'Updated';
+// Sorted view of the current entries. For name, folders sort first; the other
+// keys sort purely by value.
+const rows = $derived(
+  entries.toSorted((a, b) => {
+    const mul = sortDir === 'asc' ? 1 : -1;
+    if (sortKey === 'name') {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * mul;
     }
+    if (sortKey === 'type') {
+      const typeA = getFileType(a.name, a.type);
+      const typeB = getFileType(b.name, b.type);
+      if (typeA !== typeB) return typeA.localeCompare(typeB, undefined, { sensitivity: 'base' }) * mul;
+      // Secondary sort by name for same type
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * mul;
+    }
+    let cmp = 0;
+    if (sortKey === 'size') cmp = a.size - b.size;
+    else if (sortKey === 'created') cmp = Date.parse(a.created) - Date.parse(b.created);
+    else cmp = Date.parse(b.modified) - Date.parse(a.modified);
+    return cmp * mul;
+  })
+);
+
+function headerLabel(key: SortKey): string {
+  switch (key) {
+    case 'name':
+      return 'Name';
+    case 'type':
+      return 'Type';
+    case 'size':
+      return 'Size';
+    case 'created':
+      return 'Created';
+    case 'updated':
+      return 'Updated';
   }
+}
 
   // Tree node label: the window's display name at the root, folder name below.
   function label(dir: string): string {
@@ -1993,7 +2003,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
           <tbody>
             {#if editingNew}
               <tr class="row new-folder-row">
-                <td class="name" colspan="4">
+                <td class="name" colspan="5">
                   {@render newFolderInput()}
                 </td>
               </tr>
@@ -2001,7 +2011,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
             {#each rows as row (row.path)}
               {#if editingRename && row.path === renameTarget}
                 <tr class="row renaming-row">
-                  <td class="name" colspan="4">
+                  <td class="name" colspan="5">
                     {@render renameInput()}
                   </td>
                 </tr>
@@ -2023,6 +2033,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
                     </span>
                     <span class="rname">{row.name}</span>
                   </td>
+                  <td class="type">{getFileType(row.name, row.type)}</td>
                   <td class="size">{formatSize(row.size)}</td>
                   <td class="date">{formatDate(row.created)}</td>
                   <td class="date">{formatDate(row.modified)}</td>
@@ -2549,6 +2560,13 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   .row.dir:not(.selected) .rname {
     color: var(--accent-strong);
     font-weight: 600;
+  }
+  .type {
+    width: 1%;
+    white-space: nowrap;
+    color: var(--text-muted);
+    min-width: 60px;
+    text-align: right;
   }
   .size {
     width: 1%;

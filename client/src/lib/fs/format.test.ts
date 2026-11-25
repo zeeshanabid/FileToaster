@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSize, formatDate, formatRate } from '$lib/fs/format';
+import { formatSize, formatDate, formatRate, getFileType } from '$lib/fs/format';
 
 describe('formatSize', () => {
   // Each pair is [input bytes, expected human string]. The on-disk values are
@@ -72,5 +72,35 @@ describe('formatRate', () => {
     expect(formatRate(NaN)).toBe('0 B/s');
     expect(formatRate(-Infinity)).toBe('0 B/s');
     expect(formatRate(-100)).toBe('0 B/s');
+  });
+});
+
+describe('getFileType', () => {
+  it('returns DIR for directories', () => {
+    expect(getFileType('folder', 'dir')).toBe('DIR');
+    expect(getFileType('documents', 'dir')).toBe('DIR');
+  });
+
+  it('returns uppercase extension for files with extensions', () => {
+    expect(getFileType('image.jpg', 'file')).toBe('JPG');
+    expect(getFileType('document.PDF', 'file')).toBe('PDF');
+    expect(getFileType('script.js', 'file')).toBe('JS');
+    expect(getFileType('archive.tar.gz', 'file')).toBe('GZ');
+    expect(getFileType('file.TXT', 'file')).toBe('TXT');
+  });
+
+  it('returns FILE for files without extensions', () => {
+    expect(getFileType('README', 'file')).toBe('FILE');
+    expect(getFileType('Makefile', 'file')).toBe('FILE');
+    expect(getFileType('dockerfile', 'file')).toBe('FILE');
+  });
+
+  it('returns FILE for files with trailing dot', () => {
+    expect(getFileType('file.', 'file')).toBe('FILE');
+  });
+
+  it('handles hidden files with extensions', () => {
+    expect(getFileType('.gitignore', 'file')).toBe('GITIGNORE');
+    expect(getFileType('.env.local', 'file')).toBe('LOCAL');
   });
 });
