@@ -3503,7 +3503,7 @@ describe('Window search', () => {
     expect(submitSearchMock.mock.calls[0][0]).toMatchObject({ rootPath: ROOT, query: 'report' });
   });
 
-  it('debounces typed input into a single request', async () => {
+  it('only searches on Enter or search button press, not on each keystroke', async () => {
     await openAndRender();
     submitSearchMock.mockResolvedValue({ taskID: 'search-debounce' });
     fireEvent.click(screen.getByLabelText('Search'));
@@ -3512,9 +3512,12 @@ describe('Window search', () => {
     fireEvent.input(input, { target: { value: 'a' } });
     fireEvent.input(input, { target: { value: 'ab' } });
     fireEvent.input(input, { target: { value: 'abc' } });
-    // Nothing fires until the debounce window (300ms) elapses.
+    // Nothing fires until Enter is pressed or search button clicked
     expect(submitSearchMock).not.toHaveBeenCalled();
     await new Promise((r) => setTimeout(r, 350));
+    expect(submitSearchMock).not.toHaveBeenCalled();
+    // Press Enter to trigger search
+    fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(submitSearchMock).toHaveBeenCalledTimes(1));
     expect(submitSearchMock.mock.calls[0][0]).toMatchObject({ query: 'abc' });
   });

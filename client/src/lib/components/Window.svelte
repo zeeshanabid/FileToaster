@@ -199,16 +199,16 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
   let searchActive = $state(false);
   let searchQuery = $state('');
   let searchTaskID = $state<string | null>(null);
-  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let advancedOpen = $state(false);
   let advancedFilters = $state<AdvancedFilters>(defaultAdvancedFilters());
   let searchInputEl: HTMLInputElement | null = $state(null);
+  let searchExecuted = $state(false); // Track if search has been executed at least once
 
   // searchSession is this window's live session for its current search task.
   const searchSession = $derived(searchTaskID ? $searchSessions[searchTaskID] ?? null : null);
   const searchRunning = $derived(!!searchSession && searchSession.status === 'running');
-  // `showSearchResults` gates the listing swap: a blank query keeps the folder.
-  const showSearchResults = $derived(searchActive && searchQuery.trim().length > 0);
+  // `showSearchResults` gates the listing swap: show search results only after search has been executed.
+  const showSearchResults = $derived(searchActive && searchExecuted);
   const searchResults = $derived<Entry[]>(searchSession ? searchSession.results : []);
   // `entries` is the set the listing actually renders: the search results while
   // a search is shown, otherwise the folder listing.
@@ -219,25 +219,18 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
       closeSearch();
     } else {
       searchActive = true;
+      searchExecuted = false;
       requestAnimationFrame(() => searchInputEl?.focus());
     }
   }
 
   function onSearchInput() {
-    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => {
-      searchDebounceTimer = null;
-      void runSearch();
-    }, 300);
+    // No live search - only search on Enter or search button press
   }
 
   function onSearchKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (searchDebounceTimer !== null) {
-        clearTimeout(searchDebounceTimer);
-        searchDebounceTimer = null;
-      }
       void runSearch();
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -248,10 +241,6 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
   // stopSearchTask cancels the current search task and drops its session. The
   // server-side cancel is best-effort (the task may already have finished).
   function stopSearchTask() {
-    if (searchDebounceTimer !== null) {
-      clearTimeout(searchDebounceTimer);
-      searchDebounceTimer = null;
-    }
     const id = searchTaskID;
     searchTaskID = null;
     if (id) {
@@ -265,6 +254,7 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
     stopSearchTask();
     searchActive = false;
     searchQuery = '';
+    searchExecuted = false;
     clearSelection();
   }
 
@@ -290,6 +280,7 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
         beginSearch(res.taskID, { rootPath: root, query });
         searchTaskID = res.taskID;
         searchActive = true;
+        searchExecuted = true;
       }
     } catch (err) {
       flash(err instanceof Error ? err.message : 'could not search');
@@ -1476,6 +1467,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
           e.preventDefault();
           startDecompress();
           return;
+        case 's':
+          e.preventDefault();
+          toggleSearch();
+          return;
         case 'm':
           e.preventDefault();
           startRename();
@@ -2082,71 +2077,80 @@ function headerLabel(key: SortKey): string {
           <path d="M7 7l3 3 7-7" />
         </svg>
       </button>
-      <button class="tool info" type="button" title="Information" aria-label="Information" disabled={selected.size === 0} onclick={() => openInfo()}>
-       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-         <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
-         <path d="M12 16v-4M12 8h.01" />
-       </svg>
-       {#if selected.size > 0}
-         <span class="badge" aria-hidden="true">{selected.size}</span>
-       {/if}
-     </button>
-     <button
-       class="tool search"
-       class:active={searchActive}
-       type="button"
-       title="Search this folder"
-       aria-label="Search"
-       onclick={toggleSearch}
-     >
-       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-         <circle cx="11" cy="11" r="7" />
-         <path d="m20 20-3.2-3.2" />
-       </svg>
-     </button>
-   </div>
+<button class="tool info" type="button" title="Information" aria-label="Information" disabled={selected.size === 0} onclick={() => openInfo()}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
+          <path d="M12 16v-4M12 8h.01" />
+        </svg>
+        {#if selected.size > 0}
+          <span class="badge" aria-hidden="true">{selected.size}</span>
+        {/if}
+      </button>
+      <button
+        class="tool search"
+        class:active={searchActive}
+        type="button"
+        title="Search this folder (Ctrl+Alt+S)"
+        aria-label="Search"
+        onclick={toggleSearch}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.2-3.2" />
+        </svg>
+      </button>
+    </div>
 
-   {#if searchActive}
-     <div class="searchbar" role="search">
-       <span class="search-icon" aria-hidden="true">
-         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-           <circle cx="11" cy="11" r="7" />
-           <path d="m20 20-3.2-3.2" />
-         </svg>
-       </span>
-       <input
-         class="search-input"
-         type="search"
-         bind:this={searchInputEl}
-         bind:value={searchQuery}
-         oninput={onSearchInput}
-         onkeydown={onSearchKeydown}
-         placeholder="Search this folder and subfolders…"
-         aria-label="Search query"
-         data-testid="search-input"
-         autocomplete="off"
-         spellcheck="false"
-       />
-       {#if searchRunning}
-         <span class="search-spinner" role="status" aria-label="Searching" data-testid="search-spinner"></span>
-       {/if}
-       {#if showSearchResults && !searchRunning}
-         <span class="search-count" data-testid="search-count">
-           {entries.length} {entries.length === 1 ? 'result' : 'results'}
-         </span>
-       {/if}
-       <button class="search-tool" type="button" title="Advanced search" aria-label="Advanced search" data-testid="advanced-search" onclick={openAdvancedSearch}>
-         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-           <path d="M4 6h16M7 12h10M10 18h4" />
-         </svg>
-       </button>
-       <button class="search-tool" type="button" title="Close search" aria-label="Close search" data-testid="close-search" onclick={closeSearch}>
-         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
-           <path d="M7 7l10 10M17 7L7 17" />
-         </svg>
-       </button>
-     </div>
-   {/if}
+{#if searchActive}
+      <div class="searchbar" role="search">
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.2-3.2" />
+          </svg>
+        </span>
+        <input
+          class="search-input"
+          type="text"
+          bind:this={searchInputEl}
+          bind:value={searchQuery}
+          oninput={onSearchInput}
+          onkeydown={onSearchKeydown}
+          placeholder="Search this folder and subfolders…"
+          aria-label="Search query"
+          data-testid="search-input"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        {#if searchRunning}
+          <span class="search-spinner" role="status" aria-label="Searching" data-testid="search-spinner"></span>
+        {:else}
+          {#if showSearchResults}
+            <span class="search-count" data-testid="search-count">
+              {entries.length} {entries.length === 1 ? 'result' : 'results'}
+            </span>
+          {/if}
+          <button class="search-tool" type="button" title="Search" aria-label="Search" data-testid="search-execute" onclick={runSearch}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+        {/if}
+        <button class="search-tool" type="button" title="Advanced search" aria-label="Advanced search" data-testid="advanced-search" onclick={openAdvancedSearch} style="position: relative;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+            <path d="M4 6h16M7 12h10M10 18h4" />
+          </svg>
+          {#if hasAdvancedFilters(advancedFilters)}
+            <span class="filter-dot" aria-hidden="true"></span>
+          {/if}
+        </button>
+        <button class="search-tool" type="button" title="Close search" aria-label="Close search" data-testid="close-search" onclick={closeSearch}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
+            <path d="M7 7l10 10M17 7L7 17" />
+          </svg>
+        </button>
+      </div>
+    {/if}
 
   <main class="body">
     <aside class="tree" aria-label="Folder tree" style="width:{treeWidth}px">
@@ -2209,7 +2213,11 @@ function headerLabel(key: SortKey): string {
 
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="content" bind:this={contentEl} onclick={clearSelectionIfBackground} oncontextmenu={onEmptyContextMenu}>
-      {#if showSearchResults && searchRunning && rows.length === 0}
+      {#if searchActive && !searchExecuted}
+        <div class="empty search-hint" data-testid="search-hint">
+          Type in the search box and press Search or "Enter"
+        </div>
+      {:else if showSearchResults && searchRunning && rows.length === 0}
         <div class="empty" data-testid="search-searching">Searching…</div>
       {:else if mainLoading && entries.length === 0}
         <div class="empty">Loading…</div>
@@ -2541,6 +2549,10 @@ function headerLabel(key: SortKey): string {
   .tool.info {
     position: relative;
   }
+  .tool.search {
+    margin-left: auto;
+    color: var(--text-muted);
+  }
   .tool.search.active {
     color: var(--accent-strong);
     background: var(--surface-inset);
@@ -2622,6 +2634,15 @@ function headerLabel(key: SortKey): string {
     to {
       transform: rotate(360deg);
     }
+  }
+  .filter-dot {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 8px;
+    height: 8px;
+    background: var(--alert);
+    border-radius: 50%;
   }
   .badge {
     position: absolute;
