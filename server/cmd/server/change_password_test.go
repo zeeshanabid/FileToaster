@@ -21,6 +21,7 @@ func writeTestConfig(t *testing.T, path, root string) {
 		t.Fatalf("create tmp_dir: %v", err)
 	}
 	content := "addr: \"127.0.0.1:0\"\n" +
+		"admin_user: testuser\n" +
 		"allowed_paths:\n  - name: Files\n    path: " + root + "\n" +
 		"max_parallel_tasks: 2\n" +
 		"tmp_dir: " + tmp + "\n" +

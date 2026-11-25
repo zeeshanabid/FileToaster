@@ -68,9 +68,6 @@ func run() error {
 	// password. The result is always non-blank, so the server never starts with a
 	// blank admin password.
 	adminUser := cfg.AdminUser
-	if adminUser == "" {
-		adminUser = auth.DefaultUser
-	}
 	adminHash, err := resolveAdminHash(cfg.AdminPasswordHash)
 	if err != nil {
 		logger.Error("could not initialise admin password", "error", err.Error())

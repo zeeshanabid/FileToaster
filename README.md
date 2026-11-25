@@ -255,13 +255,14 @@ All config parameters (except `admin_password_hash`, `admin_user`) can be overri
 | `finalize_buffer_size` | `FILETOASTER_FINALIZE_BUFFER_SIZE` |
 | `download_buffer_size` | `FILETOASTER_DOWNLOAD_BUFFER_SIZE` |
 | `session_secret` | `FILETOASTER_SESSION_SECRET` |
+| `admin_user` | `FILETOASTER_ADMIN_USER` |
 | `allowed_paths` (comma-separated paths) | `FILETOASTER_ALLOWED_PATHS` |
 | Config file path | `FILETOASTER_CONFIG` |
-| *(no env override)* | `FILETOASTER_ADMIN_PASSWORD` (sets password at runtime) |
+| *(no direct env override for hash)* | `FILETOASTER_ADMIN_PASSWORD` (sets password at runtime) |
 
-**Required**: `FILETOASTER_SESSION_SECRET` must be set via environment variable or in config file.
+**Required**: `FILETOASTER_SESSION_SECRET` must be set via environment variable or in config file. `admin_user` must be set via `FILETOASTER_ADMIN_USER` environment variable or in config file.
 
-**Optional**: `FILETOASTER_ADMIN_PASSWORD` — when set, generates the Argon2id hash at runtime and takes precedence over `admin_password_hash` in config and the default `admin` password. There is no env var for `admin_user` (defaults to `admin` from config).
+**Optional**: `FILETOASTER_ADMIN_PASSWORD` — when set, generates the Argon2id hash at runtime and takes precedence over `admin_password_hash` in config and the default `admin` password.
 
 ### Buffer Size Recommendations
 

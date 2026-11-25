@@ -661,6 +661,9 @@ func (c *Config) applyEnvOverrides() {
 			c.Debug = b
 		}
 	}
+	if v := os.Getenv("FILETOASTER_ADMIN_USER"); v != "" {
+		c.AdminUser = v
+	}
 }
 
 // splitAndTrim splits a comma/space-separated env value into non-empty parts.
@@ -807,6 +810,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SessionSecret == "" {
 		errs = append(errs, "session_secret is required (set FILETOASTER_SESSION_SECRET or config.session_secret)")
+	}
+	if strings.TrimSpace(c.AdminUser) == "" {
+		errs = append(errs, "admin_user is required (set FILETOASTER_ADMIN_USER or config.admin_user)")
 	}
 	if c.TMPDir == "" {
 		errs = append(errs, "tmp_dir must not be empty")
