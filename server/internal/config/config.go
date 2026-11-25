@@ -484,12 +484,92 @@ func checkMissingConfigFields(raw map[string]any, cfg *Config) {
 // persisted hash in favour of the env var — so the change has no login effect
 // until the env var is cleared.
 func ChangeAdminPassword(path, newHash string) error {
-	cfg, err := LoadForEdit(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
+		return fmt.Errorf("config file %q is not readable: %w", path, err)
+	}
+
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
+		return fmt.Errorf("config file %q is not valid YAML: %w", path, err)
+	}
+
+	if err := updateAdminPasswordHash(&node, newHash); err != nil {
+		return fmt.Errorf("update admin_password_hash: %w", err)
+	}
+
+	newData, err := yaml.Marshal(&node)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, newData, ConfigFileMode); err != nil {
 		return err
 	}
-	cfg.AdminPasswordHash = newHash
-	return cfg.Save(path)
+	return os.Rename(tmp, path)
+}
+
+// updateAdminPasswordHash finds the admin_password_hash key in the YAML node
+// tree and updates its value to newHash, preserving all comments and formatting.
+// If the key doesn't exist, it adds it at the end of the root mapping.
+func updateAdminPasswordHash(node *yaml.Node, newHash string) error {
+	if node.Kind != yaml.DocumentNode {
+		return errors.New("expected document node")
+	}
+	for _, doc := range node.Content {
+		if err := updateMappingNode(doc, "admin_password_hash", newHash); err != nil {
+			return err
+		}
+		// If the key was not found in the root mapping, add it at the end
+		if !hasKey(doc, "admin_password_hash") {
+			keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "admin_password_hash"}
+			valueNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: newHash}
+			doc.Content = append(doc.Content, keyNode, valueNode)
+		}
+	}
+	return nil
+}
+
+func hasKey(node *yaml.Node, key string) bool {
+	if node.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+func updateMappingNode(node *yaml.Node, key, newValue string) error {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		keyNode := node.Content[i]
+		valueNode := node.Content[i+1]
+		if keyNode.Value == key {
+			valueNode.Value = newValue
+			valueNode.Tag = "!!str"
+			return nil
+		}
+		if valueNode.Kind == yaml.MappingNode {
+			if err := updateMappingNode(valueNode, key, newValue); err != nil {
+				return err
+			}
+		} else if valueNode.Kind == yaml.SequenceNode {
+			for _, item := range valueNode.Content {
+				if item.Kind == yaml.MappingNode {
+					if err := updateMappingNode(item, key, newValue); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // applyEnvOverrides lets environment variables override file settings.
