@@ -393,6 +393,78 @@ export interface TruncateResponse {
   taskID?: string;
 }
 
+// --- Search ----------------------------------------------------------------
+// Search is a tracked task (POST /api/search) that walks a folder recursively
+// and streams each match over the SSE stream as a "search-result" event (see
+// $lib/store/search). The request carries a name query and optional filters;
+// dates are ISO-8601 timestamps (the client converts presets/pickers), sizes are
+// in bytes (the client converts its unit selector), and MIME types may be exact
+// ("application/pdf") or a wildcard ("image/*").
+export interface SearchRequest {
+  rootPath: string;
+  query: string;
+  mimeTypes?: string[];
+  extensions?: string[];
+  minSize?: number;
+  maxSize?: number;
+  createdAfter?: string;
+  createdBefore?: string;
+  modifiedAfter?: string;
+  modifiedBefore?: string;
+}
+
+// SearchResultItem is one streamed match. It mirrors the server's ops.SearchResult.
+export interface SearchResultItem {
+  path: string;
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  created: string;
+  modified: string;
+  mimeType?: string;
+}
+
+// SearchResponse is the server's reply to a submitted search ({ taskID }).
+export interface SearchResponse {
+  taskID?: string;
+}
+
+// SearchMeta is the search operation's plan, carried in a task's Meta field so
+// the task label can show the query. It stays opaque to the client's task
+// rendering; only Query/RootPath are read.
+export interface SearchMeta {
+  rootPath: string;
+  query: string;
+  mimeTypes?: string[];
+  extensions?: string[];
+  minSize?: number;
+  maxSize?: number;
+  createdAfter?: string;
+  createdBefore?: string;
+  modifiedAfter?: string;
+  modifiedBefore?: string;
+}
+
+// submitSearch enqueues a search task and resolves to its task id. Matches are
+// delivered separately over SSE, so this call only confirms the task started.
+export async function submitSearch(req: SearchRequest): Promise<SearchResponse> {
+  const res = await fetch('/api/search', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req)
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as { error?: unknown };
+    const message =
+      typeof payload.error === 'string' && payload.error
+        ? payload.error
+        : `search failed (${res.status})`;
+    throw new ApiError(message);
+  }
+  return (await res.json()) as SearchResponse;
+}
+
 // downloadFile requests a one-token download of a single source path (POST
 // /api/downloads), returning the token. The caller then loads
 // /downloads/{token}, which streams the file and consumes the token; the source

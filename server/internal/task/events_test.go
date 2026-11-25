@@ -1,6 +1,9 @@
 package task
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // isClosed reports whether a channel has been closed by attempting a
 // non-blocking read.
@@ -73,4 +76,63 @@ func TestHubUnsubscribeAfterCloseIsSafe(t *testing.T) {
 	// The handler's defer Unsubscribe then runs; it must not double-close.
 	h.Unsubscribe(s)
 	h.Unsubscribe(s)
+}
+
+// isClosedEvent reports whether an event channel has been closed by attempting a
+// non-blocking read.
+func isClosedEvent(c <-chan *Event) bool {
+	select {
+	case _, ok := <-c:
+		return !ok
+	default:
+		return false
+	}
+}
+
+// TestHubPublishEventScopesByTaskID verifies PublishEvent delivers an event to
+// an unfiltered subscriber and to a subscriber filtered to the event's task id,
+// but not to a subscriber filtered to a different task.
+func TestHubPublishEventScopesByTaskID(t *testing.T) {
+	h := NewHub()
+	all := h.Subscribe(nil)
+	matching := h.Subscribe([]string{"task-a"})
+	other := h.Subscribe([]string{"task-b"})
+
+	h.PublishEvent(&Event{TaskID: "task-a", Name: "search-result", Data: []byte(`{"n":1}`)})
+
+	select {
+	case e := <-all.Events():
+		if e.TaskID != "task-a" || e.Name != "search-result" {
+			t.Fatalf("all got %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unfiltered subscriber did not receive the event")
+	}
+
+	select {
+	case e := <-matching.Events():
+		if e.TaskID != "task-a" {
+			t.Fatalf("matching got %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("matching subscriber did not receive the event")
+	}
+
+	select {
+	case e := <-other.Events():
+		t.Fatalf("non-matching subscriber received %+v", e)
+	case <-time.After(20 * time.Millisecond):
+		// Expected: the filter excluded the event.
+	}
+}
+
+// TestHubShutdownClosesEventChannels verifies Shutdown closes the event channel
+// alongside the task channel.
+func TestHubShutdownClosesEventChannels(t *testing.T) {
+	h := NewHub()
+	s := h.Subscribe(nil)
+	h.Shutdown()
+	if !isClosedEvent(s.Events()) {
+		t.Fatal("event channel not closed after Shutdown")
+	}
 }

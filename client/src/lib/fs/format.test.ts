@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { formatSize, formatDate, formatRate, getFileType } from '$lib/fs/format';
+import {
+  formatSize,
+  formatDate,
+  formatRate,
+  getFileType,
+  formatDatePreset,
+  presetToDateRange,
+  sizeToBytes,
+  normalizeExtension,
+  mimeTypeForFilename,
+  DATE_PRESETS
+} from '$lib/fs/format';
 
 describe('formatSize', () => {
   // Each pair is [input bytes, expected human string]. The on-disk values are
@@ -102,5 +113,75 @@ describe('getFileType', () => {
   it('handles hidden files with extensions', () => {
     expect(getFileType('.gitignore', 'file')).toBe('GITIGNORE');
     expect(getFileType('.env.local', 'file')).toBe('LOCAL');
+  });
+});
+
+describe('formatDatePreset', () => {
+  it('labels every preset', () => {
+    for (const preset of DATE_PRESETS) {
+      expect(formatDatePreset(preset)).toBeTruthy();
+    }
+    expect(formatDatePreset('1h')).toBe('Last 1 hour');
+    expect(formatDatePreset('7d')).toBe('Last 7 days');
+    expect(formatDatePreset('all')).toBe('All time');
+    expect(formatDatePreset('custom')).toBe('Custom range');
+  });
+});
+
+describe('presetToDateRange', () => {
+  const now = new Date('2024-06-15T12:00:00Z');
+
+  it('returns empty bounds for all/custom', () => {
+    expect(presetToDateRange('all', now)).toEqual({ after: '', before: '' });
+    expect(presetToDateRange('custom', now)).toEqual({ after: '', before: '' });
+  });
+
+  it('expands a relative preset against now', () => {
+    const { after, before } = presetToDateRange('1d', now);
+    expect(before).toBe(now.toISOString());
+    expect(after).toBe(new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString());
+  });
+
+  it('uses a year span for 1y', () => {
+    const { after } = presetToDateRange('1y', now);
+    expect(after).toBe(new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString());
+  });
+});
+
+describe('sizeToBytes', () => {
+  it('converts each unit', () => {
+    expect(sizeToBytes(10, 'B')).toBe(10);
+    expect(sizeToBytes(2, 'KB')).toBe(2048);
+    expect(sizeToBytes(3, 'MB')).toBe(3 * 1024 * 1024);
+    expect(sizeToBytes(1, 'GB')).toBe(1024 ** 3);
+  });
+
+  it('treats non-positive and non-finite values as no bound (0)', () => {
+    expect(sizeToBytes(0, 'MB')).toBe(0);
+    expect(sizeToBytes(-5, 'MB')).toBe(0);
+    expect(sizeToBytes(NaN, 'MB')).toBe(0);
+    expect(sizeToBytes(Infinity, 'MB')).toBe(0);
+  });
+});
+
+describe('normalizeExtension', () => {
+  it('strips dots, trims, and lower-cases', () => {
+    expect(normalizeExtension('  .TXT ')).toBe('txt');
+    expect(normalizeExtension('txt')).toBe('txt');
+    expect(normalizeExtension('..Log')).toBe('log');
+    expect(normalizeExtension('')).toBe('');
+  });
+});
+
+describe('mimeTypeForFilename', () => {
+  it('maps common extensions', () => {
+    expect(mimeTypeForFilename('photo.JPG')).toBe('image/jpeg');
+    expect(mimeTypeForFilename('report.pdf')).toBe('application/pdf');
+    expect(mimeTypeForFilename('notes.txt')).toBe('text/plain');
+  });
+
+  it('returns empty for unknown or missing extensions', () => {
+    expect(mimeTypeForFilename('README')).toBe('');
+    expect(mimeTypeForFilename('weird.zzz')).toBe('');
   });
 });

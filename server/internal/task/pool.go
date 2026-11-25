@@ -201,6 +201,11 @@ func (p *Pool) execute(j job) {
 			p.hub.Publish(t)
 		}
 	})
+	// Non-task events (e.g. a streamed search match) are forwarded to the SSE
+	// hub scoped to this task's id so subscribers only see their own events.
+	prog.SetEventSink(func(name string, data []byte) {
+		p.hub.PublishEvent(&Event{TaskID: j.id, Name: name, Data: data})
+	})
 
 	t := p.store.Get(j.id)
 	p.store.SetStatus(j.id, StatusRunning, "")

@@ -29,6 +29,12 @@ type Progression struct {
 	// sink receives byte-progress snapshots. It is nil until the pool wires it,
 	// so a Progression used outside a Pool never panics.
 	sink func(ByteProgress)
+	// eventSink receives non-task events (e.g. a streamed search match) the work
+	// wants to publish alongside the progress snapshots. It is nil until the
+	// pool wires it. It is copied under the lock and invoked without holding it,
+	// so an event sink that publishes to the SSE hub never runs while the
+	// Progression lock is held.
+	eventSink func(name string, data []byte)
 }
 
 // SetSink installs the callback that receives progress snapshots.
@@ -36,6 +42,27 @@ func (p *Progression) SetSink(sink func(ByteProgress)) {
 	p.mu.Lock()
 	p.sink = sink
 	p.mu.Unlock()
+}
+
+// SetEventSink installs the callback that receives non-task events the work
+// reports through ReportEvent.
+func (p *Progression) SetEventSink(sink func(name string, data []byte)) {
+	p.mu.Lock()
+	p.eventSink = sink
+	p.mu.Unlock()
+}
+
+// ReportEvent publishes an arbitrary named event with a JSON (or otherwise
+// opaque) payload. Work that streams items as they are produced (search) uses
+// it to push one event per item; the pool forwards these to the SSE hub. It is
+// a no-op until an event sink is installed.
+func (p *Progression) ReportEvent(name string, data []byte) {
+	p.mu.Lock()
+	sink := p.eventSink
+	p.mu.Unlock()
+	if sink != nil {
+		sink(name, data)
+	}
 }
 
 // SetTotal records the full size of the work up front so the UI can show a

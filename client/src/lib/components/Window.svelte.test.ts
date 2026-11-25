@@ -18,9 +18,10 @@ import type { Mock, MockInstance } from 'vitest';
 import Window from './Window.svelte';
 import Taskbar from './Taskbar.svelte';
 import { openWindow, updateWindow, windows } from '$lib/store/windows';
+import { beginSearch, appendSearchResult, completeSearch, searchSessions } from '$lib/store/search';
 import { tree as fileTree } from '$lib/fs/tree';
 import { uploadManager } from '$lib/fs/upload';
-import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile, createUpload, uploadChunk, chunkCountForFile, downloadFile } from '$lib/fs/api';
+import { fetchListing, mkdirDirectory, fetchInfo, submitMove, renameFile, createUpload, uploadChunk, chunkCountForFile, downloadFile, submitSearch, cancelTask } from '$lib/fs/api';
 import {
   clipboard,
   cutMode,
@@ -50,7 +51,9 @@ import {
     cancelUpload: vi.fn(),
     resumeUpload: vi.fn(),
     chunkCountForFile: vi.fn(() => 1),
-    DEFAULT_CHUNK_SIZE: 4 << 20
+    DEFAULT_CHUNK_SIZE: 4 << 20,
+    submitSearch: vi.fn(),
+    cancelTask: vi.fn()
   }));
 
   // The tasks store is mocked so copy/paste/delete/compress can be tested without a backend. The
@@ -3443,5 +3446,151 @@ describe('Window keyboard — ctrl+alt letters via the physical key code', () =>
     await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
     fireEvent.keyDown(document.body, { key: 'ArrowUp', code: 'ArrowUp', ctrlKey: true, altKey: true });
     await waitFor(() => expect(currentStorePath()).toBe(ROOT));
+  });
+});
+
+describe('Window search', () => {
+  const submitSearchMock = submitSearch as unknown as Mock;
+  const cancelTaskMock = cancelTask as unknown as Mock;
+
+  function searchInput(): HTMLInputElement {
+    return screen.getByTestId('search-input') as HTMLInputElement;
+  }
+
+  function resultItem(name: string, path?: string, type: 'file' | 'dir' = 'file') {
+    return {
+      path: path ?? `/root/${name}`,
+      name,
+      type,
+      size: 12,
+      created: '2024-01-01T00:00:00Z',
+      modified: '2024-01-01T00:00:00Z'
+    };
+  }
+
+  async function startSearch(query: string, taskID = 'search-1'): Promise<void> {
+    submitSearchMock.mockResolvedValue({ taskID });
+    fireEvent.click(screen.getByLabelText('Search'));
+    await tick();
+    const input = searchInput();
+    fireEvent.input(input, { target: { value: query } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(submitSearchMock).toHaveBeenCalled());
+    await tick();
+  }
+
+  beforeEach(() => {
+    searchSessions.set({});
+    submitSearchMock.mockReset();
+    cancelTaskMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('toggles the search bar with the toolbar button', async () => {
+    await openAndRender();
+    expect(screen.queryByTestId('search-input')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Search'));
+    await tick();
+    expect(searchInput()).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('close-search'));
+    await tick();
+    expect(screen.queryByTestId('search-input')).not.toBeInTheDocument();
+  });
+
+  it('submits a search for the opened folder with the typed query', async () => {
+    await openAndRender();
+    await startSearch('report');
+    expect(submitSearchMock).toHaveBeenCalledTimes(1);
+    expect(submitSearchMock.mock.calls[0][0]).toMatchObject({ rootPath: ROOT, query: 'report' });
+  });
+
+  it('debounces typed input into a single request', async () => {
+    await openAndRender();
+    submitSearchMock.mockResolvedValue({ taskID: 'search-debounce' });
+    fireEvent.click(screen.getByLabelText('Search'));
+    await tick();
+    const input = searchInput();
+    fireEvent.input(input, { target: { value: 'a' } });
+    fireEvent.input(input, { target: { value: 'ab' } });
+    fireEvent.input(input, { target: { value: 'abc' } });
+    // Nothing fires until the debounce window (300ms) elapses.
+    expect(submitSearchMock).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 350));
+    await waitFor(() => expect(submitSearchMock).toHaveBeenCalledTimes(1));
+    expect(submitSearchMock.mock.calls[0][0]).toMatchObject({ query: 'abc' });
+  });
+
+  it('renders streamed results in the listing table', async () => {
+    await openAndRender();
+    await startSearch('report');
+    appendSearchResult('search-1', resultItem('report.txt', '/root/documents/work/report.txt'));
+    completeSearch('search-1', 'finished', undefined, { scanned: 5, matches: 1 });
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('report.txt')).toBeInTheDocument());
+    // The folder listing was replaced by the search results.
+    expect(within(screen.getByRole('table')).queryByText('documents')).not.toBeInTheDocument();
+  });
+
+  it('shows a no-results message when a search completes empty', async () => {
+    await openAndRender();
+    await startSearch('nothing');
+    completeSearch('search-1', 'finished', undefined, { scanned: 4, matches: 0 });
+    await waitFor(() => expect(screen.getByTestId('search-empty')).toBeInTheDocument());
+  });
+
+  it('selects a search result row on click', async () => {
+    await openAndRender();
+    await startSearch('report');
+    appendSearchResult('search-1', resultItem('report.txt', '/root/documents/work/report.txt'));
+    completeSearch('search-1', 'finished');
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('report.txt')).toBeInTheDocument());
+    const row = screen.getByText('report.txt').closest('tr') as HTMLElement;
+    fireEvent.click(row);
+    await tick();
+    expect(row.classList.contains('selected')).toBe(true);
+  });
+
+  it('closes the search on Escape and cancels the task', async () => {
+    await openAndRender();
+    await startSearch('report');
+    fireEvent.keyDown(searchInput(), { key: 'Escape' });
+    await tick();
+    expect(screen.queryByTestId('search-input')).not.toBeInTheDocument();
+    expect(cancelTaskMock).toHaveBeenCalledWith('search-1');
+  });
+
+  it('cancels the search when navigating to a folder', async () => {
+    await openAndRender();
+    await startSearch('report');
+    await clickNode('/root/documents');
+    await waitFor(() => expect(currentStorePath()).toBe('/root/documents'));
+    // Search mode ended and the task was cancelled.
+    expect(screen.queryByTestId('search-input')).not.toBeInTheDocument();
+    expect(cancelTaskMock).toHaveBeenCalledWith('search-1');
+  });
+
+  it('opens the advanced search dialog from the search bar', async () => {
+    await openAndRender();
+    fireEvent.click(screen.getByLabelText('Search'));
+    await tick();
+    fireEvent.click(screen.getByTestId('advanced-search'));
+    await tick();
+    expect(screen.getByTestId('advanced-search-dialog')).toBeInTheDocument();
+  });
+
+  it('opens the containing directory from a search result context menu', async () => {
+    await openAndRender();
+    await startSearch('report');
+    appendSearchResult('search-1', resultItem('report.txt', '/root/documents/work/report.txt'));
+    completeSearch('search-1', 'finished');
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('report.txt')).toBeInTheDocument());
+
+    const row = screen.getByText('report.txt').closest('tr') as HTMLElement;
+    fireEvent.contextMenu(row);
+    await tick();
+    const openContaining = screen.getByText('Open containing directory') as HTMLButtonElement;
+    expect(openContaining).not.toBeDisabled();
+    fireEvent.click(openContaining);
+    await tick();
+    // A new window opened at the result's parent folder.
+    expect(get(windows).some((w) => w.path === '/root/documents/work')).toBe(true);
   });
 });

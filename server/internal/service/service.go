@@ -31,6 +31,9 @@ const DecompressOperation = "decompress"
 // TruncateOperation is the operation key registered for truncate.
 const TruncateOperation = "truncate"
 
+// SearchOperation is the operation key registered for the recursive search.
+const SearchOperation = "search"
+
 // UploadOperation is the operation key registered for the upload finalize step
 // (a tracked copy from the staging dir into the target).
 const UploadOperation = "upload"

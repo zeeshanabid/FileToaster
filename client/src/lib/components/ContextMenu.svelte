@@ -27,6 +27,7 @@
     canPaste = false,
     canSelectAll = false,
     canGoUp = false,
+    searchActive = false,
     onClose,
     onAction
   }: {
@@ -39,6 +40,7 @@
     canPaste?: boolean;
     canSelectAll?: boolean;
     canGoUp?: boolean;
+    searchActive?: boolean;
     onClose: () => void;
     onAction: (action: string) => void;
   } = $props();
@@ -100,6 +102,9 @@
   const canOpenInNewWindow = $derived(kind === 'folder' && selection.length === 1 && selection[0]?.type === 'dir');
   const canGoUpHere = $derived(kind === 'empty' && canGoUp);
   const canTruncate = $derived(selection.length > 0 && selection.every((s) => s.type === 'file'));
+  // "Open containing directory" is only meaningful for a search result, where
+  // the shown item lives in a folder other than the one the window has open.
+  const canOpenContainingDir = $derived(kind !== 'empty' && searchActive && selection.length > 0);
 
   // Icon markup (24x24 viewBox, stroke currentColor) reused from the toolbar so
   // the menu looks consistent with the rest of the UI. Declared before `items`
@@ -140,6 +145,8 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M21 12H3" /><path d="M18 6v12" /><path d="M6 6v12" /></svg>';
 
   const items = $derived<Array<MenuItem | MenuSeparator>>([
+    { type: 'item', id: 'open-containing-directory', label: 'Open containing directory', action: 'open-containing-directory', svg: OPEN, enabled: canOpenContainingDir },
+    { type: 'sep' },
     { type: 'item', id: 'open', label: 'Open', action: 'open', svg: OPEN, enabled: canOpen },
     { type: 'item', id: 'open-new-window', label: 'Open in new window', action: 'open-new-window', svg: OPEN_NEW_WINDOW, enabled: canOpenInNewWindow },
     { type: 'item', id: 'cut', label: 'Cut', action: 'cut', svg: CUT, enabled: canCutCopy },

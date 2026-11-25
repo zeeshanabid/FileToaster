@@ -111,6 +111,7 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	registerCompressOp(taskService, roots, cfg)
 	registerDecompressOp(taskService, roots, cfg)
 	registerTruncateOp(taskService, roots, cfg)
+	registerSearchOp(taskService, roots)
 	registerUploadOp(taskService, roots, cfg)
 	// In-memory upload session registry: chunks stage here (under tmp_dir) while
 	// a client uploads, then a tracked finalize op copies staging into the target.
@@ -125,6 +126,9 @@ func startServer(cfg *config.Config, guard *auth.Guard, logger *slog.Logger) err
 	mux.Handle("POST /api/compress", guard.Middleware(http.HandlerFunc(taskSrv.ServeCompress)))
 	mux.Handle("POST /api/decompress", guard.Middleware(http.HandlerFunc(taskSrv.ServeDecompress)))
 	mux.Handle("POST /api/truncate", guard.Middleware(http.HandlerFunc(taskSrv.ServeTruncate)))
+	// Recursive search: a tracked task that streams each match over the SSE
+	// stream as a "search-result" event while it scans.
+	mux.Handle("POST /api/search", guard.Middleware(http.HandlerFunc(taskSrv.ServeSearch)))
 	// Upload (chunked + resumable): create a session, ingest per-chunk PUTs, read
 	// resume status, and cancel (keeping chunks). The finalize is a tracked op.
 	mux.Handle("POST /api/uploads", guard.Middleware(http.HandlerFunc(taskSrv.ServeCreateUpload)))

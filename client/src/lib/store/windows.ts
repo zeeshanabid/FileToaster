@@ -97,6 +97,26 @@ export function focusWindow(id: string) {
   bringToFront(id);
 }
 
+// Pending "reveal" requests. "Open containing directory" opens a new window at a
+// parent folder and asks it to select and scroll to the originating item once it
+// has navigated there. The request is recorded before the new window mounts, so
+// the window consumes it after its initial navigation.
+const pendingReveals: Array<{ parent: string; path: string }> = [];
+
+// requestReveal records that a window navigating to `parent` should reveal `path`.
+export function requestReveal(parent: string, path: string): void {
+  pendingReveals.push({ parent, path });
+}
+
+// takeReveal consumes (if any) the pending reveal for a window that just
+// navigated to `parent`, returning the path to select or null.
+export function takeReveal(parent: string): string | null {
+  const idx = pendingReveals.findIndex((r) => r.parent === parent);
+  if (idx === -1) return null;
+  const [request] = pendingReveals.splice(idx, 1);
+  return request.path;
+}
+
 // isActiveWindow reports whether `id` is the window that should receive
 // keyboard shortcuts: the top-most window that is not minimized. Shortcuts are
 // per window, so only this one reacts to arrows / Enter / ctrl+alt bindings and
