@@ -169,21 +169,21 @@ The binary will be at `server/bin/server` (or `server/bin/filetoaster` in Docker
 | `allowed_paths[].name` | string | **Yes** | Display name for the root |
 | `allowed_paths[].path` | string | No* | Absolute path to the root |
 | `allowed_paths[].env` | string | No* | Env var containing absolute path |
-| `max_parallel_tasks` | int | No | Concurrent task limit (default 4) |
-| `shutdown_timeout_seconds` | int | No | Graceful shutdown deadline (default 30) |
+| `max_parallel_tasks` | int | No | Concurrent task limit (default 4, min 1) |
+| `shutdown_timeout_seconds` | int | No | Graceful shutdown deadline in seconds (default 30, min 0) |
 | `debug` | bool | No | Enable debug logging (default false) |
-| `gomaxprocs` | int | No | GOMAXPROCS value (default 0 = runtime) |
+| `gomaxprocs` | int | No | GOMAXPROCS value (default 0 = runtime, min 0) |
 | `tmp_dir` | string | No | Upload staging directory (default `~/.filetoaster/tmp_uploads`) |
-| `upload_chunk_size` | int | No | Chunk size in bytes (default 4194304 = 4 MiB) |
-| `upload_max_concurrent_chunks` | int | No | Global concurrent chunk limit (default 4) |
-| `upload_stale_after` | int | No | Hours before staged upload cleanup (default 24) |
-| `upload_sweep_interval` | int | No | Sweep interval in hours (default 1) |
-| `copy_buffer_size` | int | No | Copy buffer size in bytes (default 8388608 = 8 MiB) |
-| `move_buffer_size` | int | No | Move buffer size in bytes (default 8388608 = 8 MiB) |
-| `compress_buffer_size` | int | No | Compress buffer size in bytes (default 8388608 = 8 MiB) |
-| `decompress_buffer_size` | int | No | Decompress buffer size in bytes (default 8388608 = 8 MiB) |
-| `finalize_buffer_size` | int | No | Finalize (upload commit) buffer size in bytes (default 8388608 = 8 MiB) |
-| `download_buffer_size` | int | No | Download buffer size in bytes (default 8388608 = 8 MiB) |
+| `upload_chunk_size` | int | No | Chunk size in MB (default 4, range 1-1000) |
+| `upload_max_concurrent_chunks` | int | No | Global concurrent chunk limit (default 4, min 1) |
+| `upload_stale_after` | int | No | Hours before staged upload cleanup (default 24, min 1) |
+| `upload_sweep_interval` | int | No | Sweep interval in hours (default 1, min 1) |
+| `copy_buffer_size` | int | No | Copy buffer size in MB (default 8, range 1-1000) |
+| `move_buffer_size` | int | No | Move buffer size in MB (default 8, range 1-1000) |
+| `compress_buffer_size` | int | No | Compress buffer size in MB (default 8, range 1-1000) |
+| `decompress_buffer_size` | int | No | Decompress buffer size in MB (default 8, range 1-1000) |
+| `finalize_buffer_size` | int | No | Finalize (upload commit) buffer size in MB (default 8, range 1-1000) |
+| `download_buffer_size` | int | No | Download buffer size in MB (default 8, range 1-1000) |
 | `session_secret` | string | **Yes** | HMAC secret for session cookies |
 | `admin_user` | string | No | Admin username (default `admin`) |
 | `admin_password_hash` | string | No | Argon2id hash (overridden by env) |
@@ -212,20 +212,20 @@ debug: false
 gomaxprocs: 0
 
 tmp_dir: /home/nonroot/.filetoaster/tmp_uploads
-upload_chunk_size: 4194304
+upload_chunk_size: 4
 upload_max_concurrent_chunks: 4
 upload_stale_after: 24
 upload_sweep_interval: 1
 
-# Buffer sizes (in bytes) - default 8 MiB (8388608)
-# For SSDs: 8-16 MiB (8388608-16777216) for better throughput
-# For HDDs: 4-8 MiB (4194304-8388608) to reduce seek overhead
-copy_buffer_size: 8388608
-move_buffer_size: 8388608
-compress_buffer_size: 8388608
-decompress_buffer_size: 8388608
-finalize_buffer_size: 8388608
-download_buffer_size: 8388608
+# Buffer sizes (in MB, integer 1-1000) - default 8 MB
+# For SSDs: 8-16 MB for better throughput
+# For HDDs: 4-8 MB to reduce seek overhead
+copy_buffer_size: 8
+move_buffer_size: 8
+compress_buffer_size: 8
+decompress_buffer_size: 8
+finalize_buffer_size: 8
+download_buffer_size: 8
 
 session_secret: "change-me-in-production"
 admin_user: admin
@@ -234,7 +234,7 @@ admin_password_hash: ""  # Set via FILETOASTER_ADMIN_PASSWORD env var
 
 ### Environment Variable Overrides
 
-All config parameters (except `admin_password_hash`, `admin_user`, `session_secret`) can be overridden via environment variables:
+All config parameters (except `admin_password_hash`, `admin_user`) can be overridden via environment variables:
 
 | Config Parameter | Environment Variable |
 |------------------|---------------------|
@@ -246,29 +246,34 @@ All config parameters (except `admin_password_hash`, `admin_user`, `session_secr
 | `tmp_dir` | `FILETOASTER_TMP_DIR` |
 | `upload_chunk_size` | `FILETOASTER_UPLOAD_CHUNK_SIZE` |
 | `upload_max_concurrent_chunks` | `FILETOASTER_UPLOAD_MAX_CONCURRENT_CHUNKS` |
+| `upload_stale_after` | `FILETOASTER_UPLOAD_STALE_AFTER` |
+| `upload_sweep_interval` | `FILETOASTER_UPLOAD_SWEEP_INTERVAL` |
 | `copy_buffer_size` | `FILETOASTER_COPY_BUFFER_SIZE` |
 | `move_buffer_size` | `FILETOASTER_MOVE_BUFFER_SIZE` |
 | `compress_buffer_size` | `FILETOASTER_COMPRESS_BUFFER_SIZE` |
 | `decompress_buffer_size` | `FILETOASTER_DECOMPRESS_BUFFER_SIZE` |
 | `finalize_buffer_size` | `FILETOASTER_FINALIZE_BUFFER_SIZE` |
 | `download_buffer_size` | `FILETOASTER_DOWNLOAD_BUFFER_SIZE` |
+| `session_secret` | `FILETOASTER_SESSION_SECRET` |
+| `allowed_paths` (comma-separated paths) | `FILETOASTER_ALLOWED_PATHS` |
 | Config file path | `FILETOASTER_CONFIG` |
+| *(no env override)* | `FILETOASTER_ADMIN_PASSWORD` (sets password at runtime) |
 
-**Required**: `FILETOASTER_SESSION_SECRET` must be set via environment variable.
+**Required**: `FILETOASTER_SESSION_SECRET` must be set via environment variable or in config file.
 
-**Optional**: `FILETOASTER_ADMIN_PASSWORD` — when set, takes precedence over `admin_password_hash` in config and the default `admin` password.
+**Optional**: `FILETOASTER_ADMIN_PASSWORD` — when set, generates the Argon2id hash at runtime and takes precedence over `admin_password_hash` in config and the default `admin` password. There is no env var for `admin_user` (defaults to `admin` from config).
 
 ### Buffer Size Recommendations
 
-The default buffer size of **8 MiB** (8388608 bytes) works well for most setups. You can tune per-operation buffers based on your storage type:
+The default buffer size of **8 MB** works well for most setups. You can tune per-operation buffers based on your storage type:
 
 | Storage Type | Recommended Range | Notes |
 |--------------|-------------------|-------|
-| **SSD / NVMe** | 8–16 MiB (8388608–16777216) | Larger buffers maximize throughput on fast random-access storage |
-| **HDD** | 4–8 MiB (4194304–8388608) | Smaller buffers reduce seek overhead and memory pressure on spinning disks |
-| **Network / NAS** | 8–16 MiB (8388608–16777216) | Larger buffers help amortize network latency |
+| **SSD / NVMe** | 8–16 MB | Larger buffers maximize throughput on fast random-access storage |
+| **HDD** | 4–8 MB | Smaller buffers reduce seek overhead and memory pressure on spinning disks |
+| **Network / NAS** | 8–16 MB | Larger buffers help amortize network latency |
 
-All buffer sizes are specified in **bytes**. Use the environment variables (e.g., `FILETOASTER_COPY_BUFFER_SIZE=16777216`) for quick adjustments without editing the config file.
+All buffer sizes are specified in **MB** (integer 1-1000). Use the environment variables (e.g., `FILETOASTER_COPY_BUFFER_SIZE=16`) for quick adjustments without editing the config file.
 
 ---
 
