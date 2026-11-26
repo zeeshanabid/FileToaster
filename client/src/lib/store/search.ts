@@ -125,21 +125,36 @@ export interface SearchSession {
 export const searchSessions = writable<Record<string, SearchSession>>({});
 
 // beginSearch registers a freshly submitted search. It must be called with the
-// returned task id before SSE results can be routed.
+// returned task id before SSE results can be routed. If a session already exists
+// in a terminal state (e.g., task completed before this call), preserve it and
+// only fill in missing rootPath/query.
 export function beginSearch(taskID: string, opts: { rootPath: string; query: string }): void {
   if (!taskID) return;
-  searchSessions.update((map) => ({
-    ...map,
-    [taskID]: {
-      taskID,
-      rootPath: opts.rootPath,
-      query: opts.query,
-      results: [],
-      scanned: 0,
-      matches: 0,
-      status: 'running'
+  searchSessions.update((map) => {
+    const existing = map[taskID];
+    if (existing && (existing.status === 'finished' || existing.status === 'failed' || existing.status === 'cancelled')) {
+      return {
+        ...map,
+        [taskID]: {
+          ...existing,
+          rootPath: existing.rootPath || opts.rootPath,
+          query: existing.query || opts.query
+        }
+      };
     }
-  }));
+    return {
+      ...map,
+      [taskID]: {
+        taskID,
+        rootPath: opts.rootPath,
+        query: opts.query,
+        results: existing?.results ?? [],
+        scanned: existing?.scanned ?? 0,
+        matches: existing?.matches ?? 0,
+        status: 'running'
+      }
+    };
+  });
 }
 
 // appendSearchResult adds one streamed match to the session. Late results are
@@ -158,6 +173,8 @@ export function appendSearchResult(taskID: string, item: SearchResultItem): void
 
 // completeSearch marks a search terminal. `totals` (when supplied by the
 // search-complete event) refreshes the scanned/matches counters.
+// If the session doesn't exist yet (e.g., task completed before beginSearch),
+// create a minimal session so the terminal status is recorded.
 export function completeSearch(
   taskID: string,
   status: SearchSession['status'],
@@ -167,7 +184,21 @@ export function completeSearch(
   if (!taskID) return;
   searchSessions.update((map) => {
     const session = map[taskID];
-    if (!session) return map;
+    if (!session) {
+      return {
+        ...map,
+        [taskID]: {
+          taskID,
+          rootPath: '',
+          query: '',
+          results: [],
+          scanned: totals?.scanned ?? 0,
+          matches: totals?.matches ?? 0,
+          status,
+          error
+        }
+      };
+    }
     return {
       ...map,
       [taskID]: {

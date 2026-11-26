@@ -84,6 +84,46 @@ describe('search session store', () => {
     removeSearch('t1');
     expect(getSearchSession('t1')).toBeUndefined();
   });
+
+  it('completeSearch creates a session if it does not exist (race: task finishes before beginSearch)', () => {
+    completeSearch('t1', 'finished', undefined, { scanned: 5, matches: 2 });
+    const session = getSearchSession('t1')!;
+    expect(session.status).toBe('finished');
+    expect(session.scanned).toBe(5);
+    expect(session.matches).toBe(2);
+    expect(session.results).toEqual([]);
+  });
+
+  it('beginSearch preserves a terminal session and fills in rootPath/query', () => {
+    // Simulate task completing before beginSearch: completeSearch creates a minimal session
+    completeSearch('t1', 'finished', 'some error', { scanned: 3, matches: 1 });
+    // Now beginSearch is called (late)
+    beginSearch('t1', { rootPath: '/root', query: 'test' });
+    const session = getSearchSession('t1')!;
+    // Terminal status should be preserved
+    expect(session.status).toBe('finished');
+    expect(session.error).toBe('some error');
+    expect(session.scanned).toBe(3);
+    expect(session.matches).toBe(1);
+    // But rootPath and query should be filled in
+    expect(session.rootPath).toBe('/root');
+    expect(session.query).toBe('test');
+  });
+
+  it('beginSearch does not overwrite a failed session', () => {
+    completeSearch('t1', 'failed', 'server error', { scanned: 1, matches: 0 });
+    beginSearch('t1', { rootPath: '/root', query: 'test' });
+    const session = getSearchSession('t1')!;
+    expect(session.status).toBe('failed');
+    expect(session.error).toBe('server error');
+  });
+
+  it('beginSearch does not overwrite a cancelled session', () => {
+    completeSearch('t1', 'cancelled', undefined, { scanned: 0, matches: 0 });
+    beginSearch('t1', { rootPath: '/root', query: 'test' });
+    const session = getSearchSession('t1')!;
+    expect(session.status).toBe('cancelled');
+  });
 });
 
 describe('advanced filters', () => {
