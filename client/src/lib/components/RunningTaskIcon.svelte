@@ -260,12 +260,20 @@ function statusLabel(status: Task['status']): string {
                 {/if}
               </div>
               {#if task.status === 'running' || task.status === 'queued'}
-                <progress
-                  class="bar"
-                  value={task.status === 'running' ? Math.round(task.progress) : undefined}
-                  max="100"
-                  aria-label="Progress"
-                ></progress>
+                {#if task.type === 'search'}
+                  <div class="bar search-bar" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100">
+                    <div class="search-bar-fill"></div>
+                  </div>
+                {:else if task.status === 'queued'}
+                  <progress class="bar" max="100" aria-label="Progress"></progress>
+                {:else}
+                  <progress
+                    class="bar"
+                    value={Math.round(task.progress)}
+                    max="100"
+                    aria-label="Progress"
+                  ></progress>
+                {/if}
                 <div class="meta">
                   {#if task.bytes.filesTotal > 0}
                     <span class="files">{task.bytes.filesDone} / {task.bytes.filesTotal} files</span>
@@ -585,6 +593,41 @@ function statusLabel(status: Task['status']): string {
   .bar:indeterminate::-webkit-progress-value,
   .bar:indeterminate::-moz-progress-bar {
     animation: progress-indeterminate var(--progress-indeterminate-duration) infinite linear;
+  }
+
+  /* Search task progress bar - custom div-based (works in Chrome) */
+  .bar.search-bar {
+    width: 100%;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--surface-inset);
+    overflow: hidden;
+    position: relative;
+  }
+  .bar.search-bar .search-bar-fill {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    background-size: 200% 100%;
+    border-radius: 999px;
+    animation: search-progress-move 1.5s linear infinite;
+    box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
+    transform-origin: left center;
+  }
+
+  @keyframes search-progress-move {
+    0% {
+      background-position: 0% 50%;
+    }
+    100% {
+      background-position: 200% 50%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar.search-bar .search-bar-fill {
+      animation-duration: 10s;
+    }
   }
   .meta {
     display: flex;
