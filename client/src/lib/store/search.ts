@@ -67,6 +67,32 @@ function customOrPreset(
   return presetToDateRange(preset, now);
 }
 
+// File type category to concrete MIME type expansion.
+// "archive" is special — it has no single prefix, so we enumerate the types.
+const MIME_TYPE_EXPANSION: Record<string, string[]> = {
+  'image/*': ['image/*'],
+  'video/*': ['video/*'],
+  'audio/*': ['audio/*'],
+  'text/*': ['text/*'],
+  archive: ['application/zip', 'application/x-tar', 'application/gzip']
+};
+
+// expandMimeTypes converts the user-selected file type categories (e.g. "Images",
+// "Archives") into the concrete MIME types the server matches against. Unknown
+// values are passed through unchanged so custom MIME types still work.
+function expandMimeTypes(mimeTypes: string[]): string[] {
+  const expanded = new Set<string>();
+  for (const mt of mimeTypes) {
+    const concrete = MIME_TYPE_EXPANSION[mt];
+    if (concrete) {
+      for (const c of concrete) expanded.add(c);
+    } else {
+      expanded.add(mt);
+    }
+  }
+  return [...expanded];
+}
+
 // buildSearchRequest converts the dialog's filter state plus the name query and
 // search root into the server request. Extensions are normalized, sizes are
 // converted from the selected unit into bytes, and date presets are expanded to
@@ -92,7 +118,7 @@ export function buildSearchRequest(
   return {
     rootPath,
     query: query.trim(),
-    mimeTypes: [...filters.mimeTypes],
+    mimeTypes: expandMimeTypes(filters.mimeTypes),
     extensions: filters.extensions.map(normalizeExtension).filter(Boolean),
     minSize: sizeToBytes(filters.minSize, filters.sizeUnit),
     maxSize: sizeToBytes(filters.maxSize, filters.sizeUnit),

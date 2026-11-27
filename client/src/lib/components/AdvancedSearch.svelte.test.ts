@@ -105,10 +105,11 @@ describe('AdvancedSearch', () => {
   it('reset restores the defaults', async () => {
     const user = userEvent.setup();
     render({ ...defaultAdvancedFilters(), mimeTypes: ['image/*'], minSize: 5 });
-    expect(within(dialog()).getByText('image/*')).toBeInTheDocument();
+    // The selected file type should appear as a tag with its friendly name
+    expect(within(dialog()).getByRole('checkbox', { name: 'Images' })).toBeChecked();
     await user.click(within(dialog()).getByText('Reset'));
     await tick();
-    expect(within(dialog()).queryByText('image/*')).not.toBeInTheDocument();
+    expect(within(dialog()).queryByRole('checkbox', { name: 'Images' })).not.toBeChecked();
     // A rebuilt default has no MIME selections.
     const checked = within(dialog())
       .queryAllByRole('checkbox')

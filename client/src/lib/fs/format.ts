@@ -209,29 +209,13 @@ export interface MimeOption {
 }
 
 // MIME_TYPE_OPTIONS is the catalogue of file-type filters the advanced dialog
-// offers, grouped for display. Custom MIME types can still be typed in.
+// offers, grouped for display. The five top-level categories are expanded to
+// their concrete MIME types when building the search request. Custom MIME types
+// can still be typed in.
 export const MIME_TYPE_OPTIONS: MimeOption[] = [
-  { value: 'image/*', label: 'Images', group: 'Media' },
-  { value: 'video/*', label: 'Videos', group: 'Media' },
-  { value: 'audio/*', label: 'Audio', group: 'Media' },
-  { value: 'application/pdf', label: 'PDF', group: 'Documents' },
-  { value: 'application/msword', label: 'Word (doc)', group: 'Documents' },
-  {
-    value: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    label: 'Word (docx)',
-    group: 'Documents'
-  },
-  { value: 'application/vnd.ms-excel', label: 'Excel (xls)', group: 'Documents' },
-  {
-    value: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    label: 'Excel (xlsx)',
-    group: 'Documents'
-  },
-  { value: 'application/zip', label: 'ZIP', group: 'Archives' },
-  { value: 'application/x-tar', label: 'TAR', group: 'Archives' },
-  { value: 'application/gzip', label: 'GZIP', group: 'Archives' },
-  { value: 'text/plain', label: 'Text', group: 'Text' },
-  { value: 'text/*', label: 'Any text', group: 'Text' },
-  { value: 'text/x-*', label: 'Code', group: 'Text' },
-  { value: 'text/markdown', label: 'Markdown', group: 'Text' }
+  { value: 'image/*', label: 'Images', group: 'File types' },
+  { value: 'video/*', label: 'Videos', group: 'File types' },
+  { value: 'audio/*', label: 'Audio', group: 'File types' },
+  { value: 'text/*', label: 'Text', group: 'File types' },
+  { value: 'archive', label: 'Archives', group: 'File types' }
 ];

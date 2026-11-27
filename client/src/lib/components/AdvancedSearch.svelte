@@ -35,15 +35,13 @@
   let dialog: HTMLDivElement | null = $state(null);
   onMount(() => dialog?.focus());
 
-  // The catalogue grouped by its display group, preserving catalogue order.
-  const mimeGroups = $derived.by(() => {
-    const groups: Array<{ name: string; options: typeof MIME_TYPE_OPTIONS }> = [];
+  // Map from MIME value to its friendly label for tag display.
+  const mimeLabelMap = $derived.by(() => {
+    const map = new Map<string, string>();
     for (const opt of MIME_TYPE_OPTIONS) {
-      const found = groups.find((g) => g.name === opt.group);
-      if (found) found.options.push(opt);
-      else groups.push({ name: opt.group, options: [opt] });
+      map.set(opt.value, opt.label);
     }
-    return groups;
+    return map;
   });
 
   function hasMime(value: string): boolean {
@@ -121,23 +119,18 @@
     <div class="dlg-body">
       <fieldset class="field">
         <legend>File types</legend>
-        {#each mimeGroups as group (group.name)}
-          <div class="mime-group">
-            <span class="mime-group-name">{group.name}</span>
-            <div class="mime-options">
-              {#each group.options as opt (opt.value)}
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    checked={hasMime(opt.value)}
-                    onchange={() => toggleMime(opt.value)}
-                  />
-                  <span>{opt.label}</span>
-                </label>
-              {/each}
-            </div>
-          </div>
-        {/each}
+        <div class="mime-options">
+          {#each MIME_TYPE_OPTIONS as opt (opt.value)}
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={hasMime(opt.value)}
+                onchange={() => toggleMime(opt.value)}
+              />
+              <span>{opt.label}</span>
+            </label>
+          {/each}
+        </div>
         <div class="tag-add">
           <input
             class="text-input"
@@ -158,7 +151,7 @@
           <div class="tags">
             {#each draft.mimeTypes as mime (mime)}
               <span class="tag">
-                {mime}
+                {mimeLabelMap.get(mime) ?? mime}
                 <button class="tag-remove" type="button" aria-label={`Remove ${mime}`} onclick={() => removeMime(mime)}>×</button>
               </span>
             {/each}
@@ -321,15 +314,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
-  }
-  .mime-group {
-    margin-bottom: 8px;
-  }
-  .mime-group-name {
-    display: block;
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-bottom: 4px;
   }
   .mime-options {
     display: flex;
