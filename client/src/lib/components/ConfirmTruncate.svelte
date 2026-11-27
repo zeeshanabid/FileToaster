@@ -306,12 +306,19 @@
     transition: background 100ms ease, color 100ms ease;
   }
   .modal-btn.cancel {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
+    background: #f1f5f9;
+    border: 1px solid #94a3b8;
+    color: #0f172a;
   }
   .modal-btn.cancel:hover {
-    background: var(--surface-soft);
+    background: #e2e8f0;
+    border-color: #818cf8;
+    color: #0f172a;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.15);
+  }
+  .modal-btn.cancel:active {
+    transform: scale(0.98);
+    background: #cbd5e1;
   }
   .modal-btn.confirm {
     background: var(--accent-strong);

@@ -442,14 +442,21 @@
   }
   .dlg-reset,
   .dlg-cancel {
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--border);
+    color: #0f172a;
+    background: #f1f5f9;
+    border: 1px solid #94a3b8;
   }
   .dlg-reset:hover,
   .dlg-cancel:hover {
-    color: var(--accent-strong);
-    border-color: var(--accent-strong);
+    color: #0f172a;
+    border-color: #818cf8;
+    background: #e2e8f0;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.15);
+  }
+  .dlg-reset:active,
+  .dlg-cancel:active {
+    transform: scale(0.98);
+    background: #cbd5e1;
   }
   .dlg-apply {
     color: #fff;
