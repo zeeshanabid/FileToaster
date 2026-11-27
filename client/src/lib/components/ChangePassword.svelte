@@ -191,12 +191,13 @@
   }
   .error-wrap {
     flex: none;
-    min-height: 30px;
-    padding: 2px 16px;
+    min-height: 40px;
+    padding: 0 16px;
   }
   .error {
     margin: 0;
     font-size: 13px;
+    line-height: 1.5;
     color: var(--alert-strong);
     background: rgba(244, 63, 94, 0.10);
     border: 1px solid var(--alert);
@@ -206,6 +207,7 @@
   .success {
     margin: 0;
     font-size: 13px;
+    line-height: 1.5;
     color: #047857;
     background: rgba(16, 185, 129, 0.14);
     border: 1px solid var(--ok-strong);

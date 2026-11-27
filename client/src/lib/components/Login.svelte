@@ -95,17 +95,19 @@
 
   .error-wrap {
     /* Reserve fixed height so the error never shifts the inputs/form layout. */
-    min-height: 30px;
+    min-height: 38px;
   }
 
   .error {
     margin: 0;
     font-size: 13px;
-    color: var(--alert);
-    background: rgba(251, 113, 133, 0.12);
-    border: 1px solid rgba(251, 113, 133, 0.3);
+    line-height: 1.5;
+    color: #ffe4e6;
+    background: rgba(244, 63, 94, 0.16);
+    border: 1px solid rgba(244, 63, 94, 0.45);
     border-radius: 10px;
     padding: 8px 12px;
+    backdrop-filter: blur(6px);
   }
 
   .field {
