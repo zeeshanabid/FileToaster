@@ -230,21 +230,22 @@
     font: inherit;
     font-size: 13px;
     font-weight: 600;
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--border);
+    color: #0f172a;
+    background: #f1f5f9;
+    border: 1px solid #94a3b8;
     border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
   }
   .dlg-cancel:hover {
-    color: var(--accent-strong);
-    border-color: var(--accent-strong);
-    background: var(--surface-soft);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    color: #0f172a;
+    border-color: #818cf8;
+    background: #e2e8f0;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.15);
   }
   .dlg-cancel:active {
     transform: scale(0.98);
+    background: #cbd5e1;
   }
   .dlg-delete {
     height: 32px;

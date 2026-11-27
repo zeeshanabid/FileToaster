@@ -69,19 +69,18 @@
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') close(); }} />
 
 {#if open}
-  <div class="scrim" role="dialog" aria-modal="true" aria-labelledby="cp-title" tabindex="-1" onkeydown={(e) => e.key === 'Escape' && close()} onclick={close}>
-    <!-- The form stops clicks from bubbling to the backdrop close handler. -->
+  <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="cp-title" tabindex="-1" onkeydown={(e) => e.key === 'Escape' && close()} onclick={close}>
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <form class="dialog" onsubmit={submit} onclick={(e) => e.stopPropagation()}>
-      <div class="header">
-        <h2 id="cp-title" class="title">Change password</h2>
-        <button type="button" class="icon-close" aria-label="Close" onclick={close}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="100%" height="100%">
-            <path d="M6 6l12 12M18 6L6 18" />
+      <header class="dlg-header">
+        <h2 id="cp-title" class="dlg-title">Change password</h2>
+        <button type="button" class="dlg-close" aria-label="Close" onclick={close}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
+            <path d="M7 7l10 10M17 7L7 17" />
           </svg>
         </button>
-      </div>
+      </header>
 
       <div class="error-wrap">
         {#if $auth.error}
@@ -95,17 +94,19 @@
         {/if}
       </div>
 
-      <div class="field">
-        <label for="cp-current">Current password</label>
-        <input id="cp-current" bind:this={currentInput} type="password" bind:value={current} autocomplete="current-password" />
-      </div>
-      <div class="field">
-        <label for="cp-new">New password</label>
-        <input id="cp-new" type="password" bind:value={newPassword} autocomplete="new-password" />
-      </div>
-      <div class="field">
-        <label for="cp-confirm">Confirm new password</label>
-        <input id="cp-confirm" type="password" bind:value={confirmPassword} autocomplete="new-password" />
+      <div class="dlg-body">
+        <div class="field">
+          <label for="cp-current">Current password</label>
+          <input id="cp-current" bind:this={currentInput} type="password" bind:value={current} autocomplete="current-password" class="text-input" />
+        </div>
+        <div class="field">
+          <label for="cp-new">New password</label>
+          <input id="cp-new" type="password" bind:value={newPassword} autocomplete="new-password" class="text-input" />
+        </div>
+        <div class="field">
+          <label for="cp-confirm">Confirm new password</label>
+          <input id="cp-confirm" type="password" bind:value={confirmPassword} autocomplete="new-password" class="text-input" />
+        </div>
       </div>
 
       <p class="warning">
@@ -114,186 +115,218 @@
         Remove the variable (or set <code>admin_password_hash</code> in the config) and restart the server.
       </p>
 
-      <div class="actions">
-        <button type="button" class="cancel" onclick={close}>Cancel</button>
+      <footer class="dlg-footer">
+        <button type="button" class="dlg-cancel" onclick={close}>Cancel</button>
         {#if feedback.kind === 'success'}
-          <button type="button" class="apply" onclick={close}>Done</button>
+          <button type="button" class="dlg-apply" onclick={close}>Done</button>
         {:else}
-          <button type="submit" disabled={busy} class="apply">
+          <button type="submit" disabled={busy} class="dlg-apply">
             {busy ? 'Changing…' : 'Change password'}
           </button>
         {/if}
-      </div>
+      </footer>
     </form>
   </div>
 {/if}
 
 <style>
-  .scrim {
+  .overlay {
     position: fixed;
     inset: 0;
-    z-index: 1000;
     display: grid;
     place-items: center;
-    padding: 20px;
-    background: rgba(2, 6, 23, 0.6);
-    backdrop-filter: blur(4px);
-    animation: cp-fade 0.15s ease-out;
-  }
-  @keyframes cp-fade {
-    from {
-      opacity: 0;
-    }
+    background: rgba(11, 17, 32, 0.5);
+    backdrop-filter: blur(2px);
+    z-index: 1000;
+    padding: 24px;
   }
   .dialog {
-    width: 100%;
-    max-width: 380px;
-    padding: 24px 24px 20px;
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid var(--taskbar-border);
-    border-radius: 20px;
-    backdrop-filter: blur(16px);
-    box-shadow: var(--shadow-popover);
-    color: var(--taskbar-text);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    width: 100%;
+    max-width: 504px;
+    max-height: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow-popover);
+    overflow: hidden;
+    outline: none;
   }
-  .header {
+  .dlg-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 10px;
+    height: 48px;
+    padding: 0 12px;
+    background: var(--surface-soft);
+    border-bottom: 1px solid var(--border);
+    flex: none;
   }
-  .title {
+  .dlg-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
     margin: 0;
-    font-size: 18px;
-    font-weight: 700;
-    color: #fff;
   }
-  .icon-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
+  .dlg-close {
+    display: grid;
+    place-items: center;
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
     background: transparent;
     border: none;
-    border-radius: 9px;
-    color: var(--taskbar-muted);
+    border-radius: 8px;
+    color: var(--text-muted);
     cursor: pointer;
   }
-  .icon-close:hover {
-    background: var(--taskbar-hover);
-    color: var(--taskbar-text);
+  .dlg-close:hover {
+    background: var(--alert);
+    color: #fff;
   }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--taskbar-muted);
-  }
-  .field input {
-    width: 100%;
-    height: 40px;
-    padding: 0 12px;
-    background: var(--surface-inset);
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
-    color: var(--text);
-    font-size: 15px;
-  }
-  .field input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.25);
+  .dlg-close svg {
+    width: 14px;
+    height: 14px;
   }
   .error-wrap {
-    /* Fixed height so an appearing or cleared message never shifts the form. */
-    min-height: 30px;
+    flex: none;
+    min-height: 40px;
+    padding: 0 16px;
   }
   .error {
     margin: 0;
     font-size: 13px;
-    color: var(--alert);
-    background: rgba(251, 113, 133, 0.12);
-    border: 1px solid rgba(251, 113, 133, 0.3);
+    line-height: 1.5;
+    color: var(--alert-strong);
+    background: rgba(244, 63, 94, 0.10);
+    border: 1px solid var(--alert);
     border-radius: 10px;
     padding: 8px 12px;
   }
   .success {
     margin: 0;
     font-size: 13px;
-    color: var(--ok-strong);
-    background: rgba(52, 211, 153, 0.12);
-    border: 1px solid rgba(52, 211, 153, 0.35);
+    line-height: 1.5;
+    color: #047857;
+    background: rgba(16, 185, 129, 0.14);
+    border: 1px solid var(--ok-strong);
     border-radius: 10px;
     padding: 8px 12px;
   }
+  .dlg-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 16px 14px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 10px 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .field:first-child {
+    margin-top: 0;
+  }
+  .field label {
+    font-weight: 600;
+  }
+  .field .text-input {
+    width: 100%;
+  }
+  .text-input {
+    height: 30px;
+    padding: 0 8px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 7px;
+    outline: none;
+    min-width: 0;
+  }
+  .text-input:focus {
+    border-color: var(--accent-strong);
+  }
   .warning {
-    margin: 0;
-    font-size: 12px;
+    flex: none;
+    margin: 0 16px;
+    padding: 12px 14px;
+    font-size: 13px;
     line-height: 1.5;
-    color: var(--taskbar-muted);
-    background: rgba(251, 191, 36, 0.08);
-    border: 1px solid rgba(251, 191, 36, 0.25);
+    color: var(--text);
+    background: rgba(251, 191, 36, 0.16);
+    border: 1px solid var(--warn);
     border-radius: 10px;
-    padding: 10px 12px;
   }
   .warning code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
-    color: var(--warn);
+    color: var(--accent-strong);
+    background: rgba(129, 140, 248, 0.16);
+    padding: 1px 5px;
+    border-radius: 5px;
   }
-  .actions {
+  .dlg-footer {
     display: flex;
-    gap: 10px;
     justify-content: flex-end;
-    margin-top: 2px;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-soft);
+    flex: none;
   }
-  .cancel {
-    height: 40px;
-    padding: 0 16px;
-    background: var(--taskbar-hover);
-    border: 1px solid var(--taskbar-border);
-    border-radius: 10px;
-    color: var(--taskbar-text);
-    font-size: 14px;
+  .dlg-cancel {
+    height: 32px;
+    padding: 0 18px;
+    font: inherit;
+    font-size: 13px;
     font-weight: 600;
+    color: #0f172a;
+    background: #f1f5f9;
+    border: 1px solid #94a3b8;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .dlg-cancel:hover {
+    color: #0f172a;
+    border-color: #818cf8;
+    background: #e2e8f0;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.15);
+  }
+  .dlg-cancel:active {
+    transform: scale(0.98);
+    background: #cbd5e1;
+  }
+  .dlg-apply {
+    height: 32px;
+    padding: 0 18px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
-  .cancel:hover {
-    background: rgba(255, 255, 255, 0.16);
+  .dlg-apply:hover:not(:disabled) {
+    background: var(--accent-strong);
     border-color: var(--accent-strong);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
   }
-  .cancel:active {
+  .dlg-apply:active:not(:disabled) {
     transform: scale(0.98);
   }
-  .apply {
-    height: 40px;
-    padding: 0 18px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-    border: none;
-    border-radius: 10px;
-    color: #fff;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
-  }
-  .apply:hover:not(:disabled) {
-    filter: brightness(1.07);
-    box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.4);
-  }
-  .apply:active:not(:disabled) {
-    transform: scale(0.98);
-  }
-  .apply:disabled {
-    opacity: 0.65;
-    cursor: progress;
+  .dlg-apply:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
     transform: none;
   }
 </style>

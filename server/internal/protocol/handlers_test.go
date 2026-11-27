@@ -348,6 +348,34 @@ func TestServeCancelUnknown(t *testing.T) {
 	}
 }
 
+// TestServeCancelFinished verifies cancelling a task that already finished is a
+// success rather than 404. A client that cancels an already-completed search (for
+// example when it closes or restarts a search bar) must not see a spurious
+// "task not found".
+func TestServeCancelFinished(t *testing.T) {
+	h := newCopyService(t.TempDir())
+	h.svc.Register("quick", service.Op{
+		Prepare: func(body []byte) (any, []byte, error) { return struct{}{}, nil, nil },
+		Run:     func(ctx context.Context, spec any, prog *task.Progression) error { return nil },
+	})
+	t0, err := h.svc.Submit("quick", nil)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	waitFor(t, func() bool {
+		s := h.svc.Get(t0.ID)
+		return s != nil && s.Status == task.StatusFinished
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/tasks/{id}/cancel", http.HandlerFunc(h.srv.ServeCancel))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/"+t0.ID+"/cancel", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel finished status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestServeEventsSSE(t *testing.T) {
 	parent := t.TempDir()
 	src := filepath.Join(parent, "src")

@@ -8,12 +8,24 @@
     isActiveWindow,
     openWindow,
     reloadWindowsForPath,
+    requestReveal,
+    takeReveal,
     toggleMinimize,
     updateWindow,
     windows,
     type AppWindow
   } from '$lib/store/windows';
-  import { downloadFile, type Entry, fetchInfo, type FileInfo, mkdirDirectory, renameFile } from '$lib/fs/api';
+  import { cancelTask, downloadFile, type Entry, fetchInfo, type FileInfo, mkdirDirectory, renameFile, submitSearch } from '$lib/fs/api';
+  import {
+    beginSearch,
+    buildSearchRequest,
+    defaultAdvancedFilters,
+    getSearchSession,
+    hasAdvancedFilters,
+    removeSearch,
+    searchSessions,
+    type AdvancedFilters
+  } from '$lib/store/search';
   import { tree } from '$lib/fs/tree';
 import {
   uploadManager,
@@ -46,8 +58,9 @@ import ConfirmDropMode from './ConfirmDropMode.svelte';
 import Portal from './Portal.svelte';
 import ConfirmCompress from './ConfirmCompress.svelte';
 import ConfirmDecompress from './ConfirmDecompress.svelte';
-import ConfirmTruncate from './ConfirmTruncate.svelte';
-import { formatSize, formatDate, getFileType } from '$lib/fs/format';
+  import ConfirmTruncate from './ConfirmTruncate.svelte';
+  import AdvancedSearch from './AdvancedSearch.svelte';
+  import { formatSize, formatDate, getFileType } from '$lib/fs/format';
 
   let { window: winProp }: { window: AppWindow } = $props();
 
@@ -75,6 +88,13 @@ import { formatSize, formatDate, getFileType } from '$lib/fs/format';
   });
   onDestroy(() => {
     stop?.();
+    // Cancel a search still running when the window closes.
+    if (searchTaskID) {
+      const id = searchTaskID;
+      searchTaskID = null;
+      cancelSearchIfRunning(id);
+      removeSearch(id);
+    }
     document.removeEventListener('click', dismissUploadMenu);
     window.removeEventListener('keydown', onWindowKeydown);
     window.removeEventListener('filetoaster:reload', onReloadEvent as EventListener);
@@ -162,12 +182,162 @@ import { formatSize, formatDate, getFileType } from '$lib/fs/format';
   }
 
   // --- data: main listing view state (derived from the store's `path`) ---
-  let entries = $state<Entry[]>([]);
+  // `dirEntries` is the current folder's listing; `entries` (derived below) is
+  // the set actually shown, which becomes the search results while a search is
+  // active.
+  let dirEntries = $state<Entry[]>([]);
   let mainLoading = $state(false);
   let mainError = $state<string | null>(null);
   // Bound to the scrolling listing container so keyboard navigation can keep
   // the cursor row in view (scoped to this window, never another one).
   let contentEl: HTMLElement | null = $state(null);
+
+  // --- search: a tracked task that streams matches over SSE -------------------
+  // The toolbar's search button reveals an inline search bar; while a query is
+  // present the results replace the folder listing (in the same sortable table,
+  // so every selection action works on them). Each search is a tracked task, so
+  // it appears in the task panel with live progress and can be cancelled.
+  let searchActive = $state(false);
+  let searchQuery = $state('');
+  let searchTaskID = $state<string | null>(null);
+  let advancedOpen = $state(false);
+  let advancedFilters = $state<AdvancedFilters>(defaultAdvancedFilters());
+  let searchInputEl: HTMLInputElement | null = $state(null);
+  let searchExecuted = $state(false); // Track if search has been executed at least once
+  // Monotonic submit generation: bumped on every runSearch so a slower, older
+  // submit that resolves after a newer one is cancelled instead of being adopted.
+  let searchSeq = 0;
+
+  // searchSession is this window's live session for its current search task.
+  const searchSession = $derived(searchTaskID ? $searchSessions[searchTaskID] ?? null : null);
+  const searchRunning = $derived(!!searchSession && searchSession.status === 'running');
+  // `showSearchResults` gates the listing swap: show search results only after search has been executed.
+  const showSearchResults = $derived(searchActive && searchExecuted);
+  const searchResults = $derived<Entry[]>(searchSession ? searchSession.results : []);
+  // `entries` is the set the listing actually renders: the search results while
+  // a search is shown, otherwise the folder listing.
+  const entries = $derived<Entry[]>(showSearchResults ? searchResults : dirEntries);
+
+  function toggleSearch() {
+    if (searchActive) {
+      closeSearch();
+    } else {
+      searchActive = true;
+      searchExecuted = false;
+      requestAnimationFrame(() => searchInputEl?.focus());
+    }
+  }
+
+  function onSearchInput() {
+    // No live search - only search on Enter or search button press
+  }
+
+  function onSearchKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void runSearch();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSearch();
+    }
+  }
+
+  // stopSearchTask cancels the current search task if it is still running and
+  // drops its session. Cancelling an already-finished search is skipped: the task
+  // is terminal server-side, so the request would be a pointless round-trip (and
+  // previously surfaced as a spurious 404).
+  function stopSearchTask() {
+    const id = searchTaskID;
+    searchTaskID = null;
+    if (id) {
+      // Decide on cancellation from the live session before dropping it, so a
+      // still-running task is stopped while a finished one is left alone.
+      cancelSearchIfRunning(id);
+      removeSearch(id);
+    }
+  }
+
+  // cancelSearchIfRunning asks the server to stop a search only while its session
+  // is still running. A finished/failed/cancelled search has nothing left to
+  // stop, so no cancel request is sent.
+  function cancelSearchIfRunning(id: string) {
+    const session = getSearchSession(id);
+    if (session && session.status === 'running') {
+      void cancelTask(id).catch(() => {});
+    }
+  }
+
+  // closeSearch cancels the search and restores the normal folder view.
+  function closeSearch() {
+    stopSearchTask();
+    searchActive = false;
+    searchQuery = '';
+    searchExecuted = false;
+    clearSelection();
+  }
+
+  // runSearch submits (or restarts) the search for the current query + filters.
+  // A blank query with no filters cancels any running search. A monotonic
+  // generation guards against overlapping submits: if a newer search starts while
+  // an earlier submit is still in flight, the stale task is cancelled so only the
+  // latest search for this window keeps running.
+  async function runSearch() {
+    const query = searchQuery.trim();
+    if (!query && !hasAdvancedFilters(advancedFilters)) {
+      stopSearchTask();
+      return;
+    }
+    const seq = ++searchSeq;
+    // Cancel the previous search before starting a new one.
+    if (searchTaskID) {
+      const prev = searchTaskID;
+      searchTaskID = null;
+      cancelSearchIfRunning(prev);
+      removeSearch(prev);
+    }
+    const root = win ? win.path : winProp.path;
+    try {
+      const res = await submitSearch(buildSearchRequest(advancedFilters, query, root));
+      if (seq !== searchSeq) {
+        // A newer search superseded this submit while it was in flight: stop the
+        // one we just started so two searches never run in the same window.
+        if (res.taskID) {
+          cancelSearchIfRunning(res.taskID);
+          removeSearch(res.taskID);
+        }
+        return;
+      }
+      if (res.taskID) {
+        beginSearch(res.taskID, { rootPath: root, query });
+        searchTaskID = res.taskID;
+        searchActive = true;
+        searchExecuted = true;
+      }
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'could not search');
+    }
+  }
+
+  function openAdvancedSearch() {
+    advancedOpen = true;
+  }
+  function closeAdvancedSearch() {
+    advancedOpen = false;
+  }
+  function applyAdvancedSearch(filters: AdvancedFilters) {
+    advancedFilters = filters;
+    advancedOpen = false;
+    if (!searchActive) searchActive = true;
+    void runSearch();
+  }
+
+  // openContainingDirectory opens the folder that holds a search result in a new
+  // window and asks it to select and scroll to the item.
+  function openContainingDirectory(item: { path: string }) {
+    const parent = dirname(item.path);
+    openWindow({ name: winProp.name, path: parent, rootPath: winProp.rootPath });
+    requestReveal(parent, item.path);
+  }
 
 type SortKey = 'name' | 'type' | 'size' | 'created' | 'updated';
 const SORT_KEYS: SortKey[] = ['name', 'type', 'size', 'created', 'updated'];
@@ -374,6 +544,12 @@ const SORT_KEYS: SortKey[] = ['name', 'type', 'size', 'created', 'updated'];
           const rootPath = winProp.rootPath;
           // Use the root's display name (winProp.name) not the target directory's name
           openWindow({ name: winProp.name, path: targetPath, rootPath });
+        }
+        break;
+      case 'open-containing-directory':
+        // Search result: open the folder that contains the item in a new window.
+        if (menuSelection.length > 0) {
+          openContainingDirectory(menuSelection[0]);
         }
         break;
       case 'up':
@@ -1116,7 +1292,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   // The tree is anchored at the window's root and never re-rooted on navigation.
   // The title bar shows the currently opened folder; the store's `name` stays as
   // the window's display name (the root label) and never changes after open.
-  let title = $derived(win ? displayName(win) : winProp.name);
+  // While a search is shown it becomes the search-result label instead.
+  let title = $derived(
+    showSearchResults ? `Search results: "${searchQuery.trim()}"` : win ? displayName(win) : winProp.name
+  );
 
   // Navigate to `path`: it becomes the active folder (store `path`), the tree
   // expands root..path (lazy child-load, cached), and the main listing reloads.
@@ -1127,6 +1306,13 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   async function navigate(path: string): Promise<void> {
     const root = winProp.rootPath;
     if (!isWithin(path, root)) return;
+    // Navigating away from a search result exits search mode (the open folder,
+    // not the result set, becomes the view).
+    if (searchActive) {
+      stopSearchTask();
+      searchActive = false;
+      searchQuery = '';
+    }
     const seq = ++navSeq;
     clearSelection();
     try {
@@ -1134,9 +1320,15 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       mainError = null;
       const listing = await tree.navigate(winProp.id, path, root);
       if (seq !== navSeq) return;
-      entries = listing.entries;
+      dirEntries = listing.entries;
       updateWindow(winProp.id, { path });
       frame += 1;
+      // A pending "open containing directory" reveals and selects its item.
+      const revealPath = takeReveal(path);
+      if (revealPath && dirEntries.some((e) => e.path === revealPath)) {
+        selectOnly(revealPath);
+        scrollPathIntoView(revealPath);
+      }
     } catch (err) {
       if (seq !== navSeq) return;
       mainError = err instanceof Error ? err.message : 'could not open this folder';
@@ -1228,6 +1420,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       compressOpen ||
       decompressOpen ||
       truncateOpen ||
+      advancedOpen ||
       menuOpen ||
       uploadMenuOpen
     ) {
@@ -1304,6 +1497,10 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
         case 'u':
           e.preventDefault();
           startDecompress();
+          return;
+        case 's':
+          e.preventDefault();
+          toggleSearch();
           return;
         case 'm':
           e.preventDefault();
@@ -1395,6 +1592,11 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
   // A per-path reentrancy guard prevents concurrent reloads for the same path
   // while allowing different paths to reload simultaneously.
   async function reload(path?: string) {
+    // While search results are shown, Reload re-runs the current search.
+    if (!path && showSearchResults) {
+      void runSearch();
+      return;
+    }
     const targetPath = path ?? win?.path;
     if (!targetPath || reloading.has(targetPath)) return;
     reloading.add(targetPath);
@@ -1403,7 +1605,7 @@ async function readTransfer(dt: DataTransfer): Promise<DnDItem[]> {
       mainError = null;
       const listing = await tree.refresh(targetPath);
       if (targetPath === win?.path) {
-        entries = listing.entries;
+        dirEntries = listing.entries;
       }
       frame += 1;
     } catch (err) {
@@ -1906,16 +2108,80 @@ function headerLabel(key: SortKey): string {
           <path d="M7 7l3 3 7-7" />
         </svg>
       </button>
-      <button class="tool info" type="button" title="Information" aria-label="Information" disabled={selected.size === 0} onclick={() => openInfo()}>
-       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
-         <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
-         <path d="M12 16v-4M12 8h.01" />
-       </svg>
-       {#if selected.size > 0}
-         <span class="badge" aria-hidden="true">{selected.size}</span>
-       {/if}
-     </button>
-   </div>
+<button class="tool info" type="button" title="Information" aria-label="Information" disabled={selected.size === 0} onclick={() => openInfo()}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
+          <path d="M12 16v-4M12 8h.01" />
+        </svg>
+        {#if selected.size > 0}
+          <span class="badge" aria-hidden="true">{selected.size}</span>
+        {/if}
+      </button>
+      <button
+        class="tool search"
+        class:active={searchActive}
+        type="button"
+        title="Search this folder (Ctrl+Alt+S)"
+        aria-label="Search"
+        onclick={toggleSearch}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.2-3.2" />
+        </svg>
+      </button>
+    </div>
+
+{#if searchActive}
+      <div class="searchbar" role="search">
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.2-3.2" />
+          </svg>
+        </span>
+        <input
+          class="search-input"
+          type="text"
+          bind:this={searchInputEl}
+          bind:value={searchQuery}
+          oninput={onSearchInput}
+          onkeydown={onSearchKeydown}
+          placeholder="Search this folder and subfolders…"
+          aria-label="Search query"
+          data-testid="search-input"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        {#if searchRunning}
+          <span class="search-spinner" role="status" aria-label="Searching" data-testid="search-spinner"></span>
+        {:else}
+          {#if showSearchResults}
+            <span class="search-count" data-testid="search-count">
+              {entries.length} {entries.length === 1 ? 'result' : 'results'}
+            </span>
+          {/if}
+          <button class="search-tool" type="button" title="Search" aria-label="Search" data-testid="search-execute" onclick={runSearch}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+        {/if}
+        <button class="search-tool" type="button" title="Advanced search" aria-label="Advanced search" data-testid="advanced-search" onclick={openAdvancedSearch} style="position: relative;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%">
+            <path d="M4 6h16M7 12h10M10 18h4" />
+          </svg>
+          {#if hasAdvancedFilters(advancedFilters)}
+            <span class="filter-dot" aria-hidden="true"></span>
+          {/if}
+        </button>
+        <button class="search-tool" type="button" title="Close search" aria-label="Close search" data-testid="close-search" onclick={closeSearch}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" width="100%" height="100%">
+            <path d="M7 7l10 10M17 7L7 17" />
+          </svg>
+        </button>
+      </div>
+    {/if}
 
   <main class="body">
     <aside class="tree" aria-label="Folder tree" style="width:{treeWidth}px">
@@ -1978,12 +2244,20 @@ function headerLabel(key: SortKey): string {
 
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="content" bind:this={contentEl} onclick={clearSelectionIfBackground} oncontextmenu={onEmptyContextMenu}>
-      {#if mainLoading && entries.length === 0}
+      {#if searchActive && !searchExecuted}
+        <div class="empty search-hint" data-testid="search-hint">
+          Type in the search box and press Search or "Enter"
+        </div>
+      {:else if showSearchResults && searchRunning && rows.length === 0}
+        <div class="empty" data-testid="search-searching">Searching…</div>
+      {:else if mainLoading && entries.length === 0}
         <div class="empty">Loading…</div>
-      {:else if mainError}
+      {:else if mainError && !showSearchResults}
         <div class="error">{mainError}</div>
       {:else if rows.length === 0}
-        {#if editingNew}
+        {#if showSearchResults}
+          <div class="empty" data-testid="search-empty">No results for “{searchQuery.trim()}”.</div>
+        {:else if editingNew}
           {@render newFolderInput()}
         {:else}
           <div class="empty">This folder is empty.</div>
@@ -2124,6 +2398,16 @@ function headerLabel(key: SortKey): string {
     </Portal>
   {/if}
 
+  {#if advancedOpen}
+    <Portal>
+      <AdvancedSearch
+        filters={advancedFilters}
+        onApply={applyAdvancedSearch}
+        onClose={closeAdvancedSearch}
+      />
+    </Portal>
+  {/if}
+
   <ContextMenu
     open={menuOpen}
     x={menuX}
@@ -2134,6 +2418,7 @@ function headerLabel(key: SortKey): string {
     canPaste={$clipboard.length > 0}
     canSelectAll={entries.length > 0}
     canGoUp={!isAtRoot}
+    searchActive={showSearchResults}
     onClose={closeContextMenu}
     onAction={onContextAction}
   />
@@ -2294,6 +2579,101 @@ function headerLabel(key: SortKey): string {
   }
   .tool.info {
     position: relative;
+  }
+  .tool.search {
+    margin-left: auto;
+    color: var(--text-muted);
+  }
+  .tool.search.active {
+    color: var(--accent-strong);
+    background: var(--surface-inset);
+  }
+  .searchbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 11px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+  .search-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+  }
+  .search-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .search-input {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 8px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--surface-soft);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    outline: none;
+  }
+  .search-input:focus {
+    border-color: var(--accent-strong);
+  }
+  .search-tool {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .search-tool:hover {
+    background: var(--surface-inset);
+    color: var(--text);
+  }
+  .search-tool svg {
+    width: 15px;
+    height: 15px;
+  }
+  .search-count {
+    flex: none;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .search-spinner {
+    flex: none;
+    width: 15px;
+    height: 15px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent-strong);
+    border-radius: 50%;
+    animation: search-spin 0.7s linear infinite;
+  }
+  @keyframes search-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .filter-dot {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 8px;
+    height: 8px;
+    background: var(--alert);
+    border-radius: 50%;
   }
   .badge {
     position: absolute;

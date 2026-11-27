@@ -24,6 +24,7 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   { modifiers: ['CTRL', 'ALT'], key: 'T', description: 'Open or close the tasks list' },
   { modifiers: ['CTRL', 'ALT'], key: 'Z', description: 'Compress the selected items' },
   { modifiers: ['CTRL', 'ALT'], key: 'U', description: 'Extract the selected archive' },
+  { modifiers: ['CTRL', 'ALT'], key: 'S', description: 'Toggle search bar' },
   { modifiers: ['CTRL', 'ALT'], key: 'M', description: 'Rename the selected items' },
   { modifiers: ['CTRL', 'ALT'], key: '↑', description: 'Go up one directory' },
   { modifiers: [], key: '↑ / ↓', description: 'Select the previous or next item' },

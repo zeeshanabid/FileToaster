@@ -201,6 +201,11 @@ func (p *Pool) execute(j job) {
 			p.hub.Publish(t)
 		}
 	})
+	// Non-task events (e.g. a streamed search match) are forwarded to the SSE
+	// hub scoped to this task's id so subscribers only see their own events.
+	prog.SetEventSink(func(name string, data []byte) {
+		p.hub.PublishEvent(&Event{TaskID: j.id, Name: name, Data: data})
+	})
 
 	t := p.store.Get(j.id)
 	p.store.SetStatus(j.id, StatusRunning, "")
@@ -228,7 +233,10 @@ func (p *Pool) execute(j job) {
 
 // Cancel asks a running task to stop (its runner's context is cancelled) or, if
 // it is still queued, removes it from the queue. It returns whether the task was
-// known. A task already terminal is not re-cancelled.
+// known. A task already terminal is not re-cancelled: cancelling a task that has
+// already finished/failed/been cancelled is a no-op success (the caller asked for
+// a stopped task and there is one), so a client that races a search's completion
+// does not get a spurious 404. Only an id the pool has never seen is ErrNotFound.
 func (p *Pool) Cancel(id string) error {
 	p.mu.Lock()
 	if cancel, ok := p.cancels[id]; ok {
@@ -246,6 +254,11 @@ func (p *Pool) Cancel(id string) error {
 		}
 	}
 	p.mu.Unlock()
+	// Not in flight. If the task exists it has already reached a terminal state,
+	// so there is nothing left to cancel; report success rather than 404.
+	if t := p.store.Get(id); t != nil && t.Status.IsTerminal() {
+		return nil
+	}
 	return ErrNotFound
 }
 

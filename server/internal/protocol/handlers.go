@@ -37,6 +37,10 @@ const maxCompressRequestSize = 4 << 20 // 4 MiB
 // above any realistic selection without allowing unbounded reads.
 const maxTruncateRequestSize = 4 << 20 // 4 MiB
 
+// maxSearchRequestSize bounds the search request body (a root path, query, and
+// filter lists) far above any realistic request without allowing unbounded reads.
+const maxSearchRequestSize = 1 << 20 // 1 MiB
+
 // maxUploadManifestSize bounds the upload-create request body (the file + dir
 // manifest) far above any realistic selection without allowing unbounded reads.
 const maxUploadManifestSize = 1 << 20 // 1 MiB
@@ -406,6 +410,67 @@ func truncateStatus(err error) (int, string) {
 	}
 }
 
+type searchRequest struct {
+	RootPath       string   `json:"rootPath"`
+	Query          string   `json:"query"`
+	MimeTypes      []string `json:"mimeTypes"`
+	Extensions     []string `json:"extensions"`
+	MinSize        int64    `json:"minSize"`
+	MaxSize        int64    `json:"maxSize"`
+	CreatedAfter   string   `json:"createdAfter"`
+	CreatedBefore  string   `json:"createdBefore"`
+	ModifiedAfter  string   `json:"modifiedAfter"`
+	ModifiedBefore string   `json:"modifiedBefore"`
+}
+
+// ServeSearch handles a search request: it enqueues a search task and returns its
+// id. The search runs on the pool and streams each match over the SSE stream as a
+// "search-result" event, so the results arrive incrementally while the task
+// reports its scan progress. A missing/blank search folder is rejected with 400.
+func (s *Server) ServeSearch(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSearchRequestSize))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+
+	var req searchRequest
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.RootPath) == "" {
+		writeError(w, http.StatusBadRequest, "the request requires a 'rootPath'")
+		return
+	}
+
+	taskRec, err := s.svc.Submit(service.SearchOperation, body)
+	if err != nil {
+		status, message := searchStatus(err)
+		writeError(w, status, message)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"taskID": taskRec.ID})
+}
+
+// searchStatus maps a search operation failure to an HTTP status and
+// user-facing message.
+func searchStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrOutsideRoots):
+		return http.StatusForbidden, "the search folder is outside the allowed folders"
+	case errors.Is(err, ops.SearchErrEmptyRoot),
+		errors.Is(err, ops.SearchErrEmptyCriteria),
+		errors.Is(err, ops.SearchErrNotDirectory),
+		errors.Is(err, ops.SearchErrInvalidSizeRange),
+		errors.Is(err, ops.SearchErrInvalidDate):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, task.ErrShuttingDown):
+		return http.StatusServiceUnavailable, "the server is shutting down; please try again later"
+	case errors.Is(err, service.ErrUnknownOperation):
+		return http.StatusInternalServerError, "the requested operation is not available"
+	default:
+		return http.StatusBadRequest, "could not search the selected folder"
+	}
+}
+
 // uploadCreateRequest is the body of POST /api/uploads: the destination folder,
 // the (optional) chunk size, the file manifest, and the list of relative dir
 // paths (including empty ones) to recreate on finalize.
@@ -770,6 +835,14 @@ func (s *Server) ServeEvents(w http.ResponseWriter, r *http.Request) {
 			// Flush after every event so the client sees progress in almost
 			// real time instead of waiting for the next keepalive tick.
 			flusher.Flush()
+		case ev, ok := <-sub.Events():
+			if !ok {
+				return
+			}
+			if err := writeSSEEvent(w, flusher, ev); err != nil {
+				return
+			}
+			flusher.Flush()
 		case <-ticker.C:
 			// A comment is ignored by SSE clients but keeps proxies/hop-alive alive.
 			_, _ = w.Write([]byte(": keepalive\n\n"))
@@ -787,6 +860,35 @@ func writeSSE(w io.Writer, flusher http.Flusher, t *task.Task) error {
 		return err
 	}
 	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	_, _ = io.WriteString(w, "\n\n")
+	return nil
+}
+
+// searchEventEnvelope is the SSE data payload for a non-task event. It carries
+// the task id the event belongs to (so a client can route a streamed search
+// match to the right window) alongside the event-specific payload.
+type searchEventEnvelope struct {
+	TaskID string          `json:"taskID"`
+	Data   json.RawMessage `json:"data"`
+}
+
+// writeSSEEvent writes one non-task event (e.g. a streamed search match) as an
+// SSE message wrapped in an envelope carrying the owning task id.
+func writeSSEEvent(w io.Writer, flusher http.Flusher, e *task.Event) error {
+	data := e.Data
+	if len(data) == 0 {
+		data = []byte("null")
+	}
+	payload, err := json.Marshal(searchEventEnvelope{TaskID: e.TaskID, Data: json.RawMessage(data)})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, "event: "+e.Name+"\ndata: "); err != nil {
+		return err
+	}
+	if _, err := w.Write(payload); err != nil {
 		return err
 	}
 	_, _ = io.WriteString(w, "\n\n")

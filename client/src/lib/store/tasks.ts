@@ -17,12 +17,15 @@ import {
   type CompressMeta,
   type DecompressMeta,
   type UploadMeta,
+  type SearchMeta,
+  type SearchResultItem,
   type TruncateResponse
 } from '$lib/fs/api';
 import { archiveStem } from '$lib/fs/archive';
 import { uploadStoreKey, uploadManager, type IngestState, globalChunkSpan } from '$lib/fs/upload';
 import { reloadWindowsForPath } from '$lib/store/windows';
 import { showTaskToast, taskNotification } from '$lib/store/notifications';
+import { appendSearchResult, completeSearch } from '$lib/store/search';
 
 // The task engine. `tasksMap` is the source of truth (id → task), kept current
 // by an initial snapshot from /api/tasks and then by deltas over the SSE stream
@@ -416,6 +419,11 @@ case 'decompress': {
       const n = meta?.items?.length ?? 1;
       return n === 1 ? 'Truncate' : `Truncate ${n} files`;
     }
+    case 'search': {
+      const meta = (task.meta ?? null) as SearchMeta | null;
+      const query = meta?.query?.trim();
+      return query ? `Search "${query}"` : 'Search';
+    }
     case 'upload': {
       // The finalize op's meta carries the phase flag ("finalizing", set when
       // the tracked copy begins) and the item count. During staging there is
@@ -540,11 +548,34 @@ function connect() {
 }
 
 function handleMessage(message: string) {
-  const task = parseSSEMessage(message);
+  const ev = parseSSEEvent(message);
+  if (!ev) return;
+  // Search results arrive as their own event type, scoped to a search task id by
+  // an envelope; route them to the per-search store and stop.
+  if (ev.event === 'search-result') {
+    routeSearchResult(ev.data);
+    return;
+  }
+  if (ev.event === 'search-complete') {
+    routeSearchComplete(ev.data);
+    return;
+  }
+  if (ev.event !== 'task') return;
+  const task = parseTask(ev.data);
   if (!task) return;
   // A cleared terminal task must not be resurrected by a delta that was already
   // in flight when the user pressed Clear.
   if (clearedTaskIDs.has(task.id)) return;
+
+  // Mark a search session terminal when its task reaches a terminal status. The
+  // task delta is the reliable completion signal (it also covers cancellation
+  // from the task panel), complementing the search-complete event.
+  if (
+    task.type === 'search' &&
+    (task.status === 'finished' || task.status === 'failed' || task.status === 'cancelled')
+  ) {
+    completeSearch(task.id, task.status, task.error);
+  }
   
   // Check if this is a new task (not already in the map)
   let isNewTask = false;
@@ -675,9 +706,10 @@ interface TruncateMeta {
 // Export getAffectedPaths so it can be unit-tested independently.
 export { getAffectedPaths };
 
-// parseSSEMessage decodes one raw SSE message ("event: task\ndata: {...}") into
-// a Task, or returns null for anything that is not a task event with valid JSON.
-export function parseSSEMessage(message: string): Task | null {
+// parseSSEEvent decodes one raw SSE message ("event: <name>\ndata: <payload>")
+// into its event name and data payload. It never fails: an unknown framing
+// yields the default "message" event with whatever data was present.
+export function parseSSEEvent(message: string): { event: string; data: string } {
   let event = 'message';
   let data = '';
   for (const line of message.split('\n')) {
@@ -687,12 +719,53 @@ export function parseSSEMessage(message: string): Task | null {
       data = line.slice(5).trimStart();
     }
   }
-  if (event !== 'task' || !data) return null;
+  return { event, data };
+}
+
+// parseTask decodes a task event's JSON payload, returning null on any failure.
+function parseTask(data: string): Task | null {
+  if (!data) return null;
   try {
     return JSON.parse(data) as Task;
   } catch {
     return null;
   }
+}
+
+// routeSearchResult routes a "search-result" event to its search session. The
+// event data is an envelope ({ taskID, data }) so the client knows which search
+// the match belongs to.
+function routeSearchResult(data: string): void {
+  if (!data) return;
+  try {
+    const env = JSON.parse(data) as { taskID?: string; data?: SearchResultItem };
+    if (env?.taskID && env.data) appendSearchResult(env.taskID, env.data);
+  } catch {
+    // ignore a malformed event
+  }
+}
+
+// routeSearchComplete marks a search session finished from the search-complete
+// event, refreshing its scanned/matches totals.
+function routeSearchComplete(data: string): void {
+  if (!data) return;
+  try {
+    const env = JSON.parse(data) as {
+      taskID?: string;
+      data?: { scanned?: number; matches?: number };
+    };
+    if (env?.taskID) completeSearch(env.taskID, 'finished', undefined, env.data);
+  } catch {
+    // ignore a malformed event
+  }
+}
+
+// parseSSEMessage decodes one raw SSE message ("event: task\ndata: {...}") into
+// a Task, or returns null for anything that is not a task event with valid JSON.
+export function parseSSEMessage(message: string): Task | null {
+  const { event, data } = parseSSEEvent(message);
+  if (event !== 'task') return null;
+  return parseTask(data);
 }
 
 function scheduleReconnect() {

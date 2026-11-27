@@ -6,6 +6,7 @@ import { taskList, initTasks, shutdownTasks, combinedTaskList, clearCompletedTas
 import { uploadManager, uploadStoreKey, type IngestState } from '$lib/fs/upload';
 import { listTasks, cancelTask, submitCopy } from '$lib/fs/api';
 import { reloadWindowsForPath } from '$lib/store/windows';
+import { beginSearch, getSearchSession, resetSearchStore } from '$lib/store/search';
 import type { Task } from '$lib/fs/api';
 
 // The live SSE path lives entirely inside tasks.ts and is exercised through the
@@ -89,6 +90,15 @@ function push(task: Task) {
   ctrl.enqueue(enc.encode(sseMessage(task)));
 }
 
+function pushRaw(message: string) {
+  if (!ctrl) throw new Error('sse stream not started');
+  ctrl.enqueue(enc.encode(message));
+}
+
+function sseSearchEvent(event: string, taskID: string, payload: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify({ taskID, data: payload })}\n\n`;
+}
+
 function delay(ms = 30) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -96,6 +106,7 @@ function delay(ms = 30) {
 beforeEach(() => {
     localStorage.clear();
     uploadManager.sessions.clear();
+    resetSearchStore();
     stubFetch();
     shutdownTasks();
     initTasks();
@@ -356,5 +367,70 @@ describe('upload staging task cleanup', () => {
 
     expect(uploadManager.sessions.has(state.taskID)).toBe(false);
     expect(localStorage.getItem(uploadStoreKey(state.taskID))).toBeNull();
+  });
+});
+
+describe('live SSE search results', () => {
+  it('routes a search-result event into the matching session', async () => {
+    await tick();
+    beginSearch('search-1', { rootPath: '/root', query: 'foo' });
+
+    pushRaw(
+      sseSearchEvent('search-result', 'search-1', {
+        path: '/root/foo.txt',
+        name: 'foo.txt',
+        type: 'file',
+        size: 12,
+        created: iso(),
+        modified: iso()
+      })
+    );
+    await tick();
+    await delay();
+
+    const session = getSearchSession('search-1');
+    expect(session).toBeDefined();
+    expect(session!.results.map((r) => r.name)).toEqual(['foo.txt']);
+    expect(session!.matches).toBe(1);
+  });
+
+  it('ignores a search-result for an unknown session', async () => {
+    await tick();
+    pushRaw(sseSearchEvent('search-result', 'ghost', { path: '/x', name: 'x', type: 'file' }));
+    await tick();
+    await delay();
+    expect(getSearchSession('ghost')).toBeUndefined();
+  });
+
+  it('marks the session finished on a search-complete event', async () => {
+    await tick();
+    beginSearch('search-2', { rootPath: '/root', query: 'bar' });
+
+    pushRaw(sseSearchEvent('search-complete', 'search-2', { scanned: 20, matches: 3 }));
+    await tick();
+    await delay();
+
+    const session = getSearchSession('search-2')!;
+    expect(session.status).toBe('finished');
+    expect(session.scanned).toBe(20);
+    expect(session.matches).toBe(3);
+  });
+
+  it('marks the session terminal when the search task reaches a terminal status', async () => {
+    await tick();
+    beginSearch('search-task', { rootPath: '/root', query: 'baz' });
+
+    push(copyTask({
+      id: 'search-task',
+      type: 'search',
+      status: 'finished',
+      progress: 100,
+      bytes: { total: 0, done: 0, filesTotal: 0, filesDone: 0, ratePerSec: 0 },
+      meta: { rootPath: '/root', query: 'baz' }
+    }));
+    await tick();
+    await delay();
+
+    expect(getSearchSession('search-task')!.status).toBe('finished');
   });
 });
