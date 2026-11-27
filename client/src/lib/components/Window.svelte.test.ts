@@ -3560,6 +3560,19 @@ describe('Window search', () => {
     expect(cancelTaskMock).toHaveBeenCalledWith('search-1');
   });
 
+  it('does not cancel a search that already finished when closing it', async () => {
+    await openAndRender();
+    await startSearch('report');
+    // The search completes (e.g. a very fast folder) before the user closes it.
+    completeSearch('search-1', 'finished', undefined, { scanned: 5, matches: 0 });
+    await tick();
+    fireEvent.click(screen.getByTestId('close-search'));
+    await tick();
+    expect(screen.queryByTestId('search-input')).not.toBeInTheDocument();
+    // Nothing is left to cancel, so no pointless (previously 404) request is sent.
+    expect(cancelTaskMock).not.toHaveBeenCalled();
+  });
+
   it('cancels the search when navigating to a folder', async () => {
     await openAndRender();
     await startSearch('report');

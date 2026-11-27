@@ -20,6 +20,7 @@
     beginSearch,
     buildSearchRequest,
     defaultAdvancedFilters,
+    getSearchSession,
     hasAdvancedFilters,
     removeSearch,
     searchSessions,
@@ -91,8 +92,8 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
     if (searchTaskID) {
       const id = searchTaskID;
       searchTaskID = null;
+      cancelSearchIfRunning(id);
       removeSearch(id);
-      void cancelTask(id).catch(() => {});
     }
     document.removeEventListener('click', dismissUploadMenu);
     window.removeEventListener('keydown', onWindowKeydown);
@@ -203,6 +204,9 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
   let advancedFilters = $state<AdvancedFilters>(defaultAdvancedFilters());
   let searchInputEl: HTMLInputElement | null = $state(null);
   let searchExecuted = $state(false); // Track if search has been executed at least once
+  // Monotonic submit generation: bumped on every runSearch so a slower, older
+  // submit that resolves after a newer one is cancelled instead of being adopted.
+  let searchSeq = 0;
 
   // searchSession is this window's live session for its current search task.
   const searchSession = $derived(searchTaskID ? $searchSessions[searchTaskID] ?? null : null);
@@ -238,13 +242,27 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
     }
   }
 
-  // stopSearchTask cancels the current search task and drops its session. The
-  // server-side cancel is best-effort (the task may already have finished).
+  // stopSearchTask cancels the current search task if it is still running and
+  // drops its session. Cancelling an already-finished search is skipped: the task
+  // is terminal server-side, so the request would be a pointless round-trip (and
+  // previously surfaced as a spurious 404).
   function stopSearchTask() {
     const id = searchTaskID;
     searchTaskID = null;
     if (id) {
+      // Decide on cancellation from the live session before dropping it, so a
+      // still-running task is stopped while a finished one is left alone.
+      cancelSearchIfRunning(id);
       removeSearch(id);
+    }
+  }
+
+  // cancelSearchIfRunning asks the server to stop a search only while its session
+  // is still running. A finished/failed/cancelled search has nothing left to
+  // stop, so no cancel request is sent.
+  function cancelSearchIfRunning(id: string) {
+    const session = getSearchSession(id);
+    if (session && session.status === 'running') {
       void cancelTask(id).catch(() => {});
     }
   }
@@ -259,23 +277,36 @@ import ConfirmDecompress from './ConfirmDecompress.svelte';
   }
 
   // runSearch submits (or restarts) the search for the current query + filters.
-  // A blank query with no filters cancels any running search.
+  // A blank query with no filters cancels any running search. A monotonic
+  // generation guards against overlapping submits: if a newer search starts while
+  // an earlier submit is still in flight, the stale task is cancelled so only the
+  // latest search for this window keeps running.
   async function runSearch() {
     const query = searchQuery.trim();
     if (!query && !hasAdvancedFilters(advancedFilters)) {
       stopSearchTask();
       return;
     }
+    const seq = ++searchSeq;
     // Cancel the previous search before starting a new one.
     if (searchTaskID) {
       const prev = searchTaskID;
       searchTaskID = null;
+      cancelSearchIfRunning(prev);
       removeSearch(prev);
-      void cancelTask(prev).catch(() => {});
     }
     const root = win ? win.path : winProp.path;
     try {
       const res = await submitSearch(buildSearchRequest(advancedFilters, query, root));
+      if (seq !== searchSeq) {
+        // A newer search superseded this submit while it was in flight: stop the
+        // one we just started so two searches never run in the same window.
+        if (res.taskID) {
+          cancelSearchIfRunning(res.taskID);
+          removeSearch(res.taskID);
+        }
+        return;
+      }
       if (res.taskID) {
         beginSearch(res.taskID, { rootPath: root, query });
         searchTaskID = res.taskID;

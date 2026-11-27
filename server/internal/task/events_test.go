@@ -136,3 +136,76 @@ func TestHubShutdownClosesEventChannels(t *testing.T) {
 		t.Fatal("event channel not closed after Shutdown")
 	}
 }
+
+// TestHubPublishEventDoesNotDrop verifies event delivery is reliable: publishing
+// many more events than the outbound buffer holds must not lose any of them.
+// A lossy (drop-on-full) hub made consecutive identical searches return
+// different result counts.
+func TestHubPublishEventDoesNotDrop(t *testing.T) {
+	h := NewHub()
+	sub := h.Subscribe(nil)
+
+	const n = 2000 // far above the 256-event buffer
+	received := make(chan *Event, n)
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		i := 0
+		for e := range sub.Events() {
+			received <- e
+			i++
+			// Slow the consumer so the producer is forced to wait for buffer
+			// space instead of racing ahead and dropping events.
+			if i%25 == 0 {
+				time.Sleep(200 * time.Microsecond)
+			}
+		}
+	}()
+
+	for i := 0; i < n; i++ {
+		h.PublishEvent(&Event{TaskID: "task-a", Name: "search-result", Data: []byte(`{"n":1}`)})
+	}
+
+	deadline := time.After(10 * time.Second)
+	for len(received) < n {
+		select {
+		case <-deadline:
+			t.Fatalf("received %d events, want %d (events were dropped)", len(received), n)
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	h.Unsubscribe(sub)
+	<-drainDone
+	if got := len(received); got != n {
+		t.Fatalf("received %d events, want %d", got, n)
+	}
+}
+
+// TestHubPublishEventReleasedOnUnsubscribe verifies a producer blocked on a full
+// event buffer is released when the subscriber goes away, so a slow or departed
+// client can never deadlock the task that is streaming to it.
+func TestHubPublishEventReleasedOnUnsubscribe(t *testing.T) {
+	h := NewHub()
+	sub := h.Subscribe(nil)
+
+	returned := make(chan struct{})
+	go func() {
+		// The buffer holds 256 events; once full the producer blocks until the
+		// subscription is torn down.
+		for i := 0; i < 1000; i++ {
+			h.PublishEvent(&Event{TaskID: "task-a", Name: "search-result", Data: []byte("x")})
+		}
+		close(returned)
+	}()
+
+	// Give the producer time to fill the buffer and block.
+	time.Sleep(50 * time.Millisecond)
+	h.Unsubscribe(sub)
+
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("producer not released after the subscriber unsubscribed")
+	}
+}

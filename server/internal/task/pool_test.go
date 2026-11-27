@@ -210,6 +210,27 @@ func TestPoolCancelUnknown(t *testing.T) {
 	}
 }
 
+// TestPoolCancelFinishedIsNoop verifies cancelling an already-finished task is a
+// no-op success rather than ErrNotFound. A client that races a search's
+// completion (or clears a search bar after it finished) must not get a 404 for a
+// task that actually exists.
+func TestPoolCancelFinishedIsNoop(t *testing.T) {
+	store := NewStore()
+	pool := NewPool(store, NewHub(), 1, testLogger(), "test-instance")
+	defer pool.Close(context.Background())
+
+	t1, _ := pool.Enqueue("t", nil, func(ctx context.Context, prog *Progression) error { return nil })
+	waitFor(t, func() bool { return store.Get(t1.ID).Status == StatusFinished })
+
+	if err := pool.Cancel(t1.ID); err != nil {
+		t.Fatalf("Cancel finished = %v, want nil", err)
+	}
+	// The task stays finished; it must not be rewritten to cancelled.
+	if got := store.Get(t1.ID).Status; got != StatusFinished {
+		t.Fatalf("status after cancel = %q, want %q", got, StatusFinished)
+	}
+}
+
 func TestPoolShutdownDrainsAndCancelsQueued(t *testing.T) {
 	store := NewStore()
 	hub := NewHub()

@@ -140,8 +140,13 @@ func SearchResolve(roots *fs.Roots, req SearchRequest) (*SearchPlan, error) {
 func SearchRun(ctx context.Context, plan *SearchPlan, prog *task.Progression) error {
 	// A best-effort upfront count of the files under the root gives the panel a
 	// determinate total. The walk below counts files as it goes; directories are
-	// matched too but are not part of the byte/file progress.
-	prog.SetTotal(0, countFiles(plan.RootPath))
+	// matched too but are not part of the byte/file progress. The count honours
+	// cancellation so a cancelled search stops promptly instead of walking the
+	// whole tree first.
+	prog.SetTotal(0, countFiles(ctx, plan.RootPath))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	scanned := 0
 	matches := 0
@@ -264,10 +269,15 @@ func (p *SearchPlan) match(path, name, kind string, info iofs.FileInfo, mimeType
 }
 
 // countFiles counts the regular files under root, best-effort: unreadable
-// directories and files are skipped rather than failing the count.
-func countFiles(root string) int {
+// directories and files are skipped rather than failing the count. The walk
+// stops early when ctx is cancelled so a cancelled search does not count the
+// entire tree before returning.
+func countFiles(ctx context.Context, root string) int {
 	count := 0
 	_ = filepath.WalkDir(root, func(path string, d iofs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			if d != nil && d.IsDir() {
 				return iofs.SkipDir

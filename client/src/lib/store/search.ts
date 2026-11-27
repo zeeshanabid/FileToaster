@@ -124,33 +124,75 @@ export interface SearchSession {
 // which re-renders them reactively.
 export const searchSessions = writable<Record<string, SearchSession>>({});
 
+// The task id is only known after POST /api/search resolves, but the server can
+// start (and finish) the search before that response reaches the browser. Matches
+// that stream in during that window have no session to route to yet, so they are
+// buffered here by task id and flushed into the session the moment it is created
+// (beginSearch) or first recorded (completeSearch). Without this, every fast
+// search silently loses whichever matches arrived before beginSearch — the cause
+// of identical searches returning different result counts.
+const pendingResults = new Map<string, SearchResultItem[]>();
+const MAX_PENDING_TASKS = 64;
+const MAX_PENDING_RESULTS = 100000;
+
+function bufferPending(taskID: string, item: SearchResultItem): void {
+  let arr = pendingResults.get(taskID);
+  if (!arr) {
+    if (pendingResults.size >= MAX_PENDING_TASKS) {
+      const oldest = pendingResults.keys().next().value;
+      if (oldest !== undefined) pendingResults.delete(oldest);
+    }
+    arr = [];
+    pendingResults.set(taskID, arr);
+  }
+  if (arr.length < MAX_PENDING_RESULTS) arr.push(item);
+}
+
+function takePending(taskID: string): SearchResultItem[] {
+  const arr = pendingResults.get(taskID);
+  if (!arr) return [];
+  pendingResults.delete(taskID);
+  return arr;
+}
+
+// isTerminalStatus reports whether a search session has reached a terminal state.
+function isTerminalStatus(status: SearchSession['status']): boolean {
+  return status === 'finished' || status === 'failed' || status === 'cancelled';
+}
+
 // beginSearch registers a freshly submitted search. It must be called with the
 // returned task id before SSE results can be routed. If a session already exists
 // in a terminal state (e.g., task completed before this call), preserve it and
-// only fill in missing rootPath/query.
+// only fill in missing rootPath/query. Any matches buffered before the session
+// existed are merged in so early results are never lost.
 export function beginSearch(taskID: string, opts: { rootPath: string; query: string }): void {
   if (!taskID) return;
   searchSessions.update((map) => {
+    const pending = takePending(taskID);
     const existing = map[taskID];
-    if (existing && (existing.status === 'finished' || existing.status === 'failed' || existing.status === 'cancelled')) {
+    if (existing && isTerminalStatus(existing.status)) {
+      const results = pending.length ? [...existing.results, ...pending] : existing.results;
       return {
         ...map,
         [taskID]: {
           ...existing,
           rootPath: existing.rootPath || opts.rootPath,
-          query: existing.query || opts.query
+          query: existing.query || opts.query,
+          results,
+          matches: results.length > 0 ? results.length : existing.matches
         }
       };
     }
+    const results = [...(existing?.results ?? []), ...pending];
     return {
       ...map,
       [taskID]: {
         taskID,
         rootPath: opts.rootPath,
         query: opts.query,
-        results: existing?.results ?? [],
+        results,
         scanned: existing?.scanned ?? 0,
-        matches: existing?.matches ?? 0,
+        matches: results.length,
         status: 'running'
       }
     };
@@ -160,9 +202,15 @@ export function beginSearch(taskID: string, opts: { rootPath: string; query: str
 // appendSearchResult adds one streamed match to the session. Late results are
 // appended even after the session reached a terminal status: the task-completion
 // delta and the result events travel on separate SSE channels, so a terminal
-// event can (rarely) be processed before the last buffered matches arrive.
+// event can (rarely) be processed before the last buffered matches arrive. A
+// match whose session does not exist yet is buffered and replayed by beginSearch/
+// completeSearch rather than dropped.
 export function appendSearchResult(taskID: string, item: SearchResultItem): void {
   if (!taskID || !item) return;
+  if (!get(searchSessions)[taskID]) {
+    bufferPending(taskID, item);
+    return;
+  }
   searchSessions.update((map) => {
     const session = map[taskID];
     if (!session) return map;
@@ -174,7 +222,8 @@ export function appendSearchResult(taskID: string, item: SearchResultItem): void
 // completeSearch marks a search terminal. `totals` (when supplied by the
 // search-complete event) refreshes the scanned/matches counters.
 // If the session doesn't exist yet (e.g., task completed before beginSearch),
-// create a minimal session so the terminal status is recorded.
+// create a minimal session so the terminal status is recorded; any matches that
+// were buffered before the session existed are merged in so they are not lost.
 export function completeSearch(
   taskID: string,
   status: SearchSession['status'],
@@ -183,6 +232,7 @@ export function completeSearch(
 ): void {
   if (!taskID) return;
   searchSessions.update((map) => {
+    const pending = takePending(taskID);
     const session = map[taskID];
     if (!session) {
       return {
@@ -191,14 +241,15 @@ export function completeSearch(
           taskID,
           rootPath: '',
           query: '',
-          results: [],
+          results: pending,
           scanned: totals?.scanned ?? 0,
-          matches: totals?.matches ?? 0,
+          matches: pending.length > 0 ? pending.length : totals?.matches ?? 0,
           status,
           error
         }
       };
     }
+    const results = pending.length ? [...session.results, ...pending] : session.results;
     return {
       ...map,
       [taskID]: {
@@ -206,7 +257,8 @@ export function completeSearch(
         status,
         error: error ?? session.error,
         scanned: totals?.scanned ?? session.scanned,
-        matches: totals?.matches ?? session.matches
+        matches: results.length > 0 ? results.length : totals?.matches ?? session.matches,
+        results
       }
     };
   });
@@ -215,12 +267,22 @@ export function completeSearch(
 // removeSearch drops a session (window closed or search cancelled).
 export function removeSearch(taskID: string): void {
   if (!taskID) return;
+  pendingResults.delete(taskID);
   searchSessions.update((map) => {
     if (!(taskID in map)) return map;
     const next = { ...map };
     delete next[taskID];
     return next;
   });
+}
+
+// resetSearchStore clears every live session and any buffered pre-session
+// results. It gives tests a clean slate; production code drops buffered entries
+// as each session is created (beginSearch), completed (completeSearch) or
+// removed (removeSearch).
+export function resetSearchStore(): void {
+  pendingResults.clear();
+  searchSessions.set({});
 }
 
 // getSearchSession returns the current session for a task id (non-reactive).

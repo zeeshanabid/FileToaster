@@ -6,7 +6,7 @@ import { taskList, initTasks, shutdownTasks, combinedTaskList, clearCompletedTas
 import { uploadManager, uploadStoreKey, type IngestState } from '$lib/fs/upload';
 import { listTasks, cancelTask, submitCopy } from '$lib/fs/api';
 import { reloadWindowsForPath } from '$lib/store/windows';
-import { beginSearch, getSearchSession, searchSessions } from '$lib/store/search';
+import { beginSearch, getSearchSession, resetSearchStore } from '$lib/store/search';
 import type { Task } from '$lib/fs/api';
 
 // The live SSE path lives entirely inside tasks.ts and is exercised through the
@@ -106,7 +106,7 @@ function delay(ms = 30) {
 beforeEach(() => {
     localStorage.clear();
     uploadManager.sessions.clear();
-    searchSessions.set({});
+    resetSearchStore();
     stubFetch();
     shutdownTasks();
     initTasks();

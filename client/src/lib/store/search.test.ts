@@ -7,6 +7,7 @@ import {
   completeSearch,
   removeSearch,
   getSearchSession,
+  resetSearchStore,
   defaultAdvancedFilters,
   hasAdvancedFilters,
   buildSearchRequest,
@@ -27,7 +28,7 @@ function item(name: string, overrides: Partial<SearchResultItem> = {}): SearchRe
 }
 
 beforeEach(() => {
-  searchSessions.set({});
+  resetSearchStore();
 });
 
 describe('search session store', () => {
@@ -65,9 +66,38 @@ describe('search session store', () => {
     expect(session.scanned).toBe(5);
   });
 
-  it('drops results for an unknown session', () => {
-    appendSearchResult('nope', item('a.txt'));
+  it('buffers results for a session that does not exist yet instead of dropping', () => {
+    appendSearchResult('early', item('early.txt'));
+    // No session is created until the owning window registers one.
     expect(get(searchSessions)).toEqual({});
+
+    // The buffered match is replayed the moment the session is created (the
+    // server can stream matches before POST /api/search resolves).
+    beginSearch('early', { rootPath: '/root', query: 'a' });
+    const session = getSearchSession('early')!;
+    expect(session.status).toBe('running');
+    expect(session.results.map((r) => r.name)).toEqual(['early.txt']);
+    expect(session.matches).toBe(1);
+  });
+
+  it('flushes buffered results into a terminal session created by completeSearch', () => {
+    appendSearchResult('fast', item('a.txt'));
+    appendSearchResult('fast', item('b.txt'));
+    // The task finished before beginSearch; the terminal event arrives first.
+    completeSearch('fast', 'finished', undefined, { scanned: 5, matches: 2 });
+    const session = getSearchSession('fast')!;
+    expect(session.status).toBe('finished');
+    expect(session.results.map((r) => r.name)).toEqual(['a.txt', 'b.txt']);
+    expect(session.matches).toBe(2);
+  });
+
+  it('keeps results that arrive before and after beginSearch in order', () => {
+    appendSearchResult('mix', item('early.txt'));
+    beginSearch('mix', { rootPath: '/root', query: 'x' });
+    appendSearchResult('mix', item('late.txt'));
+    const session = getSearchSession('mix')!;
+    expect(session.results.map((r) => r.name)).toEqual(['early.txt', 'late.txt']);
+    expect(session.matches).toBe(2);
   });
 
   it('completes with totals and an error', () => {
